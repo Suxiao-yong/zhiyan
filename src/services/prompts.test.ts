@@ -10,9 +10,7 @@ describe('prompts', () => {
   it('planGenerationPrompt 注入数据并要求严格 JSON', () => {
     const r = planGenerationPrompt({
       exam: { name: '考研', exam_date: '2027-01-01', total_score: 500 },
-      subjects: [
-        { id: 's1', name: '数学', target_score: 150, current_level: 3, weight: 1 },
-      ],
+      subjects: [{ id: 's1', name: '数学', target_score: 150, current_level: 3, weight: 1 }],
       knowledgePoints: [],
       dailyHours: 6,
       examDate: '2027-01-01',

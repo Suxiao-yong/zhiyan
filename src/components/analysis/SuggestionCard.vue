@@ -17,11 +17,7 @@ const priorityLabels = ['', '紧急', '高', '中', '低', '很低']
 <template>
   <div class="sug-card" :class="{ applied, rejected: state === 2, confirmed: state === 1 }">
     <div class="sug-card__head">
-      <el-tag
-        size="small"
-        :type="priorityTypes[suggestion.priority] || 'info'"
-        effect="light"
-      >
+      <el-tag size="small" :type="priorityTypes[suggestion.priority] || 'info'" effect="light">
         {{ priorityLabels[suggestion.priority] || '普通' }}
       </el-tag>
       <span class="action">{{ suggestion.action }}</span>
@@ -38,7 +34,13 @@ const priorityLabels = ['', '紧急', '高', '中', '低', '很低']
         应用到数据
       </el-button>
       <el-button v-if="state === 0" size="small" @click="$emit('confirm')">确认</el-button>
-      <el-button v-if="state !== 2 && !applied" size="small" link type="danger" @click="$emit('reject')">
+      <el-button
+        v-if="state !== 2 && !applied"
+        size="small"
+        link
+        type="danger"
+        @click="$emit('reject')"
+      >
         拒绝
       </el-button>
     </div>
@@ -51,7 +53,8 @@ const priorityLabels = ['', '紧急', '高', '中', '低', '很低']
   border-radius: var(--r-md);
   padding: var(--sp-3) var(--sp-4);
   background: var(--c-surface);
-  transition: border-color var(--dur-fast) var(--ease),
+  transition:
+    border-color var(--dur-fast) var(--ease),
     background var(--dur-fast) var(--ease);
 }
 .sug-card.applied {

@@ -138,17 +138,14 @@ watch(visible, (v) => {
     :close-on-click-modal="false"
   >
     <div ref="scrollRef" class="chat-box">
-      <div
-        v-for="(m, i) in chat"
-        :key="i"
-        class="msg"
-        :class="m.role"
-      >
+      <div v-for="(m, i) in chat" :key="i" class="msg" :class="m.role">
         <div class="bubble">{{ m.content }}</div>
       </div>
       <div v-if="loading" class="msg assistant">
         <div class="bubble thinking">
-          <span class="dot" /> <span class="dot" /> <span class="dot" />
+          <span class="dot" />
+          <span class="dot" />
+          <span class="dot" />
           <span class="think-text">{{ searchHint || 'AI 思考中…' }}</span>
         </div>
       </div>
@@ -170,7 +167,9 @@ watch(visible, (v) => {
     <template #footer>
       <el-button v-if="!hasLLM" type="primary" @click="localFallback">用本地算法生成</el-button>
       <el-button @click="visible = false">关闭</el-button>
-      <el-button v-if="hasLLM" type="success" :loading="loading" @click="adopt">采用此计划</el-button>
+      <el-button v-if="hasLLM" type="success" :loading="loading" @click="adopt">
+        采用此计划
+      </el-button>
     </template>
   </el-dialog>
 </template>
@@ -224,15 +223,24 @@ watch(visible, (v) => {
   background: var(--c-ink-muted);
   animation: blink 1.2s infinite;
 }
-.dot:nth-child(2) { animation-delay: 0.2s; }
-.dot:nth-child(3) { animation-delay: 0.4s; }
+.dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
 .think-text {
   font-size: var(--fs-xs);
   color: var(--c-ink-3);
 }
 @keyframes blink {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 .input-bar {
   margin-top: var(--sp-3);

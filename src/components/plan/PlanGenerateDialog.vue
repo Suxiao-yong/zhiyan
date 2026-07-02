@@ -29,10 +29,7 @@ async function generate() {
     ElMessage.warning('请先选择考试')
     return
   }
-  const result = await planStore.generatePlan(
-    examStore.activeExamId,
-    settingsStore.llmConfig,
-  )
+  const result = await planStore.generatePlan(examStore.activeExamId, settingsStore.llmConfig)
   ElMessage.success(result.message)
   emit('done')
   visible.value = false
@@ -55,9 +52,7 @@ async function generate() {
           {{ hasLLM ? 'AI 生成（已配置 LLM）' : '本地算法（未配置 AI，降级）' }}
         </el-tag>
       </p>
-      <p v-if="!hasLLM" class="hint">
-        在「设置」页配置 LLM 后，可获得更精准的个性化计划。
-      </p>
+      <p v-if="!hasLLM" class="hint">在「设置」页配置 LLM 后，可获得更精准的个性化计划。</p>
       <p v-if="planStore.lastResult" class="hint">
         上次：{{ planStore.lastResult.message }}（{{ planStore.lastResult.planCount }} 条任务）
       </p>

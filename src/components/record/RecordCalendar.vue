@@ -12,9 +12,7 @@ const yearMonth = computed(() => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 })
 
-const recordMap = computed(
-  () => new Map(store.calendarMonth.map((r) => [r.date, r])),
-)
+const recordMap = computed(() => new Map(store.calendarMonth.map((r) => [r.date, r])))
 
 onMounted(() => store.loadCalendarMonth(yearMonth.value))
 watch(yearMonth, (ym) => store.loadCalendarMonth(ym))
@@ -40,7 +38,10 @@ defineExpose({ refresh: () => store.loadCalendarMonth(yearMonth.value) })
       <template #date-cell="{ data }">
         <div
           class="cal-cell"
-          :class="{ 'has-record': recordMap.has(data.day), 'other-month': data.type !== 'curr-month' }"
+          :class="{
+            'has-record': recordMap.has(data.day),
+            'other-month': data.type !== 'curr-month',
+          }"
           @click="onCellClick(data)"
         >
           <span class="cal-day">{{ Number(data.day.slice(-2)) }}</span>

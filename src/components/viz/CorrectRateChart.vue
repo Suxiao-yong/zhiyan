@@ -10,28 +10,31 @@ const { theme } = useChartTheme()
 const subjects = computed(() => [...new Set(props.data.map((d) => d.subjectName))])
 const dates = computed(() => [...new Set(props.data.map((d) => d.date))].sort())
 
-const option = computed(() => ({
-  tooltip: { trigger: 'axis' },
-  legend: { data: subjects.value, bottom: 0 },
-  toolbox: { feature: { saveAsImage: { name: 'correct-rate' } } },
-  grid: { left: 40, right: 16, top: 16, bottom: 40 },
-  xAxis: { type: 'category', data: dates.value },
-  yAxis: { type: 'value', max: 100, name: '%' },
-  series: subjects.value.map((s, i) => {
-    const color = SUBJECT_PALETTE[i % SUBJECT_PALETTE.length]
-    return {
-      name: s,
-      type: 'line',
-      smooth: true,
-      itemStyle: { color },
-      lineStyle: { color },
-      data: dates.value.map((d) => {
-        const r = props.data.find((x) => x.date === d && x.subjectName === s)
-        return r ? r.rate : null
+const option = computed(
+  () =>
+    ({
+      tooltip: { trigger: 'axis' },
+      legend: { data: subjects.value, bottom: 0 },
+      toolbox: { feature: { saveAsImage: { name: 'correct-rate' } } },
+      grid: { left: 40, right: 16, top: 16, bottom: 40 },
+      xAxis: { type: 'category', data: dates.value },
+      yAxis: { type: 'value', max: 100, name: '%' },
+      series: subjects.value.map((s, i) => {
+        const color = SUBJECT_PALETTE[i % SUBJECT_PALETTE.length]
+        return {
+          name: s,
+          type: 'line',
+          smooth: true,
+          itemStyle: { color },
+          lineStyle: { color },
+          data: dates.value.map((d) => {
+            const r = props.data.find((x) => x.date === d && x.subjectName === s)
+            return r ? r.rate : null
+          }),
+        }
       }),
-    }
-  }),
-}) as any)
+    }) as any,
+)
 </script>
 
 <template>

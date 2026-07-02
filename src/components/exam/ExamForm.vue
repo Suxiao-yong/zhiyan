@@ -61,7 +61,12 @@ async function handleSubmit() {
       </el-radio-group>
     </el-form-item>
     <el-form-item label="考试名称" prop="name">
-      <el-input v-model="form.name" placeholder="如 2027 管理类联考" maxlength="60" show-word-limit />
+      <el-input
+        v-model="form.name"
+        placeholder="如 2027 管理类联考"
+        maxlength="60"
+        show-word-limit
+      />
     </el-form-item>
     <el-form-item label="考试日期" prop="exam_date">
       <el-date-picker
@@ -77,7 +82,14 @@ async function handleSubmit() {
       <el-input-number v-model="form.total_score" :min="0" :step="50" controls-position="right" />
     </el-form-item>
     <el-form-item label="描述">
-      <el-input v-model="form.description" type="textarea" :rows="2" placeholder="可选" maxlength="200" show-word-limit />
+      <el-input
+        v-model="form.description"
+        type="textarea"
+        :rows="2"
+        placeholder="可选"
+        maxlength="200"
+        show-word-limit
+      />
     </el-form-item>
     <el-form-item>
       <el-button type="primary" @click="handleSubmit">{{ exam ? '保存' : '创建' }}</el-button>

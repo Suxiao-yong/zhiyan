@@ -46,8 +46,7 @@ export async function preparePlanPromptData(examId: string): Promise<PlanPromptD
     : []
   const today = businessToday()
   const daysLeft = Math.ceil(
-    (new Date(exam.exam_date + 'T00:00:00').getTime() -
-      new Date(today + 'T00:00:00').getTime()) /
+    (new Date(exam.exam_date + 'T00:00:00').getTime() - new Date(today + 'T00:00:00').getTime()) /
       86400000,
   )
   const dailyHours = Number(await getSetting('daily_study_hours')) || 6
@@ -125,8 +124,7 @@ export async function generateLocalPlan(
   options?: PlanOptions,
 ): Promise<PlanGenerationResult> {
   const data = await preparePlanPromptData(examId)
-  if (data.daysLeft <= 0)
-    throw new Error('考试日期已过或就是今天，无法生成计划，请修改考试日期')
+  if (data.daysLeft <= 0) throw new Error('考试日期已过或就是今天，无法生成计划，请修改考试日期')
   const dailyHours = options?.dailyHours ?? data.dailyHours
 
   // 阶段划分（<7 天则压缩为冲刺）
@@ -175,7 +173,12 @@ export async function generateLocalPlan(
     const dow = new Date(date + 'T00:00:00').getDay()
     const hours = dow === 0 ? dailyHours / 2 : dailyHours // 周日半天复习/缓冲
     const totalMin = Math.round(hours * 60)
-    const tasks = [] as { subject_id: string; knowledge_point_id: string | null; task: string; duration: number }[]
+    const tasks = [] as {
+      subject_id: string
+      knowledge_point_id: string | null
+      task: string
+      duration: number
+    }[]
     for (const s of subjWeights) {
       const min = Math.round(totalMin * (s.gap / totalGap))
       if (min < 10) continue
@@ -195,8 +198,7 @@ export async function generateLocalPlan(
   })
 
   const phases: ParsedPlanPhase[] = []
-  if (baseDays > 0)
-    phases.push({ name: '基础期', start: days[0], end: days[baseDays - 1] })
+  if (baseDays > 0) phases.push({ name: '基础期', start: days[0], end: days[baseDays - 1] })
   if (strenDays > 0)
     phases.push({
       name: '强化期',
@@ -232,8 +234,7 @@ export async function generateAIPlan(
   }
   try {
     const data = await preparePlanPromptData(examId)
-    if (data.daysLeft <= 0)
-      throw new Error('考试日期已过或就是今天，无法生成计划')
+    if (data.daysLeft <= 0) throw new Error('考试日期已过或就是今天，无法生成计划')
     const { system, user } = planGenerationPrompt(data)
     const resp = await callLLM(
       llmConfig,

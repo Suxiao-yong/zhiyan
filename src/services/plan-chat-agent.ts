@@ -32,10 +32,7 @@ export interface ChatTurnResult {
 }
 
 /** 执行一轮对话：LLM 可能调 search_web → app 执行 → 再调 LLM 基于结果给出文本 */
-export async function runChatTurn(
-  messages: any[],
-  llmConfig: LLMConfig,
-): Promise<ChatTurnResult> {
+export async function runChatTurn(messages: any[], llmConfig: LLMConfig): Promise<ChatTurnResult> {
   const resp = await callLLMWithTools(llmConfig, messages, [SEARCH_TOOL], {
     timeoutMs: 60000,
     retries: 1,

@@ -32,11 +32,7 @@ async function onStatus(id: string, status: PlanStatus) {
 </script>
 
 <template>
-  <el-dialog
-    v-model="visible"
-    :title="`${date ?? ''} 任务清单`"
-    width="560px"
-  >
+  <el-dialog v-model="visible" :title="`${date ?? ''} 任务清单`" width="560px">
     <el-empty v-if="!tasks.length" description="当日无任务" :image-size="60" />
     <div v-else class="task-list">
       <div v-for="t in tasks" :key="t.id" class="task-item">
@@ -44,13 +40,17 @@ async function onStatus(id: string, status: PlanStatus) {
           <span
             class="tag-tinted subj-tag"
             :style="{ '--tag-color': colorForSubject(t.subject_name) }"
-          >{{ t.subject_name ?? '-' }}</span>
+          >
+            {{ t.subject_name ?? '-' }}
+          </span>
           <span class="kp" v-if="t.knowledge_point_name">· {{ t.knowledge_point_name }}</span>
           <div class="task-text">{{ t.planned_tasks }}</div>
           <div class="meta tnum">
             计划 {{ t.planned_duration ?? 0 }} 分
             <span v-if="t.actual_duration != null">· 实际 {{ t.actual_duration }} 分</span>
-            <el-tag v-if="t.user_modified" size="small" type="warning" effect="light">已手动调整</el-tag>
+            <el-tag v-if="t.user_modified" size="small" type="warning" effect="light">
+              已手动调整
+            </el-tag>
           </div>
         </div>
         <el-select
@@ -59,12 +59,7 @@ async function onStatus(id: string, status: PlanStatus) {
           class="status-select"
           @change="(v: any) => onStatus(t.id, v as PlanStatus)"
         >
-          <el-option
-            v-for="o in statusOptions"
-            :key="o.value"
-            :label="o.label"
-            :value="o.value"
-          />
+          <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
         </el-select>
       </div>
     </div>

@@ -98,10 +98,7 @@ export async function createRecord(input: RecordInput): Promise<StudyRecord> {
   }
 }
 
-export async function updateRecord(
-  id: string,
-  input: Partial<RecordInput>,
-): Promise<void> {
+export async function updateRecord(id: string, input: Partial<RecordInput>): Promise<void> {
   const data: Record<string, unknown> = { ...input }
   if (input.date !== undefined) data.date = normalizeDate(input.date)
   await update('study_records', id, data)
@@ -260,10 +257,9 @@ export async function getSubjectRatioThisWeek(): Promise<
 
 /** 今日计划完成率分母（今日 plan 数）—— Phase 2 计划为空，Phase 3 填充 */
 export async function getTodayPlanCount(): Promise<number> {
-  const rows = await query<{ c: number }>(
-    'SELECT COUNT(*) AS c FROM study_plans WHERE date = ?',
-    [businessToday()],
-  )
+  const rows = await query<{ c: number }>('SELECT COUNT(*) AS c FROM study_plans WHERE date = ?', [
+    businessToday(),
+  ])
   return rows[0]?.c ?? 0
 }
 
@@ -295,9 +291,7 @@ export interface WrongFilter {
   pageSize: number
 }
 
-export async function createWrongQuestion(
-  input: WrongQuestionInput,
-): Promise<WrongQuestion> {
+export async function createWrongQuestion(input: WrongQuestionInput): Promise<WrongQuestion> {
   const id = await insert('wrong_questions', { ...input })
   return (await getById<WrongQuestion>('wrong_questions', id))!
 }
@@ -352,10 +346,7 @@ export async function getWrongQuestions(
   return { rows, total }
 }
 
-export async function setWrongMastered(
-  id: string,
-  mastered: boolean,
-): Promise<void> {
+export async function setWrongMastered(id: string, mastered: boolean): Promise<void> {
   await update('wrong_questions', id, { mastered: mastered ? 1 : 0 })
 }
 

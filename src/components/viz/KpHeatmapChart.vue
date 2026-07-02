@@ -19,23 +19,26 @@ const cells = computed<[number, number, number][]>(() => {
   return out
 })
 
-const option = computed(() => ({
-  tooltip: {},
-  toolbox: { feature: { saveAsImage: { name: 'kp-heatmap' } } },
-  grid: { left: 110, right: 24, top: 16, bottom: 48 },
-  xAxis: { type: 'category', data: dates.value },
-  yAxis: { type: 'category', data: kps.value },
-  visualMap: {
-    min: 20,
-    max: 100,
-    calculable: true,
-    orient: 'horizontal',
-    left: 'center',
-    bottom: 0,
-    inRange: { color: [SEMANTIC.danger, SEMANTIC.warning, SEMANTIC.success] },
-  },
-  series: [{ type: 'heatmap', data: cells.value, label: { show: false } }],
-}) as any)
+const option = computed(
+  () =>
+    ({
+      tooltip: {},
+      toolbox: { feature: { saveAsImage: { name: 'kp-heatmap' } } },
+      grid: { left: 110, right: 24, top: 16, bottom: 48 },
+      xAxis: { type: 'category', data: dates.value },
+      yAxis: { type: 'category', data: kps.value },
+      visualMap: {
+        min: 20,
+        max: 100,
+        calculable: true,
+        orient: 'horizontal',
+        left: 'center',
+        bottom: 0,
+        inRange: { color: [SEMANTIC.danger, SEMANTIC.warning, SEMANTIC.success] },
+      },
+      series: [{ type: 'heatmap', data: cells.value, label: { show: false } }],
+    }) as any,
+)
 </script>
 
 <template>

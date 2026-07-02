@@ -28,13 +28,105 @@ const ALLOWED_TABLES = [
 
 /** 各表合法列白名单（用于 insert/update 列名校验） */
 const COLUMNS: Record<string, readonly string[]> = {
-  exams: ['id', 'name', 'exam_type', 'exam_date', 'total_score', 'description', 'created_at', 'updated_at'],
-  subjects: ['id', 'exam_id', 'name', 'target_score', 'current_level', 'weight', 'sort_order', 'created_at', 'updated_at'],
-  knowledge_points: ['id', 'subject_id', 'name', 'parent_id', 'weight', 'difficulty_level', 'current_mastery', 'chapter', 'sort_order', 'created_at', 'updated_at'],
-  study_records: ['id', 'date', 'subject_id', 'knowledge_point_id', 'duration_min', 'content', 'questions_count', 'correct_count', 'mastery_rating', 'difficulty_notes', 'mood', 'session_time', 'created_at', 'updated_at'],
-  study_plans: ['id', 'exam_id', 'subject_id', 'knowledge_point_id', 'date', 'planned_tasks', 'planned_duration', 'actual_duration', 'actual_tasks', 'status', 'generated_by', 'ai_suggestion', 'user_modified', 'sort_order', 'created_at', 'updated_at'],
-  wrong_questions: ['id', 'record_id', 'subject_id', 'knowledge_point_id', 'question_source', 'question_desc', 'correct_answer', 'my_answer', 'error_type', 'error_reason', 'review_count', 'mastered', 'created_at', 'last_review_at'],
-  ai_analyses: ['id', 'analysis_type', 'period_start', 'period_end', 'subjects_analyzed', 'content', 'suggestions', 'scores_prediction', 'generated_by', 'user_confirmed', 'applied', 'applied_at', 'created_at'],
+  exams: [
+    'id',
+    'name',
+    'exam_type',
+    'exam_date',
+    'total_score',
+    'description',
+    'created_at',
+    'updated_at',
+  ],
+  subjects: [
+    'id',
+    'exam_id',
+    'name',
+    'target_score',
+    'current_level',
+    'weight',
+    'sort_order',
+    'created_at',
+    'updated_at',
+  ],
+  knowledge_points: [
+    'id',
+    'subject_id',
+    'name',
+    'parent_id',
+    'weight',
+    'difficulty_level',
+    'current_mastery',
+    'chapter',
+    'sort_order',
+    'created_at',
+    'updated_at',
+  ],
+  study_records: [
+    'id',
+    'date',
+    'subject_id',
+    'knowledge_point_id',
+    'duration_min',
+    'content',
+    'questions_count',
+    'correct_count',
+    'mastery_rating',
+    'difficulty_notes',
+    'mood',
+    'session_time',
+    'created_at',
+    'updated_at',
+  ],
+  study_plans: [
+    'id',
+    'exam_id',
+    'subject_id',
+    'knowledge_point_id',
+    'date',
+    'planned_tasks',
+    'planned_duration',
+    'actual_duration',
+    'actual_tasks',
+    'status',
+    'generated_by',
+    'ai_suggestion',
+    'user_modified',
+    'sort_order',
+    'created_at',
+    'updated_at',
+  ],
+  wrong_questions: [
+    'id',
+    'record_id',
+    'subject_id',
+    'knowledge_point_id',
+    'question_source',
+    'question_desc',
+    'correct_answer',
+    'my_answer',
+    'error_type',
+    'error_reason',
+    'review_count',
+    'mastered',
+    'created_at',
+    'last_review_at',
+  ],
+  ai_analyses: [
+    'id',
+    'analysis_type',
+    'period_start',
+    'period_end',
+    'subjects_analyzed',
+    'content',
+    'suggestions',
+    'scores_prediction',
+    'generated_by',
+    'user_confirmed',
+    'applied',
+    'applied_at',
+    'created_at',
+  ],
   settings: ['key', 'value', 'description', 'updated_at'],
 }
 
@@ -155,18 +247,13 @@ export async function count(
 // ---- 系统设置（key-value，特殊处理：主键为 key，非 UUID）----
 
 export async function getSetting(key: string): Promise<string | null> {
-  const rows = await query<{ value: string | null }>(
-    'SELECT value FROM settings WHERE key = ?',
-    [key],
-  )
+  const rows = await query<{ value: string | null }>('SELECT value FROM settings WHERE key = ?', [
+    key,
+  ])
   return rows[0]?.value ?? null
 }
 
-export async function setSetting(
-  key: string,
-  value: string,
-  description?: string,
-): Promise<void> {
+export async function setSetting(key: string, value: string, description?: string): Promise<void> {
   // UPSERT：存在则更新 value（description 仅在为空时保留原值）
   await execute(
     `INSERT INTO settings (key, value, description) VALUES (?, ?, ?)

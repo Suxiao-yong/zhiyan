@@ -10,7 +10,11 @@ const routes = [
   },
   { path: '/dashboard', name: 'dashboard', component: () => import('@/pages/Dashboard.vue') },
   { path: '/exam-config', name: 'exam-config', component: () => import('@/pages/ExamConfig.vue') },
-  { path: '/study-record', name: 'study-record', component: () => import('@/pages/StudyRecord.vue') },
+  {
+    path: '/study-record',
+    name: 'study-record',
+    component: () => import('@/pages/StudyRecord.vue'),
+  },
   {
     path: '/study-plan',
     name: 'study-plan',
@@ -23,7 +27,11 @@ const routes = [
     component: () => import('@/pages/StudyPlan.vue'),
   },
   { path: '/analysis', name: 'analysis', component: () => import('@/pages/Analysis.vue') },
-  { path: '/visualization', name: 'visualization', component: () => import('@/pages/Visualization.vue') },
+  {
+    path: '/visualization',
+    name: 'visualization',
+    component: () => import('@/pages/Visualization.vue'),
+  },
   { path: '/settings', name: 'settings', component: () => import('@/pages/Settings.vue') },
   { path: '/', redirect: '/dashboard' },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },

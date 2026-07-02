@@ -54,7 +54,11 @@ async function saveAnysearch() {
     const key = anysearchKey.value
     if (key) {
       // 写 fallback（始终写，确保有备份）
-      await setSetting('anysearch_api_key_fallback', obfuscate(key), 'AnySearch API Key fallback (obfuscated)')
+      await setSetting(
+        'anysearch_api_key_fallback',
+        obfuscate(key),
+        'AnySearch API Key fallback (obfuscated)',
+      )
       // 尝试 keyring
       try {
         await invoke('store_api_key', { provider: 'anysearch', key })
@@ -70,8 +74,18 @@ async function saveAnysearch() {
 
 const providers = [
   { value: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com', model: 'gpt-4o' },
-  { value: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
-  { value: 'qwen', label: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode', model: 'qwen-plus' },
+  {
+    value: 'deepseek',
+    label: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com',
+    model: 'deepseek-chat',
+  },
+  {
+    value: 'qwen',
+    label: '通义千问',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode',
+    model: 'qwen-plus',
+  },
   { value: 'kimi', label: 'Kimi', baseUrl: 'https://api.moonshot.cn', model: 'moonshot-v1-8k' },
   { value: 'ollama', label: 'Ollama（本地）', baseUrl: 'http://localhost:11434', model: 'llama3' },
   { value: 'custom', label: '自定义', baseUrl: '', model: '' },
@@ -96,17 +110,14 @@ async function save() {
 }
 
 async function test() {
-  if (form.provider !== 'ollama' && !form.apiKey)
-    return ElMessage.warning('请先填写 API Key')
+  if (form.provider !== 'ollama' && !form.apiKey) return ElMessage.warning('请先填写 API Key')
   settingsStore.llmConfig = { ...form }
   testing.value = true
   const t0 = Date.now()
   try {
-    await callLLM(
-      settingsStore.llmConfig!,
-      [{ role: 'user', content: '请回复 OK' }],
-      { timeoutMs: 15000 },
-    )
+    await callLLM(settingsStore.llmConfig!, [{ role: 'user', content: '请回复 OK' }], {
+      timeoutMs: 15000,
+    })
     ElMessage.success(`连接成功（${Date.now() - t0}ms）`)
   } catch (e) {
     ElMessage.error((e as Error).message ?? '连接失败')
@@ -209,7 +220,11 @@ async function onRestore() {
           <el-input v-model="form.baseUrl" placeholder="如 https://api.deepseek.com" />
         </el-form-item>
         <el-form-item label="API Key">
-          <el-input v-model="form.apiKey" :type="showKey ? 'text' : 'password'" placeholder="Ollama 无需 Key">
+          <el-input
+            v-model="form.apiKey"
+            :type="showKey ? 'text' : 'password'"
+            placeholder="Ollama 无需 Key"
+          >
             <template #append>
               <el-button @click="showKey = !showKey">{{ showKey ? '隐藏' : '显示' }}</el-button>
             </template>
@@ -220,7 +235,14 @@ async function onRestore() {
           <el-input v-model="form.model" placeholder="如 deepseek-chat" />
         </el-form-item>
         <el-form-item label="Temperature">
-          <el-slider v-model="form.temperature" :min="0" :max="2" :step="0.1" show-input class="slider-w" />
+          <el-slider
+            v-model="form.temperature"
+            :min="0"
+            :max="2"
+            :step="0.1"
+            show-input
+            class="slider-w"
+          />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="save">保存配置</el-button>
@@ -288,7 +310,12 @@ async function onRestore() {
           </el-select>
         </el-form-item>
         <el-form-item v-if="exportScope === 'date'" label="日期范围">
-          <el-date-picker v-model="exportRange" type="daterange" value-format="YYYY-MM-DD" class="field-w-lg" />
+          <el-date-picker
+            v-model="exportRange"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            class="field-w-lg"
+          />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="onExport">导出 JSON</el-button>
@@ -356,7 +383,7 @@ async function onRestore() {
 }
 .slider-w :deep(.el-input-number .el-input__inner) {
   font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum";
+  font-feature-settings: 'tnum';
 }
 .hint {
   font-size: var(--fs-xs);

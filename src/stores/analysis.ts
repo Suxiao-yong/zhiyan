@@ -10,9 +10,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
   const analyses = ref<AiAnalysis[]>([])
   const currentId = ref<string | null>(null)
 
-  const current = computed(
-    () => analyses.value.find((a) => a.id === currentId.value) ?? null,
-  )
+  const current = computed(() => analyses.value.find((a) => a.id === currentId.value) ?? null)
 
   async function loadAnalyses() {
     analyses.value = await query<AiAnalysis>(

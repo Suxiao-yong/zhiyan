@@ -149,7 +149,9 @@ async function saveEdit() {
               <span
                 class="tag-tinted subj-tag"
                 :style="{ '--tag-color': colorForSubject(element.subject_name) }"
-              >{{ element.subject_name ?? '-' }}</span>
+              >
+                {{ element.subject_name ?? '-' }}
+              </span>
               <span class="task">{{ element.planned_tasks }}</span>
               <span class="dur tnum">{{ element.planned_duration ?? 0 }}分</span>
               <el-select
@@ -158,7 +160,12 @@ async function saveEdit() {
                 class="status-select"
                 @change="(v: any) => onStatus(element.id, v as PlanStatus)"
               >
-                <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
+                <el-option
+                  v-for="o in statusOptions"
+                  :key="o.value"
+                  :label="o.label"
+                  :value="o.value"
+                />
               </el-select>
               <el-button link :icon="Edit" @click="openEdit(element)">编辑</el-button>
             </div>
@@ -170,17 +177,32 @@ async function saveEdit() {
     <el-dialog v-model="editVisible" title="编辑任务" width="460px">
       <el-form label-width="72px" @submit.prevent>
         <el-form-item label="日期">
-          <el-date-picker v-model="editForm.date" type="date" value-format="YYYY-MM-DD" class="full-width" />
+          <el-date-picker
+            v-model="editForm.date"
+            type="date"
+            value-format="YYYY-MM-DD"
+            class="full-width"
+          />
         </el-form-item>
         <el-form-item label="计划时长">
-          <el-input-number v-model="editForm.planned_duration" :min="0" :step="15" controls-position="right" />
+          <el-input-number
+            v-model="editForm.planned_duration"
+            :min="0"
+            :step="15"
+            controls-position="right"
+          />
         </el-form-item>
         <el-form-item label="任务内容">
           <el-input v-model="editForm.planned_tasks" type="textarea" :rows="2" />
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="editForm.status" class="full-width">
-            <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
+            <el-option
+              v-for="o in statusOptions"
+              :key="o.value"
+              :label="o.label"
+              :value="o.value"
+            />
           </el-select>
         </el-form-item>
       </el-form>

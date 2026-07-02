@@ -66,7 +66,12 @@ async function handleSubmit() {
       <el-input v-model="form.name" placeholder="如 高等数学-极限" maxlength="50" />
     </el-form-item>
     <el-form-item label="父知识点">
-      <el-select v-model="form.parent_id" clearable placeholder="留空为顶层知识点" style="width: 100%">
+      <el-select
+        v-model="form.parent_id"
+        clearable
+        placeholder="留空为顶层知识点"
+        style="width: 100%"
+      >
         <el-option v-for="p in parentOptions" :key="p.id" :label="p.name" :value="p.id" />
       </el-select>
     </el-form-item>
@@ -75,18 +80,36 @@ async function handleSubmit() {
     </el-form-item>
     <el-form-item label="难度">
       <div class="slider-row">
-        <el-slider v-model="form.difficulty_level" :min="1" :max="5" show-stops class="slider-row__slider" />
+        <el-slider
+          v-model="form.difficulty_level"
+          :min="1"
+          :max="5"
+          show-stops
+          class="slider-row__slider"
+        />
         <span class="hint">{{ form.difficulty_level }} / 5</span>
       </div>
     </el-form-item>
     <el-form-item label="当前掌握">
       <div class="slider-row">
-        <el-slider v-model="form.current_mastery" :min="1" :max="5" show-stops class="slider-row__slider" />
+        <el-slider
+          v-model="form.current_mastery"
+          :min="1"
+          :max="5"
+          show-stops
+          class="slider-row__slider"
+        />
         <span class="hint mastery">{{ masteryLabels[form.current_mastery] }}</span>
       </div>
     </el-form-item>
     <el-form-item label="权重">
-      <el-input-number v-model="form.weight" :min="0" :step="0.5" :precision="1" controls-position="right" />
+      <el-input-number
+        v-model="form.weight"
+        :min="0"
+        :step="0.5"
+        :precision="1"
+        controls-position="right"
+      />
     </el-form-item>
     <el-form-item>
       <el-button type="primary" @click="handleSubmit">{{ point ? '保存' : '添加' }}</el-button>

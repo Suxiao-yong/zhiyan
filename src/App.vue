@@ -5,7 +5,11 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useExamStore } from '@/stores/exam'
 import { runPendingAnalyses } from '@/services/agent-engine'
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from '@tauri-apps/plugin-notification'
 
 const route = useRoute()
 const isFullScreen = computed(() => route.meta.layout === 'full')

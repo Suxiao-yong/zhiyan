@@ -64,7 +64,7 @@ async function load() {
     heatmap.value = hm
     // 最新预测
     const rows = await query<{ scores_prediction: string | null }>(
-      "SELECT scores_prediction FROM ai_analyses WHERE scores_prediction IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+      'SELECT scores_prediction FROM ai_analyses WHERE scores_prediction IS NOT NULL ORDER BY created_at DESC LIMIT 1',
     )
     prediction.value = rows[0]?.scores_prediction
       ? (JSON.parse(rows[0].scores_prediction) as PredictionResult)

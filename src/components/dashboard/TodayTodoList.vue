@@ -43,7 +43,9 @@ async function toggle(id: string, checked: boolean) {
         <span
           class="tag-tinted subj-tag"
           :style="{ '--tag-color': colorForSubject(t.subject_name) }"
-        >{{ t.subject_name }}</span>
+        >
+          {{ t.subject_name }}
+        </span>
         <span class="task">{{ t.planned_tasks }}</span>
         <span class="dur tnum">{{ t.planned_duration }}分</span>
       </div>

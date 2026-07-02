@@ -45,7 +45,11 @@ const summary = () => {
     />
     <div v-else class="summary">
       <div class="meta">
-        <el-tag size="small" :type="analysis.generated_by === 'ai' ? 'success' : 'info'" effect="light">
+        <el-tag
+          size="small"
+          :type="analysis.generated_by === 'ai' ? 'success' : 'info'"
+          effect="light"
+        >
           {{ analysis.generated_by === 'ai' ? 'AI' : '本地' }}
         </el-tag>
         <span class="date">{{ (analysis.created_at || '').slice(0, 16) }}</span>

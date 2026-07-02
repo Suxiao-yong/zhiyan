@@ -8,7 +8,14 @@ import { localWeeklyAnalysis, localPrediction } from './analyzer'
 import type { WeeklyAggregation, SubjectStat } from './analyzer'
 
 const bySubject: SubjectStat[] = [
-  { subjectId: 's1', subject: '数学', totalMin: 120, avgCorrectRate: 50, trend: '下降', records: 5 },
+  {
+    subjectId: 's1',
+    subject: '数学',
+    totalMin: 120,
+    avgCorrectRate: 50,
+    trend: '下降',
+    records: 5,
+  },
   { subjectId: 's2', subject: '英语', totalMin: 80, avgCorrectRate: 85, trend: '上升', records: 5 },
 ]
 

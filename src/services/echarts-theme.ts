@@ -22,8 +22,7 @@ function buildTheme(t: AxisTokens) {
     color: [...SUBJECT_PALETTE],
     textStyle: {
       color: t.text,
-      fontFamily:
-        'Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif',
+      fontFamily: 'Inter, "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif',
     },
     title: {
       textStyle: { color: t.text, fontWeight: 600 },
@@ -101,24 +100,30 @@ function buildTheme(t: AxisTokens) {
   }
 }
 
-registerTheme('zhiyan-light', buildTheme({
-  text: '#1a1b1e',
-  sub: '#6e7178',
-  axis: '#d3d5db',
-  split: '#f0f2f5',
-  border: '#e6e7eb',
-  bg: '#ffffff',
-  shadow: '0 4px 12px rgba(20,21,25,0.08)',
-}))
+registerTheme(
+  'zhiyan-light',
+  buildTheme({
+    text: '#1a1b1e',
+    sub: '#6e7178',
+    axis: '#d3d5db',
+    split: '#f0f2f5',
+    border: '#e6e7eb',
+    bg: '#ffffff',
+    shadow: '0 4px 12px rgba(20,21,25,0.08)',
+  }),
+)
 
-registerTheme('zhiyan-dark', buildTheme({
-  text: '#ececef',
-  sub: '#8e9098',
-  axis: '#3a3c44',
-  split: '#2d2f36',
-  border: '#2d2f36',
-  bg: '#1b1c20',
-  shadow: '0 8px 24px rgba(0,0,0,0.5)',
-}))
+registerTheme(
+  'zhiyan-dark',
+  buildTheme({
+    text: '#ececef',
+    sub: '#8e9098',
+    axis: '#3a3c44',
+    split: '#2d2f36',
+    border: '#2d2f36',
+    bg: '#1b1c20',
+    shadow: '0 8px 24px rgba(0,0,0,0.5)',
+  }),
+)
 
 export {}

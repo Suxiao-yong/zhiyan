@@ -103,7 +103,9 @@ function openKnowledge(s: Subject) {
         <template #default="{ row }">
           <el-button size="small" :icon="Share" @click="openKnowledge(row)">知识点</el-button>
           <el-button size="small" :icon="Edit" @click="openEditSubject(row)">编辑</el-button>
-          <el-button size="small" type="danger" :icon="Delete" @click="handleDeleteSubject(row)">删除</el-button>
+          <el-button size="small" type="danger" :icon="Delete" @click="handleDeleteSubject(row)">
+            删除
+          </el-button>
         </template>
       </el-table-column>
     </el-table>

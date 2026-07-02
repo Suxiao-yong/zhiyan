@@ -61,8 +61,7 @@ export async function exportData(range: {
   from?: string
   to?: string
 }): Promise<ExportBundle> {
-  const examFilter =
-    range.scope === 'exam' && range.examId ? 'WHERE exam_id = ?' : ''
+  const examFilter = range.scope === 'exam' && range.examId ? 'WHERE exam_id = ?' : ''
   const examParams = range.scope === 'exam' && range.examId ? [range.examId] : []
 
   const exams =

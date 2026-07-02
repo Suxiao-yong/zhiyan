@@ -117,7 +117,9 @@ async function onDrop() {
           <span class="tree-node__actions">
             <el-button link :icon="Plus" @click.stop="openAdd(data.id)">加子项</el-button>
             <el-button link :icon="Edit" @click.stop="openEdit(data)">编辑</el-button>
-            <el-button link type="danger" :icon="Delete" @click.stop="handleDelete(data)">删除</el-button>
+            <el-button link type="danger" :icon="Delete" @click.stop="handleDelete(data)">
+              删除
+            </el-button>
           </span>
         </div>
       </template>

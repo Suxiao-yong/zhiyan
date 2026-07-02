@@ -18,11 +18,7 @@ async function load() {
   loading.value = true
   try {
     // 加载该考试全部计划（宽范围）
-    await planStore.loadPlansByDateRange(
-      examStore.activeExamId,
-      '1900-01-01',
-      '2100-12-31',
-    )
+    await planStore.loadPlansByDateRange(examStore.activeExamId, '1900-01-01', '2100-12-31')
   } finally {
     loading.value = false
   }
@@ -65,7 +61,10 @@ const option = computed(() => {
       type: 'category',
       data: subjects,
     },
-    dataZoom: [{ type: 'inside', xAxisIndex: 0 }, { type: 'slider', xAxisIndex: 0, height: 16 }],
+    dataZoom: [
+      { type: 'inside', xAxisIndex: 0 },
+      { type: 'slider', xAxisIndex: 0, height: 16 },
+    ],
     series: [
       {
         type: 'custom',
@@ -105,10 +104,18 @@ const option = computed(() => {
       <div class="card-head">
         <el-icon class="card-head__icon"><TrendCharts /></el-icon>
         <span class="card-head__title">甘特图</span>
-        <span class="card-head__hint">每行一科，色块 = 任务（灰未开始 / 蓝进行中 / 绿完成 / 红跳过）</span>
+        <span class="card-head__hint">
+          每行一科，色块 = 任务（灰未开始 / 蓝进行中 / 绿完成 / 红跳过）
+        </span>
       </div>
     </template>
-    <v-chart v-if="planStore.plans.length" class="chart" :option="option" :theme="theme" autoresize />
+    <v-chart
+      v-if="planStore.plans.length"
+      class="chart"
+      :option="option"
+      :theme="theme"
+      autoresize
+    />
     <el-empty v-else description="尚未生成计划" :image-size="60" />
   </el-card>
 </template>

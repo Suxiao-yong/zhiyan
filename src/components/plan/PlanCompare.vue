@@ -41,8 +41,18 @@ const subjectBarOption = computed(() => {
     xAxis: { type: 'category', data: s.bySubject.map((x) => x.subject) },
     yAxis: { type: 'value', name: '分钟' },
     series: [
-      { name: '计划', type: 'bar', data: s.bySubject.map((x) => x.planned), itemStyle: { color: SEMANTIC.primary, borderRadius: [4, 4, 0, 0] } },
-      { name: '实际', type: 'bar', data: s.bySubject.map((x) => x.actual), itemStyle: { color: SEMANTIC.success, borderRadius: [4, 4, 0, 0] } },
+      {
+        name: '计划',
+        type: 'bar',
+        data: s.bySubject.map((x) => x.planned),
+        itemStyle: { color: SEMANTIC.primary, borderRadius: [4, 4, 0, 0] },
+      },
+      {
+        name: '实际',
+        type: 'bar',
+        data: s.bySubject.map((x) => x.actual),
+        itemStyle: { color: SEMANTIC.success, borderRadius: [4, 4, 0, 0] },
+      },
     ],
   } as any
 })
@@ -61,7 +71,10 @@ const dailyLineOption = computed(() => {
         data: s.dailyCompletion.map((d) => d.rate),
         smooth: true,
         areaStyle: { opacity: 0.15 },
-        markLine: { silent: true, data: [{ yAxis: 80, lineStyle: { color: SEMANTIC.warning, type: 'dashed' } }] },
+        markLine: {
+          silent: true,
+          data: [{ yAxis: 80, lineStyle: { color: SEMANTIC.warning, type: 'dashed' } }],
+        },
       },
     ],
   } as any
@@ -71,10 +84,38 @@ const dailyLineOption = computed(() => {
 <template>
   <div v-loading="loading">
     <el-row :gutter="12" class="row">
-      <el-col :span="6"><StatCard title="总计划时长" :value="stats?.totalPlanned ?? 0" unit="分" :icon="TrendCharts" /></el-col>
-      <el-col :span="6"><StatCard title="总实际时长" :value="stats?.totalActual ?? 0" unit="分" :icon="TrendCharts" /></el-col>
-      <el-col :span="6"><StatCard title="完成率" :value="stats ? stats.completionRate + '%' : '-'" :icon="TrendCharts" /></el-col>
-      <el-col :span="6"><StatCard title="偏差天数" :value="stats?.deviationDays ?? 0" unit="天" :icon="Warning" hint="完成率<80%的天数" /></el-col>
+      <el-col :span="6">
+        <StatCard
+          title="总计划时长"
+          :value="stats?.totalPlanned ?? 0"
+          unit="分"
+          :icon="TrendCharts"
+        />
+      </el-col>
+      <el-col :span="6">
+        <StatCard
+          title="总实际时长"
+          :value="stats?.totalActual ?? 0"
+          unit="分"
+          :icon="TrendCharts"
+        />
+      </el-col>
+      <el-col :span="6">
+        <StatCard
+          title="完成率"
+          :value="stats ? stats.completionRate + '%' : '-'"
+          :icon="TrendCharts"
+        />
+      </el-col>
+      <el-col :span="6">
+        <StatCard
+          title="偏差天数"
+          :value="stats?.deviationDays ?? 0"
+          unit="天"
+          :icon="Warning"
+          hint="完成率<80%的天数"
+        />
+      </el-col>
     </el-row>
 
     <el-card shadow="never" class="row">
@@ -85,7 +126,13 @@ const dailyLineOption = computed(() => {
           <span class="card-head__hint">计划 vs 实际</span>
         </div>
       </template>
-      <v-chart v-if="stats && stats.bySubject.length" class="chart" :option="subjectBarOption" :theme="theme" autoresize />
+      <v-chart
+        v-if="stats && stats.bySubject.length"
+        class="chart"
+        :option="subjectBarOption"
+        :theme="theme"
+        autoresize
+      />
       <el-empty v-else description="暂无数据" :image-size="50" />
     </el-card>
 
@@ -97,7 +144,13 @@ const dailyLineOption = computed(() => {
           <span class="card-head__hint">虚线 = 80%</span>
         </div>
       </template>
-      <v-chart v-if="stats && stats.dailyCompletion.length" class="chart" :option="dailyLineOption" :theme="theme" autoresize />
+      <v-chart
+        v-if="stats && stats.dailyCompletion.length"
+        class="chart"
+        :option="dailyLineOption"
+        :theme="theme"
+        autoresize
+      />
       <el-empty v-else description="暂无数据" :image-size="50" />
     </el-card>
 
@@ -110,7 +163,13 @@ const dailyLineOption = computed(() => {
         </div>
       </template>
       <div v-if="stats && stats.deviations.length" class="devs">
-        <el-tag v-for="d in stats.deviations" :key="d.name" type="warning" effect="light" class="dev-tag tnum">
+        <el-tag
+          v-for="d in stats.deviations"
+          :key="d.name"
+          type="warning"
+          effect="light"
+          class="dev-tag tnum"
+        >
           {{ d.name }}：{{ d.rate }}%
         </el-tag>
       </div>

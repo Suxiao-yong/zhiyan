@@ -67,9 +67,7 @@ export function planGenerationPrompt(data: PlanPromptData): {
     total_score: data.exam.total_score,
   })}
 各科目（id/名称/目标分/当前水平1-5/权重）：${JSON.stringify(data.subjects)}
-各科知识点（id/subject_id/名称/权重/难度1-5/当前掌握1-5）：${JSON.stringify(
-    data.knowledgePoints,
-  )}
+各科知识点（id/subject_id/名称/权重/难度1-5/当前掌握1-5）：${JSON.stringify(data.knowledgePoints)}
 每天可用学习时长：${data.dailyHours} 小时
 考试日期：${data.examDate}
 距考试剩余：${data.daysLeft} 天

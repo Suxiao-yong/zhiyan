@@ -92,9 +92,7 @@ async function saveAnalysis(
     subjects_analyzed: null,
     content: content.content,
     suggestions: JSON.stringify(content.suggestions),
-    scores_prediction: content.scores_prediction
-      ? JSON.stringify(content.scores_prediction)
-      : null,
+    scores_prediction: content.scores_prediction ? JSON.stringify(content.scores_prediction) : null,
     generated_by: generatedBy,
     user_confirmed: 0,
     applied: 0,
@@ -102,10 +100,7 @@ async function saveAnalysis(
 }
 
 /** 每日分析 */
-export async function runDailyAnalysis(
-  examId: string,
-  llmConfig: LLMConfig | null,
-): Promise<void> {
+export async function runDailyAnalysis(examId: string, llmConfig: LLMConfig | null): Promise<void> {
   const today = businessToday()
   const agg = await aggregateDaily(examId, today)
   let content: AnalysisContent
@@ -201,10 +196,7 @@ export async function runWeeklyAnalysis(
 }
 
 /** 阶段分析（全量评估 + 预测） */
-export async function runPhaseAnalysis(
-  examId: string,
-  llmConfig: LLMConfig | null,
-): Promise<void> {
+export async function runPhaseAnalysis(examId: string, llmConfig: LLMConfig | null): Promise<void> {
   const agg = await aggregateWeekly(examId)
   const targets = await getTargets(examId)
   let content: AnalysisContent
@@ -236,9 +228,7 @@ export async function runPhaseAnalysis(
       generatedBy = 'ai'
     } catch (e) {
       content = {
-        content: `### 📊 本地阶段预测（非 AI）\n\n⚠️ ${(
-          e as Error
-        ).message}，已降级。`,
+        content: `### 📊 本地阶段预测（非 AI）\n\n⚠️ ${(e as Error).message}，已降级。`,
         suggestions: [],
         scores_prediction: localPrediction(agg.bySubject, targets),
       }

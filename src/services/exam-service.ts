@@ -2,20 +2,8 @@
 // 与 db.ts 的通用 insert 分离：这里处理日期校验、级联删除计数、知识点树构建、排序等业务逻辑。
 // （Phase 2 的 record-service.ts 将沿用同一模式处理跨天 04:00 归一化等。）
 
-import {
-  count,
-  execute,
-  getById,
-  insert,
-  query,
-  remove,
-  update,
-} from './db'
-import type {
-  Exam,
-  KnowledgePoint,
-  Subject,
-} from '@/types'
+import { count, execute, getById, insert, query, remove, update } from './db'
+import type { Exam, KnowledgePoint, Subject } from '@/types'
 
 // ---------------- 考试 ----------------
 
@@ -76,10 +64,9 @@ export async function getExamCascadeCounts(examId: string): Promise<{
   study_plans: number
   wrong_questions: number
 }> {
-  const subjects = await query<{ id: string }>(
-    'SELECT id FROM subjects WHERE exam_id = ?',
-    [examId],
-  )
+  const subjects = await query<{ id: string }>('SELECT id FROM subjects WHERE exam_id = ?', [
+    examId,
+  ])
   const subjectIds = subjects.map((s) => s.id)
   if (!subjectIds.length) {
     return {
@@ -93,22 +80,10 @@ export async function getExamCascadeCounts(examId: string): Promise<{
   const ph = subjectIds.map(() => '?').join(',')
   return {
     subjects: subjectIds.length,
-    knowledge_points: await count(
-      'knowledge_points',
-      `subject_id IN (${ph})`,
-      subjectIds,
-    ),
-    study_records: await count(
-      'study_records',
-      `subject_id IN (${ph})`,
-      subjectIds,
-    ),
+    knowledge_points: await count('knowledge_points', `subject_id IN (${ph})`, subjectIds),
+    study_records: await count('study_records', `subject_id IN (${ph})`, subjectIds),
     study_plans: await count('study_plans', 'exam_id = ?', [examId]),
-    wrong_questions: await count(
-      'wrong_questions',
-      `subject_id IN (${ph})`,
-      subjectIds,
-    ),
+    wrong_questions: await count('wrong_questions', `subject_id IN (${ph})`, subjectIds),
   }
 }
 
@@ -120,10 +95,7 @@ export async function getExamCascadeCounts(examId: string): Promise<{
  * 顺序：wrong_questions → study_plans → study_records → knowledge_points → subjects → exams
  */
 export async function deleteExam(id: string): Promise<void> {
-  const subjects = await query<{ id: string }>(
-    'SELECT id FROM subjects WHERE exam_id = ?',
-    [id],
-  )
+  const subjects = await query<{ id: string }>('SELECT id FROM subjects WHERE exam_id = ?', [id])
   for (const s of subjects) {
     await deleteSubjectCascade(s.id)
   }
@@ -171,17 +143,12 @@ export async function createSubject(input: SubjectInput): Promise<Subject> {
   return (await getById<Subject>('subjects', id))!
 }
 
-export async function updateSubject(
-  id: string,
-  input: Partial<SubjectInput>,
-): Promise<void> {
+export async function updateSubject(id: string, input: Partial<SubjectInput>): Promise<void> {
   await update('subjects', id, input as Record<string, unknown>)
 }
 
 /** 统计删除科目将级联删除的数据量 */
-export async function getSubjectCascadeCounts(
-  subjectId: string,
-): Promise<{
+export async function getSubjectCascadeCounts(subjectId: string): Promise<{
   knowledge_points: number
   study_records: number
   study_plans: number
@@ -212,9 +179,7 @@ export interface KnowledgePointInput {
   sort_order?: number
 }
 
-export async function getKnowledgePointsBySubject(
-  subjectId: string,
-): Promise<KnowledgePoint[]> {
+export async function getKnowledgePointsBySubject(subjectId: string): Promise<KnowledgePoint[]> {
   return query<KnowledgePoint>(
     'SELECT * FROM knowledge_points WHERE subject_id = ? ORDER BY sort_order, created_at',
     [subjectId],
@@ -222,9 +187,7 @@ export async function getKnowledgePointsBySubject(
 }
 
 /** 构建知识点树（按 parent_id 组装 children） */
-export async function getKnowledgeTree(
-  subjectId: string,
-): Promise<KnowledgePoint[]> {
+export async function getKnowledgeTree(subjectId: string): Promise<KnowledgePoint[]> {
   const all = await getKnowledgePointsBySubject(subjectId)
   const map = new Map<string, KnowledgePoint>()
   all.forEach((kp) => map.set(kp.id, { ...kp, children: [] }))
@@ -240,9 +203,7 @@ export async function getKnowledgeTree(
   return roots
 }
 
-export async function createKnowledgePoint(
-  input: KnowledgePointInput,
-): Promise<KnowledgePoint> {
+export async function createKnowledgePoint(input: KnowledgePointInput): Promise<KnowledgePoint> {
   const id = await insert('knowledge_points', {
     subject_id: input.subject_id,
     name: input.name,

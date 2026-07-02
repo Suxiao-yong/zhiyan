@@ -31,9 +31,7 @@ onMounted(async () => {
   }
 })
 
-const weeklyTotal = computed(() =>
-  store.weeklyTrend.reduce((acc, d) => acc + d.minutes, 0),
-)
+const weeklyTotal = computed(() => store.weeklyTrend.reduce((acc, d) => acc + d.minutes, 0))
 
 // 今日计划完成率（除零保护：无计划显示"—"）
 const todayCompletion = computed(() => {

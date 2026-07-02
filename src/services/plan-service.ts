@@ -39,10 +39,7 @@ export async function getTodayPlans(examId: string): Promise<PlanWithNames[]> {
   )
 }
 
-export async function updatePlanStatus(
-  id: string,
-  status: PlanStatus,
-): Promise<void> {
+export async function updatePlanStatus(id: string, status: PlanStatus): Promise<void> {
   // 标记完成时，若未填实际时长则用计划时长填充
   if (status === 'completed') {
     const rows = await query<{ planned_duration: number | null; actual_duration: number | null }>(
@@ -67,10 +64,7 @@ export interface PlanUpdateInput {
 }
 
 /** 手动调整任务（标记 user_modified=1） */
-export async function updatePlan(
-  id: string,
-  input: PlanUpdateInput,
-): Promise<void> {
+export async function updatePlan(id: string, input: PlanUpdateInput): Promise<void> {
   await update('study_plans', id, { ...input, user_modified: 1 })
 }
 
@@ -92,9 +86,7 @@ export interface CompareStats {
 }
 
 export async function getCompareStats(examId: string): Promise<CompareStats> {
-  const plans = await query<
-    StudyPlan & { subject_name: string | null }
-  >(
+  const plans = await query<StudyPlan & { subject_name: string | null }>(
     `SELECT p.*, s.name AS subject_name FROM study_plans p
      LEFT JOIN subjects s ON s.id = p.subject_id
      WHERE p.exam_id = ? ORDER BY p.date`,
@@ -103,18 +95,15 @@ export async function getCompareStats(examId: string): Promise<CompareStats> {
   const totalPlanned = plans.reduce((a, p) => a + (p.planned_duration ?? 0), 0)
   const totalActual = plans.reduce((a, p) => a + (p.actual_duration ?? 0), 0)
   const completed = plans.filter((p) => p.status === 'completed').length
-  const completionRate = plans.length
-    ? Math.round((completed / plans.length) * 100)
-    : 0
+  const completionRate = plans.length ? Math.round((completed / plans.length) * 100) : 0
 
   const subjMap = new Map<string, { subject: string; planned: number; actual: number }>()
   plans.forEach((p) => {
-    const e =
-      subjMap.get(p.subject_id) ?? {
-        subject: p.subject_name ?? '未知',
-        planned: 0,
-        actual: 0,
-      }
+    const e = subjMap.get(p.subject_id) ?? {
+      subject: p.subject_name ?? '未知',
+      planned: 0,
+      actual: 0,
+    }
     e.planned += p.planned_duration ?? 0
     e.actual += p.actual_duration ?? 0
     subjMap.set(p.subject_id, e)

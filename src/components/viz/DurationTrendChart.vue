@@ -8,22 +8,25 @@ const props = defineProps<{ data: { date: string; minutes: number }[] }>()
 const type = ref<'line' | 'bar'>('line')
 const { theme } = useChartTheme()
 
-const option = computed(() => ({
-  tooltip: { trigger: 'axis' },
-  toolbox: { feature: { saveAsImage: { name: 'duration-trend' } } },
-  grid: { left: 48, right: 16, top: 16, bottom: 32 },
-  xAxis: { type: 'category', data: props.data.map((d) => d.date) },
-  yAxis: { type: 'value', name: '分钟' },
-  series: [
-    {
-      type: type.value,
-      data: props.data.map((d) => d.minutes),
-      smooth: true,
-      areaStyle: type.value === 'line' ? { opacity: 0.15 } : undefined,
-      itemStyle: { borderRadius: type.value === 'bar' ? [4, 4, 0, 0] : undefined },
-    },
-  ],
-}) as any)
+const option = computed(
+  () =>
+    ({
+      tooltip: { trigger: 'axis' },
+      toolbox: { feature: { saveAsImage: { name: 'duration-trend' } } },
+      grid: { left: 48, right: 16, top: 16, bottom: 32 },
+      xAxis: { type: 'category', data: props.data.map((d) => d.date) },
+      yAxis: { type: 'value', name: '分钟' },
+      series: [
+        {
+          type: type.value,
+          data: props.data.map((d) => d.minutes),
+          smooth: true,
+          areaStyle: type.value === 'line' ? { opacity: 0.15 } : undefined,
+          itemStyle: { borderRadius: type.value === 'bar' ? [4, 4, 0, 0] : undefined },
+        },
+      ],
+    }) as any,
+)
 </script>
 
 <template>

@@ -169,15 +169,24 @@ async function finish() {
           <ul class="features">
             <li>
               <el-icon class="features__icon"><Aim /></el-icon>
-              <span><b>通用化</b>：支持考研、考公、考证与自定义考试</span>
+              <span>
+                <b>通用化</b>
+                ：支持考研、考公、考证与自定义考试
+              </span>
             </li>
             <li>
               <el-icon class="features__icon"><Lock /></el-icon>
-              <span><b>本地优先</b>：所有数据存于本地 SQLite，你完全掌控</span>
+              <span>
+                <b>本地优先</b>
+                ：所有数据存于本地 SQLite，你完全掌控
+              </span>
             </li>
             <li>
               <el-icon class="features__icon"><ChatDotRound /></el-icon>
-              <span><b>半 Agent</b>：AI 提建议，是否采纳由你决定</span>
+              <span>
+                <b>半 Agent</b>
+                ：AI 提建议，是否采纳由你决定
+              </span>
             </li>
           </ul>
         </div>
@@ -201,7 +210,12 @@ async function finish() {
               </div>
             </el-form-item>
             <el-form-item label="考试名称">
-              <el-input v-model="exam.name" placeholder="如 2027 管理类联考" maxlength="60" show-word-limit />
+              <el-input
+                v-model="exam.name"
+                placeholder="如 2027 管理类联考"
+                maxlength="60"
+                show-word-limit
+              />
             </el-form-item>
             <el-form-item label="考试日期">
               <el-date-picker
@@ -214,7 +228,12 @@ async function finish() {
               />
             </el-form-item>
             <el-form-item label="总分">
-              <el-input-number v-model="exam.total_score" :min="0" :step="50" controls-position="right" />
+              <el-input-number
+                v-model="exam.total_score"
+                :min="0"
+                :step="50"
+                controls-position="right"
+              />
             </el-form-item>
           </el-form>
         </div>
@@ -227,12 +246,23 @@ async function finish() {
           </div>
           <div v-for="(s, i) in subjects" :key="i" class="subject-row">
             <el-input v-model="s.name" placeholder="科目名称" class="subject-row__name" />
-            <el-input-number v-model="s.target_score" :min="0" placeholder="目标分" controls-position="right" />
+            <el-input-number
+              v-model="s.target_score"
+              :min="0"
+              placeholder="目标分"
+              controls-position="right"
+            />
             <div class="subject-row__level">
               <el-slider v-model="s.current_level" :min="1" :max="5" show-stops />
               <span class="tnum">{{ levelLabels[s.current_level] }}</span>
             </div>
-            <el-input-number v-model="s.weight" :min="0" :step="0.5" :precision="1" controls-position="right" />
+            <el-input-number
+              v-model="s.weight"
+              :min="0"
+              :step="0.5"
+              :precision="1"
+              controls-position="right"
+            />
             <el-button :icon="Delete" type="danger" circle @click="removeSubject(i)" />
           </div>
         </div>
@@ -241,10 +271,16 @@ async function finish() {
         <div v-show="current === 3" class="step">
           <div class="step-head step-head--column">
             <h2>基础水平评估</h2>
-            <span class="muted">为各科添加知识点并自评掌握度（1-5 星），作为 AI 诊断的初始基准。可跳过，稍后在考试配置中补充。</span>
+            <span class="muted">
+              为各科添加知识点并自评掌握度（1-5 星），作为 AI
+              诊断的初始基准。可跳过，稍后在考试配置中补充。
+            </span>
           </div>
           <el-collapse v-for="(s, i) in subjects" :key="i" class="kp-collapse">
-            <el-collapse-item :title="`${s.name || '科目 ' + (i + 1)}（${s.knowledgePoints.length} 个知识点）`" :name="i">
+            <el-collapse-item
+              :title="`${s.name || '科目 ' + (i + 1)}（${s.knowledgePoints.length} 个知识点）`"
+              :name="i"
+            >
               <div v-for="(kp, j) in s.knowledgePoints" :key="j" class="kp-row">
                 <el-input v-model="kp.name" placeholder="知识点名称" class="kp-row__name" />
                 <el-input v-model="kp.chapter" placeholder="章节（可选）" class="kp-row__chapter" />
@@ -260,7 +296,9 @@ async function finish() {
         <div v-show="current === 4" class="step">
           <h2>确认并完成</h2>
           <el-descriptions :column="1" border>
-            <el-descriptions-item label="考试类型">{{ examTypes.find((t) => t.value === exam.exam_type)?.label }}</el-descriptions-item>
+            <el-descriptions-item label="考试类型">
+              {{ examTypes.find((t) => t.value === exam.exam_type)?.label }}
+            </el-descriptions-item>
             <el-descriptions-item label="考试名称">{{ exam.name }}</el-descriptions-item>
             <el-descriptions-item label="考试日期">{{ exam.exam_date }}</el-descriptions-item>
             <el-descriptions-item label="总分">{{ exam.total_score ?? '—' }}</el-descriptions-item>
@@ -278,15 +316,16 @@ async function finish() {
 
       <div class="welcome__footer">
         <el-button v-if="current > 0" :icon="ArrowLeft" @click="prev">上一步</el-button>
-        <el-button
-          v-if="current < 4"
-          type="primary"
-          :icon="ArrowRight"
-          @click="next"
-        >
+        <el-button v-if="current < 4" type="primary" :icon="ArrowRight" @click="next">
           下一步
         </el-button>
-        <el-button v-if="current === 4" type="primary" :icon="Check" :loading="saving" @click="finish">
+        <el-button
+          v-if="current === 4"
+          type="primary"
+          :icon="Check"
+          :loading="saving"
+          @click="finish"
+        >
           完成配置
         </el-button>
       </div>
@@ -305,9 +344,12 @@ async function finish() {
   background-color: #1e1640;
   background-image:
     radial-gradient(circle at 50% 0%, rgba(124, 99, 220, 0.38), transparent 62%),
-    radial-gradient(circle at 85% 95%, rgba(109, 93, 200, 0.20), transparent 52%),
+    radial-gradient(circle at 85% 95%, rgba(109, 93, 200, 0.2), transparent 52%),
     radial-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px);
-  background-size: 100% 100%, 100% 100%, 22px 22px;
+  background-size:
+    100% 100%,
+    100% 100%,
+    22px 22px;
 }
 
 .welcome__card {
@@ -330,7 +372,9 @@ async function finish() {
   height: 40px;
   border-radius: 10px;
   background: var(--c-primary);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 6px 16px rgba(109, 93, 200, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.3),
+    0 6px 16px rgba(109, 93, 200, 0.45);
   margin-bottom: var(--sp-3);
 }
 .welcome__brand h1 {
@@ -401,7 +445,9 @@ async function finish() {
   padding: var(--sp-3) var(--sp-2);
   text-align: center;
   cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
 }
 .type-card:hover {
   border-color: var(--c-border-strong);

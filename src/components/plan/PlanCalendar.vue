@@ -69,7 +69,10 @@ function onDetailChanged() {
       <template #date-cell="{ data }">
         <div
           class="cal-cell"
-          :class="{ 'other-month': data.type !== 'curr-month', 'has-plan': plansByDate.has(data.day) }"
+          :class="{
+            'other-month': data.type !== 'curr-month',
+            'has-plan': plansByDate.has(data.day),
+          }"
           @click="onCellClick(data)"
         >
           <span class="day">{{ Number(data.day.slice(-2)) }}</span>
@@ -79,7 +82,9 @@ function onDetailChanged() {
               :key="p.id"
               class="tag"
               :style="{ background: STATUS_COLORS[p.status] }"
-            >{{ p.subject_name }}</span>
+            >
+              {{ p.subject_name }}
+            </span>
           </div>
         </div>
       </template>

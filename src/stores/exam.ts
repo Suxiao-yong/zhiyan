@@ -5,11 +5,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { Exam, KnowledgePoint, Subject } from '@/types'
 import * as examService from '@/services/exam-service'
-import type {
-  ExamInput,
-  KnowledgePointInput,
-  SubjectInput,
-} from '@/services/exam-service'
+import type { ExamInput, KnowledgePointInput, SubjectInput } from '@/services/exam-service'
 
 export const useExamStore = defineStore('exam', () => {
   const exams = ref<Exam[]>([])
@@ -89,7 +85,7 @@ export const useExamStore = defineStore('exam', () => {
 
   async function createKnowledgePoint(
     input: KnowledgePointInput,
-  reloadSubjectId?: string,
+    reloadSubjectId?: string,
   ): Promise<KnowledgePoint> {
     const kp = await examService.createKnowledgePoint(input)
     if (reloadSubjectId) await loadKnowledgeTree(reloadSubjectId)
@@ -105,18 +101,12 @@ export const useExamStore = defineStore('exam', () => {
     if (reloadSubjectId) await loadKnowledgeTree(reloadSubjectId)
   }
 
-  async function deleteKnowledgePoint(
-    id: string,
-    reloadSubjectId?: string,
-  ): Promise<void> {
+  async function deleteKnowledgePoint(id: string, reloadSubjectId?: string): Promise<void> {
     await examService.deleteKnowledgePoint(id)
     if (reloadSubjectId) await loadKnowledgeTree(reloadSubjectId)
   }
 
-  async function reorderKnowledgePoints(
-    ids: string[],
-    subjectId: string,
-  ): Promise<void> {
+  async function reorderKnowledgePoints(ids: string[], subjectId: string): Promise<void> {
     await examService.reorderKnowledgePoints(ids)
     await loadKnowledgeTree(subjectId)
   }

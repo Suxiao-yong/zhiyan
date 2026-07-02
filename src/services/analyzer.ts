@@ -79,12 +79,8 @@ async function aggregateBySubject(
     const totalQ = rs.reduce((a, r) => a + r.questions_count, 0)
     const totalC = rs.reduce((a, r) => a + r.correct_count, 0)
     const avgCorrectRate = totalQ > 0 ? Math.round((totalC / totalQ) * 100) : 0
-    const firstMin = rs
-      .filter((r) => r.date < midDate)
-      .reduce((a, r) => a + r.duration_min, 0)
-    const lastMin = rs
-      .filter((r) => r.date >= midDate)
-      .reduce((a, r) => a + r.duration_min, 0)
+    const firstMin = rs.filter((r) => r.date < midDate).reduce((a, r) => a + r.duration_min, 0)
+    const lastMin = rs.filter((r) => r.date >= midDate).reduce((a, r) => a + r.duration_min, 0)
     const trend: SubjectStat['trend'] =
       lastMin > firstMin * 1.15 ? '上升' : lastMin < firstMin * 0.85 ? '下降' : '平稳'
     return {
@@ -100,9 +96,9 @@ async function aggregateBySubject(
 }
 
 /** 各知识点当前掌握度（低掌握度优先） */
-async function getKpMastery(examId: string): Promise<
-  { kp: string; subject: string; mastery: number }[]
-> {
+async function getKpMastery(
+  examId: string,
+): Promise<{ kp: string; subject: string; mastery: number }[]> {
   const subjects = await getExamSubjects(examId)
   const subjectIds = subjects.map((s) => s.id)
   if (!subjectIds.length) return []
@@ -121,9 +117,10 @@ async function getKpMastery(examId: string): Promise<
 }
 
 /** 计划完成率趋势（最近 N 天分两段） */
-async function getPlanCompletion(examId: string, days: number): Promise<
-  { period: string; rate: number }[]
-> {
+async function getPlanCompletion(
+  examId: string,
+  days: number,
+): Promise<{ period: string; rate: number }[]> {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const from = new Date(today)
@@ -229,8 +226,7 @@ function buildMarkdown(
     '',
     '**薄弱点：**',
     ...weakPoints.map(
-      (w) =>
-        `- ${w.subject}${w.kp ? ' · ' + w.kp : ''}：${w.evidence}（严重度：${w.severity}）`,
+      (w) => `- ${w.subject}${w.kp ? ' · ' + w.kp : ''}：${w.evidence}（严重度：${w.severity}）`,
     ),
     '',
     `**效率分析：** 趋势${efficiency.trend}${
@@ -261,10 +257,9 @@ export function localWeeklyAnalysis(agg: WeeklyAggregation): AnalysisContent {
   ]
   const totalMin = agg.bySubject.reduce((a, s) => a + s.totalMin, 0)
   const avgPerDay = Math.round(totalMin / 28)
-  const trend =
-    agg.bySubject.some((s) => s.trend === '上升')
-      ? '上升'
-      : agg.bySubject.some((s) => s.trend === '下降')
+  const trend = agg.bySubject.some((s) => s.trend === '上升')
+    ? '上升'
+    : agg.bySubject.some((s) => s.trend === '下降')
       ? '下降'
       : '平稳'
   const summary = `本周（28天）共学习 ${totalMin} 分钟，日均 ${avgPerDay} 分钟，整体趋势${trend}。`
@@ -280,10 +275,7 @@ export function localWeeklyAnalysis(agg: WeeklyAggregation): AnalysisContent {
   }
 }
 
-export function localDailyAnalysis(
-  bySubject: SubjectStat[],
-  date: string,
-): AnalysisContent {
+export function localDailyAnalysis(bySubject: SubjectStat[], date: string): AnalysisContent {
   const totalMin = bySubject.reduce((a, s) => a + s.totalMin, 0)
   const weak = bySubject
     .filter((s) => s.records > 0 && s.avgCorrectRate < 70)
@@ -294,12 +286,7 @@ export function localDailyAnalysis(
     }))
   const summary = `${date} 共学习 ${totalMin} 分钟，涉及 ${bySubject.filter((s) => s.records > 0).length} 个科目。`
   return {
-    content: buildMarkdown(
-      summary,
-      weak,
-      { trend: '平稳' },
-      'local',
-    ),
+    content: buildMarkdown(summary, weak, { trend: '平稳' }, 'local'),
     suggestions: weak.slice(0, 2).map((w) => ({
       action: `复盘「${w.subject}」错题`,
       reason: w.evidence,

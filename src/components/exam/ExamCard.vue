@@ -38,7 +38,9 @@ const daysLeft = computed(() => {
       <span v-if="exam.total_score != null" class="tnum">总分 {{ exam.total_score }}</span>
       <span>
         剩余
-        <b class="tnum" :class="['days', { warn: daysLeft < 30, urgent: daysLeft < 7 }]">{{ daysLeft }}</b>
+        <b class="tnum" :class="['days', { warn: daysLeft < 30, urgent: daysLeft < 7 }]">
+          {{ daysLeft }}
+        </b>
         天
       </span>
     </div>
@@ -54,7 +56,9 @@ const daysLeft = computed(() => {
 <style scoped>
 .exam-card {
   cursor: pointer;
-  transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  transition:
+    transform var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
 }
 .exam-card:hover {
   transform: translateY(-2px);

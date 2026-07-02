@@ -11,33 +11,36 @@ const { theme } = useChartTheme()
 
 const maxDur = computed(() => Math.max(1, ...props.data.map((d) => d.duration)))
 
-const option = computed(() => ({
-  tooltip: {},
-  legend: { bottom: 0, data: props.data.map((d) => d.subject) },
-  toolbox: { feature: { saveAsImage: { name: 'subject-radar' } } },
-  radar: {
-    indicator: [
-      { name: '时长', max: 100 },
-      { name: '正确率', max: 100 },
-      { name: '掌握度', max: 100 },
-    ],
-  },
-  series: [
-    {
-      type: 'radar',
-      data: props.data.map((d, i) => {
-        const color = SUBJECT_PALETTE[i % SUBJECT_PALETTE.length]
-        return {
-          value: [Math.round((d.duration / maxDur.value) * 100), d.correctRate, d.mastery],
-          name: d.subject,
-          lineStyle: { color },
-          itemStyle: { color },
-          areaStyle: { color, opacity: 0.1 },
-        }
-      }),
-    },
-  ],
-}) as any)
+const option = computed(
+  () =>
+    ({
+      tooltip: {},
+      legend: { bottom: 0, data: props.data.map((d) => d.subject) },
+      toolbox: { feature: { saveAsImage: { name: 'subject-radar' } } },
+      radar: {
+        indicator: [
+          { name: '时长', max: 100 },
+          { name: '正确率', max: 100 },
+          { name: '掌握度', max: 100 },
+        ],
+      },
+      series: [
+        {
+          type: 'radar',
+          data: props.data.map((d, i) => {
+            const color = SUBJECT_PALETTE[i % SUBJECT_PALETTE.length]
+            return {
+              value: [Math.round((d.duration / maxDur.value) * 100), d.correctRate, d.mastery],
+              name: d.subject,
+              lineStyle: { color },
+              itemStyle: { color },
+              areaStyle: { color, opacity: 0.1 },
+            }
+          }),
+        },
+      ],
+    }) as any,
+)
 </script>
 
 <template>

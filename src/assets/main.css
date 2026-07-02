@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 /* Tailwind v4 class-based dark mode（html.dark 触发 dark: 前缀） */
 @custom-variant dark (&:where(.dark, .dark *));
@@ -45,10 +45,11 @@
   --c-ink-muted: #767986;
 
   /* 字体：系统 sans 栈（Tauri 离线，不捆绑字体文件）+ 等宽数字栈 */
-  --font-sans: "Inter", "SF Pro Text", "PingFang SC", "Microsoft YaHei",
-    "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, "SF Mono",
-    Menlo, Consolas, monospace;
+  --font-sans:
+    'Inter', 'SF Pro Text', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', system-ui,
+    -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:
+    'JetBrains Mono', 'Cascadia Code', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
   /* 固定 rem 阶梯（product UI：1.125–1.2 比例，不用 fluid clamp） */
   --fs-xs: 12px;
@@ -166,7 +167,7 @@ body {
 /* 数字表格对齐（product 数据质感，无需等宽字体） */
 .tnum {
   font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum";
+  font-feature-settings: 'tnum';
 }
 
 /* =====================================================================
@@ -333,7 +334,9 @@ html.dark .tag-tinted {
   align-items: center;
   justify-content: center;
   color: var(--c-ink-3);
-  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
   border-radius: var(--r-md);
 }
 .icon-btn:hover {

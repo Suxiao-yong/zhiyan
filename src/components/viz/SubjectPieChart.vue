@@ -8,21 +8,24 @@ const props = defineProps<{ data: { subjectName: string; minutes: number }[] }>(
 const donut = ref(true)
 const { isDark, theme } = useChartTheme()
 
-const option = computed(() => ({
-  tooltip: { trigger: 'item', formatter: '{b}: {c}分 ({d}%)' },
-  legend: { bottom: 0, type: 'scroll' },
-  toolbox: { feature: { saveAsImage: { name: 'subject-ratio' } } },
-  series: [
-    {
-      type: 'pie',
-      radius: donut.value ? ['40%', '70%'] : '70%',
-      center: ['50%', '45%'],
-      itemStyle: { borderColor: isDark.value ? '#1b1c20' : '#ffffff', borderWidth: 2 },
-      label: { formatter: '{b}\n{d}%' },
-      data: props.data.map((d) => ({ value: d.minutes, name: d.subjectName })),
-    },
-  ],
-}) as any)
+const option = computed(
+  () =>
+    ({
+      tooltip: { trigger: 'item', formatter: '{b}: {c}分 ({d}%)' },
+      legend: { bottom: 0, type: 'scroll' },
+      toolbox: { feature: { saveAsImage: { name: 'subject-ratio' } } },
+      series: [
+        {
+          type: 'pie',
+          radius: donut.value ? ['40%', '70%'] : '70%',
+          center: ['50%', '45%'],
+          itemStyle: { borderColor: isDark.value ? '#1b1c20' : '#ffffff', borderWidth: 2 },
+          label: { formatter: '{b}\n{d}%' },
+          data: props.data.map((d) => ({ value: d.minutes, name: d.subjectName })),
+        },
+      ],
+    }) as any,
+)
 </script>
 
 <template>

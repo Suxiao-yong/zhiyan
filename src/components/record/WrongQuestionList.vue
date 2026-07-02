@@ -93,7 +93,13 @@ function viewDetail(row: WrongWithNames) {
 <template>
   <el-card shadow="never">
     <div class="filter-bar">
-      <el-select v-model="filter.subjectId" clearable placeholder="科目" class="sel-120" @change="onSubjectChange">
+      <el-select
+        v-model="filter.subjectId"
+        clearable
+        placeholder="科目"
+        class="sel-120"
+        @change="onSubjectChange"
+      >
         <el-option v-for="s in examStore.subjects" :key="s.id" :label="s.name" :value="s.id" />
       </el-select>
       <el-select v-model="filter.knowledgePointId" clearable placeholder="知识点" class="sel-140">
@@ -128,10 +134,22 @@ function viewDetail(row: WrongWithNames) {
       </el-table-column>
       <el-table-column label="操作" width="240">
         <template #default="{ row }">
-          <el-button v-if="!row.mastered" size="small" link :icon="Check" @click="toggleMastered(row, true)">已掌握</el-button>
-          <el-button v-else size="small" link :icon="Close" @click="toggleMastered(row, false)">取消</el-button>
+          <el-button
+            v-if="!row.mastered"
+            size="small"
+            link
+            :icon="Check"
+            @click="toggleMastered(row, true)"
+          >
+            已掌握
+          </el-button>
+          <el-button v-else size="small" link :icon="Close" @click="toggleMastered(row, false)">
+            取消
+          </el-button>
           <el-button size="small" link :icon="View" @click="viewDetail(row)">详情</el-button>
-          <el-button size="small" link :icon="RefreshLeft" @click="incReview(row.id)">复习+1</el-button>
+          <el-button size="small" link :icon="RefreshLeft" @click="incReview(row.id)">
+            复习+1
+          </el-button>
         </template>
       </el-table-column>
       <template #empty>
@@ -152,16 +170,34 @@ function viewDetail(row: WrongWithNames) {
 
     <el-dialog v-model="detailVisible" title="错题详情" width="540px">
       <el-descriptions v-if="detailRow" :column="1" border>
-        <el-descriptions-item label="题目来源">{{ detailRow.question_source ?? '—' }}</el-descriptions-item>
-        <el-descriptions-item label="题目描述">{{ detailRow.question_desc ?? '—' }}</el-descriptions-item>
-        <el-descriptions-item label="正确答案">{{ detailRow.correct_answer ?? '—' }}</el-descriptions-item>
-        <el-descriptions-item label="我的答案">{{ detailRow.my_answer ?? '—' }}</el-descriptions-item>
-        <el-descriptions-item label="错误类型">{{ detailRow.error_type ?? '—' }}</el-descriptions-item>
-        <el-descriptions-item label="错误原因">{{ detailRow.error_reason ?? '—' }}</el-descriptions-item>
-        <el-descriptions-item label="科目">{{ detailRow.subject_name ?? '—' }}</el-descriptions-item>
-        <el-descriptions-item label="知识点">{{ detailRow.knowledge_point_name ?? '—' }}</el-descriptions-item>
+        <el-descriptions-item label="题目来源">
+          {{ detailRow.question_source ?? '—' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="题目描述">
+          {{ detailRow.question_desc ?? '—' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="正确答案">
+          {{ detailRow.correct_answer ?? '—' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="我的答案">
+          {{ detailRow.my_answer ?? '—' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="错误类型">
+          {{ detailRow.error_type ?? '—' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="错误原因">
+          {{ detailRow.error_reason ?? '—' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="科目">
+          {{ detailRow.subject_name ?? '—' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="知识点">
+          {{ detailRow.knowledge_point_name ?? '—' }}
+        </el-descriptions-item>
         <el-descriptions-item label="复习次数">{{ detailRow.review_count }}</el-descriptions-item>
-        <el-descriptions-item label="掌握状态">{{ detailRow.mastered ? '已掌握' : '未掌握' }}</el-descriptions-item>
+        <el-descriptions-item label="掌握状态">
+          {{ detailRow.mastered ? '已掌握' : '未掌握' }}
+        </el-descriptions-item>
       </el-descriptions>
     </el-dialog>
   </el-card>

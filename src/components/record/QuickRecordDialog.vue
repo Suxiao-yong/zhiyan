@@ -210,12 +210,7 @@ async function handleSubmit() {
           class="full"
           @change="onSubjectChange"
         >
-          <el-option
-            v-for="s in examStore.subjects"
-            :key="s.id"
-            :label="s.name"
-            :value="s.id"
-          />
+          <el-option v-for="s in examStore.subjects" :key="s.id" :label="s.name" :value="s.id" />
         </el-select>
         <span v-if="!examStore.subjects.length" class="hint warn">
           当前考试无科目，请先在「考试配置」中添加
@@ -228,37 +223,63 @@ async function handleSubmit() {
           placeholder="可选（快速记录可空）"
           class="full"
         >
-          <el-option
-            v-for="k in kpOptions"
-            :key="k.id"
-            :label="k.name"
-            :value="k.id"
-          />
+          <el-option v-for="k in kpOptions" :key="k.id" :label="k.name" :value="k.id" />
         </el-select>
       </el-form-item>
       <el-form-item label="学习时长" required>
-        <el-input-number v-model="form.duration_min" :min="1" :step="15" controls-position="right" />
+        <el-input-number
+          v-model="form.duration_min"
+          :min="1"
+          :step="15"
+          controls-position="right"
+        />
         <span class="hint">分钟</span>
       </el-form-item>
       <el-form-item label="学习内容">
-        <el-input v-model="form.content" type="textarea" :rows="2" placeholder="学了什么" maxlength="300" show-word-limit />
+        <el-input
+          v-model="form.content"
+          type="textarea"
+          :rows="2"
+          placeholder="学了什么"
+          maxlength="300"
+          show-word-limit
+        />
       </el-form-item>
       <el-form-item label="做题情况">
         <div class="qs-row">
           <span>共</span>
-          <el-input-number v-model="form.questions_count" :min="0" :step="1" controls-position="right" />
+          <el-input-number
+            v-model="form.questions_count"
+            :min="0"
+            :step="1"
+            controls-position="right"
+          />
           <span>题，对</span>
-          <el-input-number v-model="form.correct_count" :min="0" :step="1" controls-position="right" />
+          <el-input-number
+            v-model="form.correct_count"
+            :min="0"
+            :step="1"
+            controls-position="right"
+          />
           <span>题</span>
-          <el-tag v-if="form.questions_count > 0" size="small" type="info" effect="light">正确率 {{ correctRate }}%</el-tag>
+          <el-tag v-if="form.questions_count > 0" size="small" type="info" effect="light">
+            正确率 {{ correctRate }}%
+          </el-tag>
         </div>
       </el-form-item>
       <el-form-item label="掌握程度">
-        <el-rate v-model="form.mastery_rating" :max="5" show-text :texts="['', '未掌握', '略懂', '了解', '熟悉', '掌握']" />
+        <el-rate
+          v-model="form.mastery_rating"
+          :max="5"
+          show-text
+          :texts="['', '未掌握', '略懂', '了解', '熟悉', '掌握']"
+        />
       </el-form-item>
       <el-form-item label="学习时段">
         <el-radio-group v-model="form.session_time">
-          <el-radio-button v-for="s in sessionOptions" :key="s.value" :value="s.value">{{ s.label }}</el-radio-button>
+          <el-radio-button v-for="s in sessionOptions" :key="s.value" :value="s.value">
+            {{ s.label }}
+          </el-radio-button>
         </el-radio-group>
       </el-form-item>
       <el-form-item label="心情">

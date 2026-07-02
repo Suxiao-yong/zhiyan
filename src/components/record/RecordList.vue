@@ -90,11 +90,11 @@ function startEdit(row: RecordWithNames) {
 
 async function del(id: string) {
   try {
-    await ElMessageBox.confirm(
-      '确认删除该学习记录？关联的错题将保留为独立条目。',
-      '删除确认',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
-    )
+    await ElMessageBox.confirm('确认删除该学习记录？关联的错题将保留为独立条目。', '删除确认', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
     await store.deleteRecord(id)
     ElMessage.success('已删除')
     await load()
@@ -149,7 +149,9 @@ defineExpose({ refresh: load })
       </el-table-column>
       <el-table-column label="掌握度" width="90">
         <template #default="{ row }">
-          <el-tag v-if="row.mastery_rating" size="small" effect="light">{{ masteryLabels[row.mastery_rating] }}</el-tag>
+          <el-tag v-if="row.mastery_rating" size="small" effect="light">
+            {{ masteryLabels[row.mastery_rating] }}
+          </el-tag>
           <span v-else>—</span>
         </template>
       </el-table-column>
@@ -159,7 +161,9 @@ defineExpose({ refresh: load })
       <el-table-column label="操作" width="120">
         <template #default="{ row }">
           <el-button size="small" link :icon="Edit" @click="startEdit(row)">编辑</el-button>
-          <el-button size="small" link type="danger" :icon="Delete" @click="del(row.id)">删除</el-button>
+          <el-button size="small" link type="danger" :icon="Delete" @click="del(row.id)">
+            删除
+          </el-button>
         </template>
       </el-table-column>
       <template #empty>

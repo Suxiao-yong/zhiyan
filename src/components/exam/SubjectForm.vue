@@ -46,12 +46,24 @@ async function handleSubmit() {
     </el-form-item>
     <el-form-item label="当前水平">
       <div class="slider-row">
-        <el-slider v-model="form.current_level" :min="1" :max="5" show-stops class="slider-row__slider" />
+        <el-slider
+          v-model="form.current_level"
+          :min="1"
+          :max="5"
+          show-stops
+          class="slider-row__slider"
+        />
         <span class="level-hint">{{ levelLabels[form.current_level] }}</span>
       </div>
     </el-form-item>
     <el-form-item label="权重">
-      <el-input-number v-model="form.weight" :min="0" :step="0.5" :precision="1" controls-position="right" />
+      <el-input-number
+        v-model="form.weight"
+        :min="0"
+        :step="0.5"
+        :precision="1"
+        controls-position="right"
+      />
     </el-form-item>
     <el-form-item>
       <el-button type="primary" @click="handleSubmit">{{ subject ? '保存' : '添加' }}</el-button>

@@ -19,9 +19,7 @@ function buildCond(f: VizFilter): { cond: string; params: unknown[] } {
 }
 
 /** 每日学习时长趋势 */
-export async function getDurationTrend(
-  f: VizFilter,
-): Promise<{ date: string; minutes: number }[]> {
+export async function getDurationTrend(f: VizFilter): Promise<{ date: string; minutes: number }[]> {
   const { cond, params } = buildCond(f)
   return query<{ date: string; minutes: number }>(
     `SELECT r.date, SUM(r.duration_min) AS minutes FROM study_records r ${cond} GROUP BY r.date ORDER BY r.date`,

@@ -56,9 +56,7 @@ const groups = computed(() => {
 })
 
 const current = computed(() => analysisStore.current)
-const contentHtml = computed(() =>
-  current.value ? marked.parse(current.value.content ?? '') : '',
-)
+const contentHtml = computed(() => (current.value ? marked.parse(current.value.content ?? '') : ''))
 const suggestions = computed<Recommendation[]>(() => {
   if (!current.value?.suggestions) return []
   try {
@@ -235,8 +233,16 @@ async function apply() {
                 v-for="(al, i) in prediction.alerts"
                 :key="i"
                 effect="light"
-                :type="al.severity === 'critical' ? 'danger' : al.severity === 'warning' ? 'warning' : 'info'"
-              >{{ al.subject }}：{{ al.issue }}</el-tag>
+                :type="
+                  al.severity === 'critical'
+                    ? 'danger'
+                    : al.severity === 'warning'
+                      ? 'warning'
+                      : 'info'
+                "
+              >
+                {{ al.subject }}：{{ al.issue }}
+              </el-tag>
             </div>
             <p v-if="prediction.urgent_actions.length" class="urgent">
               <el-icon class="urgent__icon"><Warning /></el-icon>
