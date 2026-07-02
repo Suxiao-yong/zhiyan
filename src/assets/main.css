@@ -1,0 +1,353 @@
+@import "tailwindcss";
+
+/* Tailwind v4 class-based dark mode（html.dark 触发 dark: 前缀） */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* =====================================================================
+   智研 · 设计令牌（Thinking Workspace · Restrained Violet）
+   种子色 oklch(0.500 0.160 280°) → 紫罗兰。纯白底，Restrained 策略。
+   语义：primary 仅用于主操作/选中/状态；状态色齐全；暗色完整接线。
+   ===================================================================== */
+
+:root {
+  /* 品牌主色（紫罗兰）及其层次 */
+  --c-primary: #6d5dc8;
+  --c-primary-hover: #5c4fb3;
+  --c-primary-active: #5146a0;
+  --c-primary-light: #ede9fb;
+  --c-primary-lighter: #f6f3fd;
+  --c-primary-soft: color-mix(in srgb, var(--c-primary) 12%, var(--c-bg));
+
+  /* 语义状态色（含 light 软底，用于 tinted 标签/提示） */
+  --c-success: #2f8a57;
+  --c-success-light: #e3f3ea;
+  --c-warning: #b07d1f;
+  --c-warning-light: #faf0d8;
+  --c-danger: #c44545;
+  --c-danger-light: #fbe8e8;
+  --c-info: #4a7bb5;
+  --c-info-light: #e6f0f8;
+
+  /* 中性面（纯白底；侧栏/面板用第二中性层，略冷、chroma≈0） */
+  --c-bg: #ffffff;
+  --c-surface: #ffffff;
+  --c-surface-2: #f7f8fa;
+  --c-surface-3: #eff1f4;
+  --c-surface-mute: #e8eaee;
+  --c-border: #e6e7eb;
+  --c-border-strong: #d3d5db;
+  --c-overlay: rgba(20, 21, 25, 0.45);
+
+  /* 文本阶梯（≥4.5:1 对 body；muted 用于占位符亦达标） */
+  --c-ink: #1a1b1e;
+  --c-ink-2: #4a4d55;
+  --c-ink-3: #6e7178;
+  --c-ink-muted: #767986;
+
+  /* 字体：系统 sans 栈（Tauri 离线，不捆绑字体文件）+ 等宽数字栈 */
+  --font-sans: "Inter", "SF Pro Text", "PingFang SC", "Microsoft YaHei",
+    "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, "SF Mono",
+    Menlo, Consolas, monospace;
+
+  /* 固定 rem 阶梯（product UI：1.125–1.2 比例，不用 fluid clamp） */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 15px;
+  --fs-lg: 17px;
+  --fs-xl: 20px;
+  --fs-2xl: 24px;
+  --fs-3xl: 30px;
+
+  /* 间距尺度 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* 圆角（单一体系：控件 8 / 卡片 12 / 胶囊 999） */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-pill: 999px;
+
+  /* 阴影（向主色微染，非纯黑） */
+  --shadow-sm: 0 1px 2px rgba(20, 21, 25, 0.04), 0 1px 1px rgba(20, 21, 25, 0.03);
+  --shadow-md: 0 4px 12px rgba(20, 21, 25, 0.06), 0 2px 4px rgba(20, 21, 25, 0.04);
+  --shadow-lg: 0 12px 32px rgba(20, 21, 25, 0.08), 0 4px 12px rgba(20, 21, 25, 0.05);
+  --shadow-focus: 0 0 0 3px color-mix(in srgb, var(--c-primary) 30%, transparent);
+
+  /* 动效（150–250ms，仅表状态；ease-out-quint） */
+  --dur-fast: 150ms;
+  --dur: 200ms;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* z-index 语义尺度 */
+  --z-sticky: 100;
+  --z-dropdown: 1000;
+  --z-backdrop: 2000;
+  --z-modal: 2100;
+  --z-toast: 3000;
+
+  color: var(--c-ink);
+  background-color: var(--c-bg);
+}
+
+html.dark {
+  --c-primary: #9a8de0;
+  --c-primary-hover: #ac9fe6;
+  --c-primary-active: #bb4fb3;
+  --c-primary-light: rgba(138, 124, 216, 0.16);
+  --c-primary-lighter: rgba(138, 124, 216, 0.08);
+  --c-primary-soft: color-mix(in srgb, var(--c-primary) 18%, var(--c-surface));
+
+  --c-success: #4caa7a;
+  --c-success-light: rgba(76, 170, 122, 0.16);
+  --c-warning: #d4a13d;
+  --c-warning-light: rgba(212, 161, 61, 0.16);
+  --c-danger: #dd6b6b;
+  --c-danger-light: rgba(221, 107, 107, 0.16);
+  --c-info: #6ea0d8;
+  --c-info-light: rgba(110, 160, 216, 0.16);
+
+  --c-bg: #161619;
+  --c-surface: #1b1c20;
+  --c-surface-2: #202127;
+  --c-surface-3: #27282f;
+  --c-surface-mute: #2d2e35;
+  --c-border: #2d2f36;
+  --c-border-strong: #3a3c44;
+  --c-overlay: rgba(0, 0, 0, 0.6);
+
+  --c-ink: #ececef;
+  --c-ink-2: #b4b7be;
+  --c-ink-3: #8e9098;
+  --c-ink-muted: #7a7c84;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --shadow-focus: 0 0 0 3px color-mix(in srgb, var(--c-primary) 35%, transparent);
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background-color: var(--c-bg);
+  color: var(--c-ink);
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 数字表格对齐（product 数据质感，无需等宽字体） */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* =====================================================================
+   Element Plus 变量覆盖（令牌驱动，统一组件词汇）
+   ===================================================================== */
+:root {
+  --el-color-primary: var(--c-primary);
+  --el-color-primary-light-3: #8c7fd6;
+  --el-color-primary-light-5: #a69ae0;
+  --el-color-primary-light-7: #c3bbec;
+  --el-color-primary-light-8: #d2ccef;
+  --el-color-primary-light-9: var(--c-primary-light);
+  --el-color-primary-dark-2: var(--c-primary-hover);
+
+  --el-color-success: var(--c-success);
+  --el-color-success-light-9: var(--c-success-light);
+  --el-color-warning: var(--c-warning);
+  --el-color-warning-light-9: var(--c-warning-light);
+  --el-color-danger: var(--c-danger);
+  --el-color-danger-light-9: var(--c-danger-light);
+  --el-color-error: var(--c-danger);
+  --el-color-error-light-9: var(--c-danger-light);
+  --el-color-info: var(--c-info);
+  --el-color-info-light-9: var(--c-info-light);
+
+  --el-text-color-primary: var(--c-ink);
+  --el-text-color-regular: var(--c-ink-2);
+  --el-text-color-secondary: var(--c-ink-3);
+  --el-text-color-placeholder: var(--c-ink-muted);
+  --el-text-color-disabled: var(--c-ink-muted);
+
+  --el-border-color: var(--c-border);
+  --el-border-color-light: var(--c-border);
+  --el-border-color-lighter: var(--c-border);
+  --el-border-color-extra-light: var(--c-border);
+  --el-border-color-dark: var(--c-border-strong);
+  --el-border-color-hover: var(--c-border-strong);
+
+  --el-bg-color: var(--c-surface);
+  --el-bg-color-page: var(--c-bg);
+  --el-bg-color-overlay: var(--c-surface);
+  --el-fill-color: var(--c-surface-3);
+  --el-fill-color-light: var(--c-surface-2);
+  --el-fill-color-lighter: var(--c-surface-2);
+  --el-fill-color-blank: var(--c-surface);
+  --el-fill-color-dark: var(--c-surface-mute);
+
+  --el-border-radius-base: var(--r-md);
+  --el-border-radius-small: var(--r-sm);
+  --el-border-radius-round: var(--r-lg);
+
+  --el-box-shadow: var(--shadow-md);
+  --el-box-shadow-light: var(--shadow-sm);
+  --el-box-shadow-dark: var(--shadow-lg);
+
+  --el-disabled-bg-color: var(--c-surface-2);
+  --el-disabled-text-color: var(--c-ink-muted);
+  --el-disabled-border-color: var(--c-border);
+
+  --el-mask-color: var(--c-overlay);
+  --el-font-size-base: var(--fs-base);
+}
+
+html.dark {
+  --el-color-primary: var(--c-primary);
+  --el-color-primary-light-3: #ac9fe6;
+  --el-color-primary-light-5: #c3bbed;
+  --el-color-primary-light-7: #d4ccef;
+  --el-color-primary-light-8: #e0d9f4;
+  --el-color-primary-light-9: var(--c-primary-light);
+  --el-color-primary-dark-2: var(--c-primary-hover);
+
+  --el-bg-color: var(--c-surface);
+  --el-bg-color-page: var(--c-bg);
+  --el-bg-color-overlay: var(--c-surface);
+  --el-fill-color: var(--c-surface-3);
+  --el-fill-color-light: var(--c-surface-2);
+  --el-fill-color-blank: var(--c-surface);
+  --el-border-color: var(--c-border);
+  --el-border-color-light: var(--c-border);
+  --el-border-color-lighter: var(--c-border);
+  --el-text-color-primary: var(--c-ink);
+  --el-text-color-regular: var(--c-ink-2);
+  --el-text-color-secondary: var(--c-ink-3);
+  --el-text-color-placeholder: var(--c-ink-muted);
+  --el-box-shadow: var(--shadow-md);
+  --el-box-shadow-light: var(--shadow-sm);
+  --el-box-shadow-dark: var(--shadow-lg);
+}
+
+/* 卡片：hairline 分割，非靠阴影堆叠（product：少用 card 靠间距） */
+.el-card {
+  --el-card-bg-color: var(--c-surface);
+  --el-card-border-color: var(--c-border);
+  border-radius: var(--r-lg);
+}
+
+/* 菜单激活态用 primary 软底（非 Ant navy） */
+.el-menu {
+  --el-menu-bg-color: transparent;
+  --el-menu-hover-bg-color: var(--c-surface-3);
+  --el-menu-active-color: var(--c-primary);
+}
+
+/* 对话框/抽屉跟随面 */
+.el-dialog,
+.el-drawer {
+  --el-dialog-bg-color: var(--c-surface);
+  --el-dialog-border-radius: var(--r-lg);
+}
+
+/* =====================================================================
+   滚动条
+   ===================================================================== */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--c-border-strong);
+  border-radius: var(--r-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--c-ink-muted);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* =====================================================================
+   通用工具类
+   ===================================================================== */
+/* tinted 标签：传入 --tag-color，自动生成软底 + 同色文字（暗色自适应） */
+.tag-tinted {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 1px var(--sp-2);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--tag-color, var(--c-ink-3)) 14%, var(--c-surface));
+  color: var(--tag-color, var(--c-ink-2));
+}
+html.dark .tag-tinted {
+  background: color-mix(in srgb, var(--tag-color, var(--c-ink-3)) 22%, var(--c-surface));
+  color: color-mix(in srgb, var(--tag-color, var(--c-ink-2)) 85%, white);
+}
+
+/* 焦点环（无障碍） */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* 图标按钮统一可触感 */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-ink-3);
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  border-radius: var(--r-md);
+}
+.icon-btn:hover {
+  color: var(--c-ink);
+  background: var(--c-surface-3);
+}
+
+/* reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

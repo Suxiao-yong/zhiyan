@@ -1,0 +1,29 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "智研默认权限集（Phase 1：sql/dialog/http/fs/process/opener；notification/stronghold 留到 Phase 4）",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "sql:default",
+    "sql:allow-execute",
+    "sql:allow-select",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://*" },
+        { "url": "http://*" }
+      ]
+    },
+    "fs:default",
+    "fs:allow-read-file",
+    "fs:allow-write-file",
+    "process:default",
+    "process:allow-restart",
+    "notification:default"
+  ]
+}
