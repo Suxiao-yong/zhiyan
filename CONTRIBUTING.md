@@ -16,7 +16,7 @@
 
 ```bash
 # 1. Fork 并克隆仓库
-git clone https://github.com/YOUR_USERNAME/zhiyan.git
+git clone https://github.com/Suxiao-yong/zhiyan.git
 cd zhiyan
 
 # 2. 安装依赖

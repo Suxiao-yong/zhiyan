@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" /></a>
-  <a href="https://github.com/nicepkg/zhiyan/actions"><img src="https://img.shields.io/github/actions/workflow/status/nicepkg/zhiyan/ci.yml?label=CI" alt="CI" /></a>
+  <a href="https://github.com/Suxiao-yong/zhiyan/actions"><img src="https://img.shields.io/github/actions/workflow/status/Suxiao-yong/zhiyan/ci.yml?label=CI" alt="CI" /></a>
   <img src="https://img.shields.io/badge/Tauri-2.0-orange" alt="Tauri 2.0" />
   <img src="https://img.shields.io/badge/Vue-3.5-green" alt="Vue 3" />
 </p>
@@ -154,7 +154,7 @@ Tauri 2.0 原生支持 macOS 和 Linux，但本项目目前仅在 Windows 上测
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/nicepkg/zhiyan.git
+git clone https://github.com/Suxiao-yong/zhiyan.git
 cd zhiyan
 
 # 2. 安装依赖
@@ -172,7 +172,7 @@ npm run tauri build
 
 ### 预编译安装包
 
-前往 [Releases](https://github.com/nicepkg/zhiyan/releases) 页面下载最新版本的安装包。
+前往 [Releases](https://github.com/Suxiao-yong/zhiyan/releases) 页面下载最新版本的安装包。
 
 ## 📖 使用指南
 

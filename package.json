@@ -2,15 +2,15 @@
   "name": "zhiyan",
   "version": "0.1.0",
   "description": "AI-driven personalized study planner desktop app (半 Agent 模式)",
-  "author": "nicepkg",
+  "author": "Suxiao-yong",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nicepkg/zhiyan.git"
+    "url": "https://github.com/Suxiao-yong/zhiyan.git"
   },
-  "homepage": "https://github.com/nicepkg/zhiyan#readme",
+  "homepage": "https://github.com/Suxiao-yong/zhiyan#readme",
   "bugs": {
-    "url": "https://github.com/nicepkg/zhiyan/issues"
+    "url": "https://github.com/Suxiao-yong/zhiyan/issues"
   },
   "keywords": [
     "tauri",
