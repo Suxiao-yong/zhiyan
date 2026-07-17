@@ -118,7 +118,7 @@ git commit -m "docs: record agent migration baseline"
 Append these dependencies under `[dependencies]`:
 
 ```toml
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "uuid", "chrono"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "uuid", "chrono"] }
 tokio = { version = "1", features = ["sync", "time"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
