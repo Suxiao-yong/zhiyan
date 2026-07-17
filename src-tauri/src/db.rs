@@ -6,6 +6,8 @@
 use tauri::{AppHandle, Manager};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+pub mod runtime;
+
 /// 初始 schema：PRAGMA + 8 张表 + 6 个 updated_at 触发器 + 13 个索引。
 ///
 /// 注意：tauri-plugin-sql 用连接池，PRAGMA foreign_keys 在事务内为 no-op，
