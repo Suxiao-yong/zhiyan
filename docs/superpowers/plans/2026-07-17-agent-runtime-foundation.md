@@ -782,12 +782,15 @@ impl AgentRepository {
         let status = status.to_string();
         let result = sqlx::query(
             "UPDATE agent_runs SET status = ?, error_code = ?, \
+             started_at = CASE WHEN ? = 'running' \
+                 THEN COALESCE(started_at, datetime('now','localtime')) ELSE started_at END, \
              completed_at = CASE WHEN ? IN ('completed','cancelled','failed') \
                  THEN datetime('now','localtime') ELSE NULL END \
              WHERE id = ?",
         )
         .bind(&status)
         .bind(error_code)
+        .bind(&status)
         .bind(&status)
         .bind(id)
         .execute(&self.pool)
@@ -810,10 +813,13 @@ impl AgentRepository {
         let next_value = next.to_string();
         let result = sqlx::query(
             "UPDATE agent_runs SET status = ?, \
+             started_at = CASE WHEN ? = 'running' \
+                 THEN COALESCE(started_at, datetime('now','localtime')) ELSE started_at END, \
              completed_at = CASE WHEN ? IN ('completed','cancelled','failed') \
                  THEN datetime('now','localtime') ELSE NULL END \
              WHERE id = ? AND status = ?",
         )
+        .bind(&next_value)
         .bind(&next_value)
         .bind(&next_value)
         .bind(id)
@@ -863,19 +869,14 @@ impl AgentRepository {
 
     pub async fn interrupt_active_runs(&self) -> Result<u64, AgentError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
-        let ids: Vec<String> = sqlx::query("SELECT id FROM agent_runs WHERE status = 'running'")
+        let ids: Vec<String> = sqlx::query_scalar(
+            "UPDATE agent_runs SET status = 'interrupted', completed_at = NULL \
+             WHERE status = 'running' RETURNING id",
+        )
             .fetch_all(&mut *tx)
             .await
-            .map_err(map_sqlx)?
-            .into_iter()
-            .map(|row| row.get::<String, _>("id"))
-            .collect();
+            .map_err(map_sqlx)?;
         for id in &ids {
-            sqlx::query("UPDATE agent_runs SET status = 'interrupted' WHERE id = ?")
-                .bind(id)
-                .execute(&mut *tx)
-                .await
-                .map_err(map_sqlx)?;
             sqlx::query(
                 "INSERT INTO agent_events (run_id, event_type, payload_json) \
                  VALUES (?, 'run.interrupted', '{\"reason\":\"application_restart\"}')",
