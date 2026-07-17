@@ -35,3 +35,6 @@ coverage/
 
 # Tauri CLI cache
 .tauri/
+
+# Local isolated feature worktrees
+.worktrees/
