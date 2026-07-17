@@ -57,6 +57,10 @@ describe('generateLocalPlan 本地算法', () => {
     expect(r.phases.map((p) => p.name)).toEqual(['基础期', '强化期', '冲刺期'])
     expect(r.planCount).toBeGreaterThan(0)
     expect(r.message).toContain('本地算法')
+    expect(db.execute).toHaveBeenCalledWith(
+      expect.stringContaining('UPDATE study_records SET plan_id = NULL'),
+      ['e1', '2026-07-01', '2026-07-01'],
+    )
   })
 
   it('考试日期已过 → 抛错', async () => {

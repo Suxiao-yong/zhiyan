@@ -5,12 +5,15 @@ import { ElMessage } from 'element-plus'
 import { Edit, List } from '@element-plus/icons-vue'
 import { usePlanStore } from '@/stores/plan'
 import { useExamStore } from '@/stores/exam'
+import { useRecordStore } from '@/stores/record'
 import { colorForSubject } from '@/services/theme'
-import type { PlanStatus } from '@/types'
+import { checkinAction } from '@/components/record/checkin-ui'
+import PlanCheckinDialog from '@/components/record/PlanCheckinDialog.vue'
 import type { PlanWithNames } from '@/services/plan-service'
 
 const planStore = usePlanStore()
 const examStore = useExamStore()
+const recordStore = useRecordStore()
 
 const groups = ref<Record<string, PlanWithNames[]>>({})
 const activeDates = ref<string[]>([])
@@ -33,21 +36,15 @@ const showAll = ref(false)
 
 const editVisible = ref(false)
 const editId = ref('')
+const checkinVisible = ref(false)
+const selectedPlan = ref<PlanWithNames | null>(null)
 const editForm = ref({
   date: '',
   planned_duration: 0,
   planned_tasks: '',
-  status: 'pending' as PlanStatus,
 })
 
 const sortedDates = computed(() => Object.keys(groups.value).sort())
-
-const statusOptions: { label: string; value: PlanStatus }[] = [
-  { label: '未开始', value: 'pending' },
-  { label: '进行中', value: 'in_progress' },
-  { label: '已完成', value: 'completed' },
-  { label: '已跳过', value: 'skipped' },
-]
 
 async function load() {
   if (!examStore.activeExamId) return
@@ -84,8 +81,19 @@ async function onDragEnd(date: string) {
   ElMessage.success('已重排')
 }
 
-async function onStatus(id: string, status: PlanStatus) {
-  await planStore.updatePlanStatus(id, status)
+async function act(plan: PlanWithNames) {
+  if (plan.status === 'skipped') {
+    await recordStore.restorePlan(plan.id)
+    await load()
+    return
+  }
+  selectedPlan.value = plan
+  checkinVisible.value = true
+}
+
+async function skip(plan: PlanWithNames) {
+  await planStore.updatePlanStatus(plan.id, 'skipped')
+  await load()
 }
 
 function openEdit(p: PlanWithNames) {
@@ -94,7 +102,6 @@ function openEdit(p: PlanWithNames) {
     date: p.date,
     planned_duration: p.planned_duration ?? 0,
     planned_tasks: p.planned_tasks ?? '',
-    status: p.status,
   }
   editVisible.value = true
 }
@@ -154,19 +161,44 @@ async function saveEdit() {
               </span>
               <span class="task">{{ element.planned_tasks }}</span>
               <span class="dur tnum">{{ element.planned_duration ?? 0 }}分</span>
-              <el-select
-                :model-value="element.status"
+              <el-tag
                 size="small"
-                class="status-select"
-                @change="(v: any) => onStatus(element.id, v as PlanStatus)"
+                effect="light"
+                :type="
+                  element.status === 'completed'
+                    ? 'success'
+                    : element.status === 'skipped'
+                      ? 'danger'
+                      : 'info'
+                "
               >
-                <el-option
-                  v-for="o in statusOptions"
-                  :key="o.value"
-                  :label="o.label"
-                  :value="o.value"
-                />
-              </el-select>
+                {{
+                  element.status === 'pending'
+                    ? '未开始'
+                    : element.status === 'in_progress'
+                      ? '进行中'
+                      : element.status === 'completed'
+                        ? '已完成'
+                        : '已跳过'
+                }}
+              </el-tag>
+              <el-button
+                size="small"
+                :type="checkinAction(element.status).type"
+                plain
+                @click="act(element)"
+              >
+                {{ checkinAction(element.status).label }}
+              </el-button>
+              <el-button
+                v-if="element.status !== 'completed' && element.status !== 'skipped'"
+                size="small"
+                link
+                type="danger"
+                @click="skip(element)"
+              >
+                跳过
+              </el-button>
               <el-button link :icon="Edit" @click="openEdit(element)">编辑</el-button>
             </div>
           </template>
@@ -195,22 +227,13 @@ async function saveEdit() {
         <el-form-item label="任务内容">
           <el-input v-model="editForm.planned_tasks" type="textarea" :rows="2" />
         </el-form-item>
-        <el-form-item label="状态">
-          <el-select v-model="editForm.status" class="full-width">
-            <el-option
-              v-for="o in statusOptions"
-              :key="o.value"
-              :label="o.label"
-              :value="o.value"
-            />
-          </el-select>
-        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="editVisible = false">取消</el-button>
         <el-button type="primary" @click="saveEdit">保存</el-button>
       </template>
     </el-dialog>
+    <PlanCheckinDialog v-model="checkinVisible" :plan="selectedPlan" @saved="load" />
   </el-card>
 </template>
 
@@ -276,9 +299,6 @@ async function saveEdit() {
   font-size: var(--fs-xs);
   color: var(--c-ink-3);
   white-space: nowrap;
-}
-.status-select {
-  width: 100px;
 }
 .full-width {
   width: 100%;

@@ -6,9 +6,11 @@ import { Edit, Delete, Search } from '@element-plus/icons-vue'
 import { useRecordStore } from '@/stores/record'
 import { useExamStore } from '@/stores/exam'
 import QuickRecordDialog from './QuickRecordDialog.vue'
+import { recordSourceLabel } from './checkin-ui'
 import type { RecordWithNames } from '@/services/record-service'
 
 const props = defineProps<{ preselectDate?: string }>()
+const emit = defineEmits<{ changed: [] }>()
 const route = useRoute()
 const store = useRecordStore()
 const examStore = useExamStore()
@@ -88,19 +90,28 @@ function startEdit(row: RecordWithNames) {
   editVisible.value = true
 }
 
-async function del(id: string) {
+async function del(row: RecordWithNames) {
   try {
-    await ElMessageBox.confirm('确认删除该学习记录？关联的错题将保留为独立条目。', '删除确认', {
+    const message = row.plan_id
+      ? '确认删除该计划打卡？计划实际时长和任务状态将重新计算，关联错题将保留为独立条目。'
+      : '确认删除该学习记录？关联的错题将保留为独立条目。'
+    await ElMessageBox.confirm(message, '删除确认', {
       type: 'warning',
       confirmButtonText: '删除',
       cancelButtonText: '取消',
     })
-    await store.deleteRecord(id)
+    await store.deleteRecord(row.id)
     ElMessage.success('已删除')
     await load()
+    emit('changed')
   } catch (e) {
     if (e !== 'cancel' && e !== 'close') ElMessage.error((e as Error).message ?? '删除失败')
   }
+}
+
+async function onEditSaved() {
+  await load()
+  emit('changed')
 }
 
 function rate(row: RecordWithNames) {
@@ -141,6 +152,22 @@ defineExpose({ refresh: load })
       <el-table-column label="科目" min-width="100">
         <template #default="{ row }">{{ row.subject_name ?? '—' }}</template>
       </el-table-column>
+      <el-table-column label="来源" width="100">
+        <template #default="{ row }">
+          <el-tooltip
+            v-if="row.plan_id"
+            :content="row.plan_tasks || '关联计划任务'"
+            placement="top"
+          >
+            <el-tag size="small" type="success" effect="light">
+              {{ recordSourceLabel(row.plan_id) }}
+            </el-tag>
+          </el-tooltip>
+          <el-tag v-else size="small" type="info" effect="plain">
+            {{ recordSourceLabel(row.plan_id) }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="时长" width="80" class-name="tnum">
         <template #default="{ row }">{{ row.duration_min }}分</template>
       </el-table-column>
@@ -161,13 +188,13 @@ defineExpose({ refresh: load })
       <el-table-column label="操作" width="120">
         <template #default="{ row }">
           <el-button size="small" link :icon="Edit" @click="startEdit(row)">编辑</el-button>
-          <el-button size="small" link type="danger" :icon="Delete" @click="del(row.id)">
+          <el-button size="small" link type="danger" :icon="Delete" @click="del(row)">
             删除
           </el-button>
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty description="还没有学习记录，点击右上角「快速记录」开始" :image-size="60" />
+        <el-empty description="还没有学习记录，请先完成一项计划打卡" :image-size="60" />
       </template>
     </el-table>
 
@@ -182,7 +209,11 @@ defineExpose({ refresh: load })
       />
     </div>
 
-    <QuickRecordDialog v-model="editVisible" :edit-record="editRecord ?? undefined" @saved="load" />
+    <QuickRecordDialog
+      v-model="editVisible"
+      :edit-record="editRecord ?? undefined"
+      @saved="onEditSaved"
+    />
   </el-card>
 </template>
 

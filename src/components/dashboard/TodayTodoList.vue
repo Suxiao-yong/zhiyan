@@ -4,12 +4,20 @@ import { usePlanStore } from '@/stores/plan'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { Calendar } from '@element-plus/icons-vue'
 import { colorForSubject } from '@/services/theme'
+import { checkinAction } from '@/components/record/checkin-ui'
+import type { PlanWithNames } from '@/services/plan-service'
 
 const planStore = usePlanStore()
 const { todayTasks } = storeToRefs(planStore)
 
-async function toggle(id: string, checked: boolean) {
-  await planStore.updatePlanStatus(id, checked ? 'completed' : 'pending')
+const emit = defineEmits<{
+  checkin: [plan: PlanWithNames]
+  restore: [plan: PlanWithNames]
+}>()
+
+function act(plan: PlanWithNames) {
+  if (plan.status === 'skipped') emit('restore', plan)
+  else emit('checkin', plan)
 }
 </script>
 
@@ -36,10 +44,7 @@ async function toggle(id: string, checked: boolean) {
         class="todo-item"
         :class="{ done: t.status === 'completed' }"
       >
-        <el-checkbox
-          :model-value="t.status === 'completed'"
-          @change="(v: any) => toggle(t.id, v as boolean)"
-        />
+        <span class="status-dot" :class="`status-dot--${t.status}`" />
         <span
           class="tag-tinted subj-tag"
           :style="{ '--tag-color': colorForSubject(t.subject_name) }"
@@ -48,6 +53,9 @@ async function toggle(id: string, checked: boolean) {
         </span>
         <span class="task">{{ t.planned_tasks }}</span>
         <span class="dur tnum">{{ t.planned_duration }}分</span>
+        <el-button size="small" :type="checkinAction(t.status).type" plain @click="act(t)">
+          {{ checkinAction(t.status).label }}
+        </el-button>
       </div>
     </div>
   </el-card>
@@ -111,5 +119,21 @@ async function toggle(id: string, checked: boolean) {
   font-size: var(--fs-xs);
   color: var(--c-ink-3);
   white-space: nowrap;
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--c-ink-muted);
+  flex-shrink: 0;
+}
+.status-dot--in_progress {
+  background: var(--c-primary);
+}
+.status-dot--completed {
+  background: var(--c-success);
+}
+.status-dot--skipped {
+  background: var(--c-danger);
 }
 </style>

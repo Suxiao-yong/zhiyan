@@ -47,6 +47,7 @@ export interface KnowledgePoint {
 /** 学习记录 */
 export interface StudyRecord {
   id: string
+  plan_id: string | null
   date: string
   subject_id: string
   knowledge_point_id: string | null

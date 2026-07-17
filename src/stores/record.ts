@@ -8,6 +8,7 @@ import type {
   RecordFilter,
   RecordInput,
   RecordWithNames,
+  PlanCheckinInput,
   WrongFilter,
   WrongQuestionInput,
   WrongWithNames,
@@ -64,6 +65,20 @@ export const useRecordStore = defineStore('record', () => {
     }
     return r
   }
+  async function createPlanCheckin(
+    planId: string,
+    input: PlanCheckinInput,
+    finish: boolean,
+    wrongs: WrongQuestionInput[] = [],
+  ) {
+    return recordService.createPlanCheckin(planId, input, finish, wrongs)
+  }
+  function getPlanCheckins(planId: string) {
+    return recordService.getPlanCheckins(planId)
+  }
+  async function restorePlan(planId: string) {
+    await recordService.restorePlan(planId)
+  }
   async function updateRecord(id: string, input: Partial<RecordInput>) {
     await recordService.updateRecord(id, input)
   }
@@ -93,6 +108,9 @@ export const useRecordStore = defineStore('record', () => {
     loadDashboardStats,
     setTrendFilter,
     createRecord,
+    createPlanCheckin,
+    getPlanCheckins,
+    restorePlan,
     updateRecord,
     deleteRecord,
     setWrongMastered,

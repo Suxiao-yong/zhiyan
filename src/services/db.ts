@@ -64,6 +64,7 @@ const COLUMNS: Record<string, readonly string[]> = {
   ],
   study_records: [
     'id',
+    'plan_id',
     'date',
     'subject_id',
     'knowledge_point_id',

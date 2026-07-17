@@ -81,6 +81,15 @@ export async function applyGeneratedPlan(
 ): Promise<number> {
   const today = businessToday()
   // 删除未来计划(date>today) + 今日无 actual 的计划
+  // 应用层先解除打卡关联，作为 foreign_keys 未启用时的兜底；学习记录本身必须保留。
+  await execute(
+    `UPDATE study_records SET plan_id = NULL
+     WHERE plan_id IN (
+       SELECT id FROM study_plans
+       WHERE exam_id = ? AND (date > ? OR (date = ? AND (actual_duration IS NULL OR actual_duration = 0)))
+     )`,
+    [examId, today, today],
+  )
   await execute(
     `DELETE FROM study_plans WHERE exam_id = ? AND (date > ? OR (date = ? AND (actual_duration IS NULL OR actual_duration = 0)))`,
     [examId, today, today],

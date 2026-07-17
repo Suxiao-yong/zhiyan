@@ -47,8 +47,8 @@ const TABLES = [
   'exams',
   'subjects',
   'knowledge_points',
-  'study_records',
   'study_plans',
+  'study_records',
   'wrong_questions',
   'ai_analyses',
 ] as const

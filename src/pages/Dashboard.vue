@@ -10,6 +10,8 @@ import WeeklyTrendChart from '@/components/charts/WeeklyTrendChart.vue'
 import SubjectRatioChart from '@/components/charts/SubjectRatioChart.vue'
 import TodayTodoList from '@/components/dashboard/TodayTodoList.vue'
 import AiDailySummary from '@/components/dashboard/AiDailySummary.vue'
+import PlanCheckinDialog from '@/components/record/PlanCheckinDialog.vue'
+import type { PlanWithNames } from '@/services/plan-service'
 
 const router = useRouter()
 const store = useRecordStore()
@@ -17,6 +19,8 @@ const planStore = usePlanStore()
 const examStore = useExamStore()
 const loading = ref(true)
 const trendFilter = ref<string | null>(null)
+const checkinVisible = ref(false)
+const selectedPlan = ref<PlanWithNames | null>(null)
 
 onMounted(async () => {
   try {
@@ -53,6 +57,18 @@ function onSubjectFilter(sid: string) {
     store.setTrendFilter(sid)
   }
 }
+function openCheckin(plan: PlanWithNames) {
+  selectedPlan.value = plan
+  checkinVisible.value = true
+}
+async function restoreTask(plan: PlanWithNames) {
+  await store.restorePlan(plan.id)
+  if (examStore.activeExamId) await planStore.loadTodayTasks(examStore.activeExamId)
+}
+async function onCheckinSaved() {
+  await store.loadDashboardStats()
+  if (examStore.activeExamId) await planStore.loadTodayTasks(examStore.activeExamId)
+}
 </script>
 
 <template>
@@ -88,12 +104,14 @@ function onSubjectFilter(sid: string) {
 
     <el-row :gutter="16" class="row">
       <el-col :xs="24" :md="12">
-        <TodayTodoList />
+        <TodayTodoList @checkin="openCheckin" @restore="restoreTask" />
       </el-col>
       <el-col :xs="24" :md="12">
         <AiDailySummary />
       </el-col>
     </el-row>
+
+    <PlanCheckinDialog v-model="checkinVisible" :plan="selectedPlan" @saved="onCheckinSaved" />
   </div>
 </template>
 

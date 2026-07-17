@@ -26,6 +26,16 @@ pub fn migrations() -> Vec<Migration> {
             sql: "ALTER TABLE study_plans ADD COLUMN sort_order INTEGER DEFAULT 0;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 3,
+            description: "link study records to plan tasks for repeated check-ins",
+            sql: r#"
+                ALTER TABLE study_records
+                    ADD COLUMN plan_id TEXT REFERENCES study_plans(id) ON DELETE SET NULL;
+                CREATE INDEX IF NOT EXISTS idx_records_plan ON study_records(plan_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

@@ -3,7 +3,7 @@
 // 严格在此专属函数处理，不污染 db.ts 通用 insert。本地时间，与 DB datetime('now','localtime') 一致。
 
 import { count, execute, getAll, getById, insert, query, remove, setSetting, update } from './db'
-import type { StudyRecord, Subject, WrongQuestion } from '@/types'
+import type { StudyPlan, StudyRecord, Subject, WrongQuestion } from '@/types'
 
 // ---------------- 工具 ----------------
 
@@ -53,6 +53,7 @@ export interface RecordInput {
 export type RecordWithNames = StudyRecord & {
   subject_name: string | null
   knowledge_point_name: string | null
+  plan_tasks: string | null
 }
 
 export interface RecordFilter {
@@ -67,6 +68,7 @@ export interface RecordFilter {
 export async function createRecord(input: RecordInput): Promise<StudyRecord> {
   const date = normalizeDate(input.date)
   const data = {
+    plan_id: null,
     date,
     subject_id: input.subject_id,
     knowledge_point_id: input.knowledge_point_id ?? null,
@@ -98,13 +100,164 @@ export async function createRecord(input: RecordInput): Promise<StudyRecord> {
   }
 }
 
+export type PlanCheckinInput = Omit<RecordInput, 'date' | 'subject_id' | 'knowledge_point_id'>
+
+export class PlanCheckinSavedWithWarning extends Error {
+  readonly name = 'PlanCheckinSavedWithWarning'
+
+  constructor(
+    message: string,
+    readonly record: StudyRecord,
+  ) {
+    super(message)
+  }
+}
+
+interface PlanProgressAggregate {
+  total: number
+  count: number
+  latest_content: string | null
+}
+
+/**
+ * 重新汇总计划关联的真实学习记录。
+ * study_records 是事实数据；study_plans.actual_* 是用于列表与对比图的派生字段。
+ */
+export async function recalculatePlanProgress(
+  planId: string,
+  requestedStatus?: 'in_progress' | 'completed',
+  excludeRecordId?: string,
+): Promise<void> {
+  const plan = await getById<StudyPlan>('study_plans', planId)
+  if (!plan) return
+  const exclusion = excludeRecordId ? ' AND id <> ?' : ''
+  const params = excludeRecordId
+    ? [planId, excludeRecordId, planId, excludeRecordId]
+    : [planId, planId]
+  const rows = await query<PlanProgressAggregate>(
+    `SELECT COALESCE(SUM(duration_min), 0) AS total,
+            COUNT(*) AS count,
+            (SELECT content FROM study_records
+             WHERE plan_id = ?${exclusion} AND content IS NOT NULL AND content <> ''
+             ORDER BY created_at DESC LIMIT 1) AS latest_content
+     FROM study_records WHERE plan_id = ?${exclusion}`,
+    params,
+  )
+  const aggregate = rows[0] ?? { total: 0, count: 0, latest_content: null }
+  let status = plan.status
+  if (plan.status !== 'skipped') {
+    if (aggregate.count === 0) status = 'pending'
+    else if (requestedStatus === 'completed' || plan.status === 'completed') status = 'completed'
+    else status = requestedStatus ?? 'in_progress'
+  }
+  await update('study_plans', planId, {
+    actual_duration: Number(aggregate.total) || 0,
+    actual_tasks: aggregate.latest_content ?? plan.planned_tasks,
+    status,
+  })
+}
+
+/** 根据计划创建一条真实学习记录；计划字段由系统复制，调用方不能改绑。 */
+export async function createPlanCheckin(
+  planId: string,
+  input: PlanCheckinInput,
+  finish: boolean,
+  wrongs: WrongQuestionInput[] = [],
+): Promise<StudyRecord> {
+  const plan = await getById<StudyPlan>('study_plans', planId)
+  if (!plan) throw new Error('计划已被删除或重新生成')
+  if (plan.status === 'skipped') throw new Error('该任务已跳过，请先恢复任务')
+  if (plan.date > businessToday()) throw new Error('未来计划不能提前打卡')
+  if (input.duration_min <= 0) throw new Error('学习时长须大于 0')
+  const questions = input.questions_count ?? 0
+  const correct = input.correct_count ?? 0
+  if (correct > questions) throw new Error('正确数不能大于做题数')
+
+  const id = await insert('study_records', {
+    plan_id: plan.id,
+    date: plan.date,
+    subject_id: plan.subject_id,
+    knowledge_point_id: plan.knowledge_point_id,
+    duration_min: input.duration_min,
+    content: input.content ?? plan.planned_tasks,
+    questions_count: questions,
+    correct_count: correct,
+    mastery_rating: input.mastery_rating ?? null,
+    difficulty_notes: input.difficulty_notes ?? null,
+    mood: input.mood ?? null,
+    session_time: input.session_time ?? null,
+  })
+  const created = await getById<StudyRecord>('study_records', id)
+  if (!created) throw new Error('打卡记录保存后读取失败')
+
+  const warnings: string[] = []
+  // 记录是事实数据，先同步计划进度；单条错题失败不能让计划停留在旧状态。
+  try {
+    await recalculatePlanProgress(plan.id, finish ? 'completed' : 'in_progress')
+  } catch {
+    warnings.push('计划进度暂未同步，重新加载任务后会自动校正')
+  }
+  for (const wrong of wrongs) {
+    try {
+      await createWrongQuestion({
+        ...wrong,
+        record_id: created.id,
+        subject_id: plan.subject_id,
+        knowledge_point_id: plan.knowledge_point_id,
+      })
+    } catch {
+      warnings.push('部分错题未能保存')
+    }
+  }
+  if (warnings.length) {
+    throw new PlanCheckinSavedWithWarning(`学习记录已保存，但${warnings.join('；')}`, created)
+  }
+  return created
+}
+
+export async function getPlanCheckins(planId: string): Promise<RecordWithNames[]> {
+  return query<RecordWithNames>(
+    `SELECT r.*, s.name AS subject_name, k.name AS knowledge_point_name,
+            p.planned_tasks AS plan_tasks
+     FROM study_records r
+     LEFT JOIN subjects s ON s.id = r.subject_id
+     LEFT JOIN knowledge_points k ON k.id = r.knowledge_point_id
+     LEFT JOIN study_plans p ON p.id = r.plan_id
+     WHERE r.plan_id = ?
+     ORDER BY r.created_at`,
+    [planId],
+  )
+}
+
+export async function restorePlan(planId: string): Promise<void> {
+  const plan = await getById<StudyPlan>('study_plans', planId)
+  if (!plan) throw new Error('计划已被删除或重新生成')
+  const rows = await query<{ count: number }>(
+    'SELECT COUNT(*) AS count FROM study_records WHERE plan_id = ?',
+    [planId],
+  )
+  await update('study_plans', planId, {
+    status: (rows[0]?.count ?? 0) > 0 ? 'in_progress' : 'pending',
+  })
+}
+
 export async function updateRecord(id: string, input: Partial<RecordInput>): Promise<void> {
+  const existing = await getById<StudyRecord>('study_records', id)
   const data: Record<string, unknown> = { ...input }
   if (input.date !== undefined) data.date = normalizeDate(input.date)
+  if (existing?.plan_id) {
+    delete data.date
+    delete data.subject_id
+    delete data.knowledge_point_id
+  }
   await update('study_records', id, data)
+  if (existing?.plan_id) await recalculatePlanProgress(existing.plan_id)
 }
 
 export async function deleteRecord(id: string): Promise<void> {
+  const existing = await getById<StudyRecord>('study_records', id)
+  // 先按“删除后”的集合更新派生计划。更新失败则不删除事实记录；删除失败则加载时可按仍存在的记录修复。
+  if (existing?.plan_id) await recalculatePlanProgress(existing.plan_id, undefined, id)
   // 关联错题 record_id 置空（FK off 时 DB 的 SET NULL 不可靠，应用层兜底；错题保留为独立条目）
   await execute('UPDATE wrong_questions SET record_id = NULL WHERE record_id = ?', [id])
   await remove('study_records', id)
@@ -141,10 +294,12 @@ export async function getRecords(
     : await count('study_records')
   const offset = (filter.page - 1) * filter.pageSize
   const rows = await query<RecordWithNames>(
-    `SELECT r.*, s.name AS subject_name, k.name AS knowledge_point_name
+    `SELECT r.*, s.name AS subject_name, k.name AS knowledge_point_name,
+            p.planned_tasks AS plan_tasks
      FROM study_records r
      LEFT JOIN subjects s ON s.id = r.subject_id
      LEFT JOIN knowledge_points k ON k.id = r.knowledge_point_id
+     LEFT JOIN study_plans p ON p.id = r.plan_id
      ${cond ? 'WHERE ' + cond : ''}
      ORDER BY r.date DESC, r.created_at DESC
      LIMIT ? OFFSET ?`,
@@ -155,10 +310,12 @@ export async function getRecords(
 
 export async function getRecordsByDate(date: string): Promise<RecordWithNames[]> {
   return query<RecordWithNames>(
-    `SELECT r.*, s.name AS subject_name, k.name AS knowledge_point_name
+    `SELECT r.*, s.name AS subject_name, k.name AS knowledge_point_name,
+            p.planned_tasks AS plan_tasks
      FROM study_records r
      LEFT JOIN subjects s ON s.id = r.subject_id
      LEFT JOIN knowledge_points k ON k.id = r.knowledge_point_id
+     LEFT JOIN study_plans p ON p.id = r.plan_id
      WHERE r.date = ?
      ORDER BY r.session_time, r.created_at`,
     [date],

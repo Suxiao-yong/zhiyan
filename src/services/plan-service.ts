@@ -8,6 +8,12 @@ import type { PlanStatus, StudyPlan } from '@/types'
 export type PlanWithNames = StudyPlan & {
   subject_name: string | null
   knowledge_point_name: string | null
+  record_count: number
+}
+
+type PlanQueryRow = PlanWithNames & {
+  recorded_duration: number
+  latest_record_content: string | null
 }
 
 export async function getPlansByDateRange(
@@ -15,8 +21,13 @@ export async function getPlansByDateRange(
   from: string,
   to: string,
 ): Promise<PlanWithNames[]> {
-  return query<PlanWithNames>(
-    `SELECT p.*, s.name AS subject_name, k.name AS knowledge_point_name
+  const rows = await query<PlanQueryRow>(
+    `SELECT p.*, s.name AS subject_name, k.name AS knowledge_point_name,
+            (SELECT COUNT(*) FROM study_records r WHERE r.plan_id = p.id) AS record_count,
+            (SELECT COALESCE(SUM(r.duration_min), 0) FROM study_records r WHERE r.plan_id = p.id) AS recorded_duration,
+            (SELECT r.content FROM study_records r
+             WHERE r.plan_id = p.id AND r.content IS NOT NULL AND r.content <> ''
+             ORDER BY r.created_at DESC LIMIT 1) AS latest_record_content
      FROM study_plans p
      LEFT JOIN subjects s ON s.id = p.subject_id
      LEFT JOIN knowledge_points k ON k.id = p.knowledge_point_id
@@ -24,34 +35,44 @@ export async function getPlansByDateRange(
      ORDER BY p.date, p.sort_order, p.created_at`,
     [examId, from, to],
   )
+  const plans: PlanWithNames[] = []
+  for (const row of rows) {
+    const { recorded_duration, latest_record_content, ...plan } = row
+    if (plan.record_count > 0) {
+      const actualDuration = Number(recorded_duration) || 0
+      const actualTasks = latest_record_content ?? plan.planned_tasks
+      const status = plan.status === 'pending' ? 'in_progress' : plan.status
+      if (
+        plan.actual_duration !== actualDuration ||
+        plan.actual_tasks !== actualTasks ||
+        plan.status !== status
+      ) {
+        await update('study_plans', plan.id, {
+          actual_duration: actualDuration,
+          actual_tasks: actualTasks,
+          status,
+        })
+      }
+      plan.actual_duration = actualDuration
+      plan.actual_tasks = actualTasks
+      plan.status = status
+    }
+    plans.push(plan)
+  }
+  return plans
+}
+
+export async function getPlansByDate(examId: string, date: string): Promise<PlanWithNames[]> {
+  return getPlansByDateRange(examId, date, date)
 }
 
 export async function getTodayPlans(examId: string): Promise<PlanWithNames[]> {
   const today = businessToday()
-  return query<PlanWithNames>(
-    `SELECT p.*, s.name AS subject_name, k.name AS knowledge_point_name
-     FROM study_plans p
-     LEFT JOIN subjects s ON s.id = p.subject_id
-     LEFT JOIN knowledge_points k ON k.id = p.knowledge_point_id
-     WHERE p.exam_id = ? AND p.date = ?
-     ORDER BY p.sort_order, p.created_at`,
-    [examId, today],
-  )
+  return getPlansByDateRange(examId, today, today)
 }
 
 export async function updatePlanStatus(id: string, status: PlanStatus): Promise<void> {
-  // 标记完成时，若未填实际时长则用计划时长填充
-  if (status === 'completed') {
-    const rows = await query<{ planned_duration: number | null; actual_duration: number | null }>(
-      'SELECT planned_duration, actual_duration FROM study_plans WHERE id = ?',
-      [id],
-    )
-    const r = rows[0]
-    if (r && (r.actual_duration === null || r.actual_duration === 0) && r.planned_duration) {
-      await update('study_plans', id, { status, actual_duration: r.planned_duration })
-      return
-    }
-  }
+  if (status === 'completed') throw new Error('请通过计划打卡完成任务')
   await update('study_plans', id, { status })
 }
 
@@ -65,6 +86,7 @@ export interface PlanUpdateInput {
 
 /** 手动调整任务（标记 user_modified=1） */
 export async function updatePlan(id: string, input: PlanUpdateInput): Promise<void> {
+  if (input.status === 'completed') throw new Error('请通过计划打卡完成任务')
   await update('study_plans', id, { ...input, user_modified: 1 })
 }
 

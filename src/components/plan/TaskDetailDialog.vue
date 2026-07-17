@@ -1,13 +1,19 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { usePlanStore } from '@/stores/plan'
+import { useRecordStore } from '@/stores/record'
 import { colorForSubject } from '@/services/theme'
-import type { PlanStatus } from '@/types'
+import { checkinAction } from '@/components/record/checkin-ui'
+import PlanCheckinDialog from '@/components/record/PlanCheckinDialog.vue'
+import type { PlanWithNames } from '@/services/plan-service'
 
 const props = defineProps<{ modelValue: boolean; date: string | null }>()
 const emit = defineEmits<{ 'update:modelValue': [v: boolean]; changed: [] }>()
 
 const planStore = usePlanStore()
+const recordStore = useRecordStore()
+const checkinVisible = ref(false)
+const selectedPlan = ref<PlanWithNames | null>(null)
 
 const visible = computed({
   get: () => props.modelValue,
@@ -18,15 +24,18 @@ const tasks = computed(() =>
   props.date ? planStore.plans.filter((p) => p.date === props.date) : [],
 )
 
-const statusOptions: { label: string; value: PlanStatus; type: string }[] = [
-  { label: '未开始', value: 'pending', type: 'info' },
-  { label: '进行中', value: 'in_progress', type: '' },
-  { label: '已完成', value: 'completed', type: 'success' },
-  { label: '已跳过', value: 'skipped', type: 'danger' },
-]
+async function act(plan: PlanWithNames) {
+  if (plan.status === 'skipped') {
+    await recordStore.restorePlan(plan.id)
+    emit('changed')
+    return
+  }
+  selectedPlan.value = plan
+  checkinVisible.value = true
+}
 
-async function onStatus(id: string, status: PlanStatus) {
-  await planStore.updatePlanStatus(id, status)
+async function skip(plan: PlanWithNames) {
+  await planStore.updatePlanStatus(plan.id, 'skipped')
   emit('changed')
 }
 </script>
@@ -43,7 +52,7 @@ async function onStatus(id: string, status: PlanStatus) {
           >
             {{ t.subject_name ?? '-' }}
           </span>
-          <span class="kp" v-if="t.knowledge_point_name">· {{ t.knowledge_point_name }}</span>
+          <span v-if="t.knowledge_point_name" class="kp">· {{ t.knowledge_point_name }}</span>
           <div class="task-text">{{ t.planned_tasks }}</div>
           <div class="meta tnum">
             计划 {{ t.planned_duration ?? 0 }} 分
@@ -53,16 +62,23 @@ async function onStatus(id: string, status: PlanStatus) {
             </el-tag>
           </div>
         </div>
-        <el-select
-          :model-value="t.status"
-          size="small"
-          class="status-select"
-          @change="(v: any) => onStatus(t.id, v as PlanStatus)"
-        >
-          <el-option v-for="o in statusOptions" :key="o.value" :label="o.label" :value="o.value" />
-        </el-select>
+        <div class="task-actions">
+          <el-button size="small" :type="checkinAction(t.status).type" @click="act(t)">
+            {{ checkinAction(t.status).label }}
+          </el-button>
+          <el-button
+            v-if="t.status !== 'completed' && t.status !== 'skipped'"
+            size="small"
+            link
+            type="danger"
+            @click="skip(t)"
+          >
+            跳过
+          </el-button>
+        </div>
       </div>
     </div>
+    <PlanCheckinDialog v-model="checkinVisible" :plan="selectedPlan" @saved="emit('changed')" />
   </el-dialog>
 </template>
 
@@ -102,8 +118,9 @@ async function onStatus(id: string, status: PlanStatus) {
   font-size: var(--fs-xs);
   color: var(--c-ink-3);
 }
-.status-select {
-  width: 110px;
+.task-actions {
+  display: flex;
+  align-items: center;
   flex-shrink: 0;
 }
 </style>

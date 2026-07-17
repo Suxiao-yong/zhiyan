@@ -18,6 +18,7 @@ const examStore = useExamStore()
 const recordStore = useRecordStore()
 
 const editMode = computed(() => !!props.editRecord)
+const linkedPlan = computed(() => !!props.editRecord?.plan_id)
 
 const visible = computed({
   get: () => props.modelValue,
@@ -117,6 +118,7 @@ watch(visible, async (v) => {
       date: r.date,
     })
     await onSubjectChange(r.subject_id)
+    form.value.knowledge_point_id = r.knowledge_point_id
   } else {
     form.value.date = props.presetDate ?? ''
   }
@@ -188,7 +190,7 @@ async function handleSubmit() {
 <template>
   <el-dialog
     v-model="visible"
-    :title="editMode ? '编辑记录' : '快速记录'"
+    :title="editMode ? '编辑记录' : '自由记录'"
     width="560px"
     :close-on-click-modal="false"
   >
@@ -200,14 +202,18 @@ async function handleSubmit() {
           placeholder="留空 = 今天（实时记录，按 04:00 归一化）"
           value-format="YYYY-MM-DD"
           class="full"
+          :disabled="linkedPlan"
         />
-        <span class="hint">选了日期 = 补记（不归一化）</span>
+        <span class="hint">
+          {{ linkedPlan ? '计划打卡的日期由任务决定' : '选了日期 = 补记（不归一化）' }}
+        </span>
       </el-form-item>
       <el-form-item label="科目" required>
         <el-select
           v-model="form.subject_id"
           placeholder="选择科目"
           class="full"
+          :disabled="linkedPlan"
           @change="onSubjectChange"
         >
           <el-option v-for="s in examStore.subjects" :key="s.id" :label="s.name" :value="s.id" />
@@ -222,6 +228,7 @@ async function handleSubmit() {
           clearable
           placeholder="可选（快速记录可空）"
           class="full"
+          :disabled="linkedPlan"
         >
           <el-option v-for="k in kpOptions" :key="k.id" :label="k.name" :value="k.id" />
         </el-select>
