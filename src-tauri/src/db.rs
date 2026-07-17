@@ -36,6 +36,12 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 4,
+            description: "add persistent agent runtime foundation",
+            sql: AGENT_SCHEMA_SQL,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -217,6 +223,88 @@ CREATE INDEX IF NOT EXISTS idx_subjects_exam ON subjects(exam_id);
 CREATE INDEX IF NOT EXISTS idx_analyses_type_date ON ai_analyses(analysis_type, created_at);
 "#;
 
+/// Persistent runtime state for agent sessions, runs, steps, events, and approvals.
+pub const AGENT_SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    id TEXT PRIMARY KEY,
+    exam_id TEXT REFERENCES exams(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','running','waiting_approval','completed','cancelled','failed','interrupted')),
+    trigger_source TEXT NOT NULL DEFAULT 'user' CHECK(trigger_source IN ('user','startup','schedule','recovery')),
+    current_step INTEGER NOT NULL DEFAULT 0,
+    error_code TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    started_at TEXT,
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS agent_steps (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    step_index INTEGER NOT NULL,
+    tool_name TEXT NOT NULL,
+    tool_version TEXT NOT NULL,
+    risk INTEGER NOT NULL DEFAULT 0 CHECK(risk BETWEEN 0 AND 4),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','waiting_approval','completed','failed','cancelled','interrupted')),
+    input_json TEXT,
+    output_json TEXT,
+    error TEXT,
+    idempotency_key TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    UNIQUE(idempotency_key),
+    UNIQUE(run_id, id),
+    UNIQUE(run_id, step_index)
+);
+
+CREATE TABLE IF NOT EXISTS agent_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    step_id TEXT REFERENCES agent_steps(id) ON DELETE SET NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS agent_approvals (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    step_id TEXT NOT NULL,
+    risk INTEGER NOT NULL CHECK(risk BETWEEN 2 AND 4),
+    preview_json TEXT,
+    precondition_json TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected','expired')),
+    expires_at TEXT NOT NULL,
+    decided_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY (run_id, step_id) REFERENCES agent_steps(run_id, id) ON DELETE CASCADE,
+    UNIQUE(step_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_session_status ON agent_runs(session_id, status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+CREATE INDEX IF NOT EXISTS idx_agent_steps_run_index ON agent_steps(run_id, step_index);
+CREATE INDEX IF NOT EXISTS idx_agent_events_run_id ON agent_events(run_id, id);
+CREATE INDEX IF NOT EXISTS idx_agent_approvals_status_expires ON agent_approvals(status, expires_at);
+
+CREATE TRIGGER IF NOT EXISTS trg_agent_sessions_updated AFTER UPDATE ON agent_sessions
+    FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
+    BEGIN UPDATE agent_sessions SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
+CREATE TRIGGER IF NOT EXISTS trg_agent_runs_updated AFTER UPDATE ON agent_runs
+    FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
+    BEGIN UPDATE agent_runs SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
+"#;
+
 /// 确保应用数据目录存在（SQLite 数据库文件将落在此目录）。
 pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let app_data = app.path().app_data_dir()?;
@@ -224,4 +312,202 @@ pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         std::fs::create_dir_all(&app_data)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use sqlx::{
+        sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+        Row,
+    };
+
+    use super::{migrations, AGENT_SCHEMA_SQL, SCHEMA_SQL};
+
+    #[test]
+    fn agent_schema_contains_required_tables_and_constraints() {
+        for required_fragment in [
+            "agent_sessions",
+            "agent_runs",
+            "agent_steps",
+            "agent_events",
+            "agent_approvals",
+            "UNIQUE(idempotency_key)",
+            "waiting_approval",
+        ] {
+            assert!(
+                AGENT_SCHEMA_SQL.contains(required_fragment),
+                "agent schema is missing {required_fragment}"
+            );
+        }
+    }
+
+    #[test]
+    fn migration_versions_are_strictly_increasing() {
+        let versions: Vec<_> = migrations()
+            .iter()
+            .map(|migration| migration.version)
+            .collect();
+
+        assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(versions.last(), Some(&4));
+    }
+
+    #[test]
+    fn agent_schema_executes_on_sqlite() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+
+                sqlx::raw_sql(SCHEMA_SQL).execute(&pool).await.unwrap();
+                sqlx::raw_sql(AGENT_SCHEMA_SQL)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+
+                let tables: Vec<String> = sqlx::query_scalar(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'agent_%'",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+
+                for expected_table in [
+                    "agent_sessions",
+                    "agent_runs",
+                    "agent_steps",
+                    "agent_events",
+                    "agent_approvals",
+                ] {
+                    assert!(tables.iter().any(|table| table == expected_table));
+                }
+            });
+    }
+
+    #[test]
+    fn agent_schema_requires_approval_expiration() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+
+                sqlx::raw_sql(SCHEMA_SQL).execute(&pool).await.unwrap();
+                sqlx::raw_sql(AGENT_SCHEMA_SQL)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+
+                let columns = sqlx::query("PRAGMA table_info(agent_approvals)")
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap();
+                let expires_at = columns
+                    .iter()
+                    .find(|column| column.get::<String, _>("name") == "expires_at")
+                    .expect("agent_approvals.expires_at must exist");
+
+                assert_eq!(expires_at.get::<i64, _>("notnull"), 1);
+            });
+    }
+
+    #[test]
+    fn agent_schema_rejects_approval_for_a_step_from_another_run() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let options = SqliteConnectOptions::from_str("sqlite::memory:")
+                    .unwrap()
+                    .foreign_keys(true);
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect_with(options)
+                    .await
+                    .unwrap();
+                let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                assert_eq!(foreign_keys, 1);
+
+                sqlx::raw_sql(SCHEMA_SQL).execute(&pool).await.unwrap();
+                sqlx::raw_sql(AGENT_SCHEMA_SQL)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::query(
+                    "INSERT INTO agent_sessions (id, title) VALUES ('session-a', 'A'), ('session-b', 'B')",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                sqlx::query(
+                    "INSERT INTO agent_runs (id, session_id, goal) VALUES ('run-a', 'session-a', 'A'), ('run-b', 'session-b', 'B')",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                sqlx::query(
+                    "INSERT INTO agent_steps (id, run_id, step_index, tool_name, tool_version) VALUES ('step-a', 'run-a', 0, 'tool', '1')",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+
+                let mismatched_approval = sqlx::query(
+                    "INSERT INTO agent_approvals (id, run_id, step_id, risk, expires_at) VALUES ('approval-a', 'run-b', 'step-a', 2, '2030-01-01')",
+                )
+                .execute(&pool)
+                .await;
+
+                assert!(
+                    mismatched_approval.is_err(),
+                    "an approval run_id must match its step's run_id"
+                );
+            });
+    }
+
+    #[test]
+    fn agent_schema_indexes_run_status_for_recovery() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+
+                sqlx::raw_sql(SCHEMA_SQL).execute(&pool).await.unwrap();
+                sqlx::raw_sql(AGENT_SCHEMA_SQL)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+
+                let index_count: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_runs_status'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(index_count, 1);
+            });
+    }
 }

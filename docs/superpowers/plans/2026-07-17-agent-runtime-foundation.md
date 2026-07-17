@@ -210,14 +210,15 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
     goal TEXT NOT NULL,
-    status TEXT NOT NULL CHECK(status IN (
+    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
         'queued','running','waiting_approval','completed','cancelled','failed','interrupted'
     )),
-    trigger_source TEXT NOT NULL CHECK(trigger_source IN ('user','startup','schedule','recovery')),
+    trigger_source TEXT NOT NULL DEFAULT 'user' CHECK(trigger_source IN ('user','startup','schedule','recovery')),
     current_step INTEGER NOT NULL DEFAULT 0,
     error_code TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    started_at TEXT,
     completed_at TEXT
 );
 
@@ -225,16 +226,18 @@ CREATE TABLE IF NOT EXISTS agent_steps (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
     step_index INTEGER NOT NULL,
-    tool_name TEXT,
-    tool_version INTEGER,
-    risk_level INTEGER NOT NULL DEFAULT 0 CHECK(risk_level BETWEEN 0 AND 4),
-    status TEXT NOT NULL CHECK(status IN ('pending','running','waiting_approval','completed','failed','cancelled','interrupted')),
+    tool_name TEXT NOT NULL,
+    tool_version TEXT NOT NULL,
+    risk INTEGER NOT NULL DEFAULT 0 CHECK(risk BETWEEN 0 AND 4),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','waiting_approval','completed','failed','cancelled','interrupted')),
     input_json TEXT,
     output_json TEXT,
-    error_code TEXT,
-    idempotency_key TEXT UNIQUE,
+    error TEXT,
+    idempotency_key TEXT,
     started_at TEXT,
     completed_at TEXT,
+    UNIQUE(idempotency_key),
+    UNIQUE(run_id, id),
     UNIQUE(run_id, step_index)
 );
 
@@ -250,21 +253,30 @@ CREATE TABLE IF NOT EXISTS agent_events (
 CREATE TABLE IF NOT EXISTS agent_approvals (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
-    step_id TEXT NOT NULL REFERENCES agent_steps(id) ON DELETE CASCADE,
-    risk_level INTEGER NOT NULL CHECK(risk_level BETWEEN 2 AND 4),
-    preview_json TEXT NOT NULL,
-    precondition_json TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    risk INTEGER NOT NULL CHECK(risk BETWEEN 2 AND 4),
+    preview_json TEXT,
+    precondition_json TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected','expired')),
     expires_at TEXT NOT NULL,
     decided_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY (run_id, step_id) REFERENCES agent_steps(run_id, id) ON DELETE CASCADE,
     UNIQUE(step_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_runs_session_status ON agent_runs(session_id, status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
 CREATE INDEX IF NOT EXISTS idx_agent_steps_run_index ON agent_steps(run_id, step_index);
 CREATE INDEX IF NOT EXISTS idx_agent_events_run_id ON agent_events(run_id, id);
-CREATE INDEX IF NOT EXISTS idx_agent_approvals_status ON agent_approvals(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_agent_approvals_status_expires ON agent_approvals(status, expires_at);
+
+CREATE TRIGGER IF NOT EXISTS trg_agent_sessions_updated AFTER UPDATE ON agent_sessions
+    FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
+    BEGIN UPDATE agent_sessions SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
+CREATE TRIGGER IF NOT EXISTS trg_agent_runs_updated AFTER UPDATE ON agent_runs
+    FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
+    BEGIN UPDATE agent_runs SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
 "#;
 ```
 
