@@ -565,6 +565,7 @@ pub struct AgentRun {
     pub error_code: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub started_at: Option<String>,
     pub completed_at: Option<String>,
 }
 ```

@@ -1,8 +1,9 @@
 // 智研（ZhiYan）Tauri 后端入口。
 // Phase 4：注册 notification 插件 + credentials 命令（keyring 加密存 apiKey）。
 
+pub mod agent;
 mod credentials;
-mod db;
+pub mod db;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
