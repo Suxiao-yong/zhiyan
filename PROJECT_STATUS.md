@@ -6,7 +6,7 @@
 
 ## 当前结论
 
-第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 3 已完成并通过规格与质量双审查；Task 4 已实现并通过规格审查，质量审查因本轮用户中断尚待补做。当前没有代码实现阻塞。
+第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 4 已完成并通过规格与质量双审查；Task 5 即将开始。当前没有代码实现阻塞。
 
 ## 已完成的修改
 
@@ -65,23 +65,22 @@
 - 实现 R0/R1 自动执行、R2 摘要/设置闸门、R3 有效审批（状态、步骤、过期时间、前置条件 hash）校验、R4 仅导航。
 - TDD RED 已确认缺少策略 API；GREEN focused policy tests：7/7。
 - `cargo fmt --check`、Clippy `-D warnings`、`git diff --check` 通过。
-- 规格审查通过；代码质量审查代理在用户中断时处于 interrupted，尚未形成独立结论。
+- 规格审查与恢复后的独立代码质量审查均通过；质量审查 Critical/Important/Minor 均为 None。
 
 ## 正在处理的问题
 
-### 当前待处理：Task 4 质量复审
+### 当前待处理：Task 5 `plan.get_today`
 
-- 需要补做 Task 4 的只读代码质量复审；在复审通过前不将 Task 4 标记为完全关闭。
-- 复审通过后，下一项是 Task 5：`plan.get_today` 的业务日边界、真实 SQLite 查询和 Rust/TypeScript parity。
+- 将先写真实 SQLite parity 与 04:00 业务日边界 RED 测试，再实现只读 Rust 查询。
+- 查询必须与 TypeScript 展示值一致，但不能像旧服务那样在读取时回写 `study_plans`。
 
 ## 下一步计划
 
-1. 补做 Task 4 代码质量复审；若发现 Critical/Important，先修复并复审。
-2. 执行 Task 5–Task 6：`plan.get_today` parity、原子 exactly-once `record.checkin_plan` 与 undo。
-3. 执行 Task 7–Task 8：连接 executor/runtime/approval/ownership，并增加类型化 Tauri 命令和隐藏 `/agent-debug` 调试切片。
-4. 执行 Task 9：并发幂等、隐私稳定错误、迁移升级/恢复测试及所有权切换/回滚文档。
-5. 执行 Task 10：跑完整 Vitest、typecheck、build、Rust test/fmt/clippy/diff 门禁；无法在当前环境完成的打包手测项将保持未勾选并如实记录。
-6. 最终使用 `finishing-a-development-branch` 进行新鲜验证，并保留分支供用户选择后续合并、PR 或继续保留。
+1. 执行 Task 5–Task 6：`plan.get_today` parity、原子 exactly-once `record.checkin_plan` 与 undo。
+2. 执行 Task 7–Task 8：连接 executor/runtime/approval/ownership，并增加类型化 Tauri 命令和隐藏 `/agent-debug` 调试切片。
+3. 执行 Task 9：并发幂等、隐私稳定错误、迁移升级/恢复测试及所有权切换/回滚文档。
+4. 执行 Task 10：跑完整 Vitest、typecheck、build、Rust test/fmt/clippy/diff 门禁；无法在当前环境完成的打包手测项将保持未勾选并如实记录。
+5. 最终使用 `finishing-a-development-branch` 进行新鲜验证，并保留分支供用户选择后续合并、PR 或继续保留。
 
 ## 额度监控
 
