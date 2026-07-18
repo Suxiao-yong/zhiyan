@@ -41,6 +41,10 @@ pub fn run() {
             agent::commands::agent_create_run,
             agent::commands::agent_start_run,
             agent::commands::agent_cancel_run,
+            agent::commands::agent_list_tools,
+            agent::commands::agent_execute_tool,
+            agent::commands::agent_decide_approval,
+            agent::commands::agent_undo_tool,
         ])
         .setup(|app| {
             db::init_db(app.handle())?;

@@ -2,8 +2,12 @@ use serde::Serialize;
 use tauri::State;
 
 use super::error::AgentError;
-use super::model::{AgentRun, AgentSession, RunEvent};
+use super::executor::ToolUndoResponse;
+use super::model::{
+    AgentRun, AgentSession, ApprovalRecord, RunEvent, ToolCallRequest, ToolCallResponse,
+};
 use super::runtime::AgentRuntime;
+use super::tools::ListedTool;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CommandError {
@@ -110,9 +114,49 @@ pub async fn agent_cancel_run(
         .map_err(Into::into)
 }
 
+#[tauri::command]
+pub async fn agent_list_tools(
+    runtime: State<'_, AgentRuntime>,
+) -> Result<Vec<ListedTool>, CommandError> {
+    runtime.list_tools().await.map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn agent_execute_tool(
+    runtime: State<'_, AgentRuntime>,
+    request: ToolCallRequest,
+) -> Result<ToolCallResponse, CommandError> {
+    runtime.execute_tool(request).await.map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn agent_decide_approval(
+    runtime: State<'_, AgentRuntime>,
+    approval_id: String,
+    approve: bool,
+) -> Result<ApprovalRecord, CommandError> {
+    let approval_id = trimmed_required(approval_id, "approval_id")?;
+    runtime
+        .decide_approval(&approval_id, approve)
+        .await
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn agent_undo_tool(
+    runtime: State<'_, AgentRuntime>,
+    step_id: String,
+) -> Result<ToolUndoResponse, CommandError> {
+    let step_id = trimmed_required(step_id, "step_id")?;
+    runtime.undo_tool(&step_id).await.map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{trimmed_required, CommandError};
+    use super::{
+        agent_decide_approval, agent_execute_tool, agent_list_tools, agent_undo_tool,
+        trimmed_required, CommandError,
+    };
     use crate::agent::error::AgentError;
 
     #[test]
@@ -122,7 +166,14 @@ mod tests {
             "value"
         );
 
-        for field in ["title", "goal", "session_id", "run_id"] {
+        for field in [
+            "title",
+            "goal",
+            "session_id",
+            "run_id",
+            "approval_id",
+            "step_id",
+        ] {
             let error = trimmed_required(" \t\n ".to_owned(), field).unwrap_err();
             assert_eq!(
                 error,
@@ -132,6 +183,14 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn typed_tool_commands_are_exposed_at_the_tauri_boundary() {
+        let _ = agent_list_tools;
+        let _ = agent_execute_tool;
+        let _ = agent_decide_approval;
+        let _ = agent_undo_tool;
     }
 
     #[test]

@@ -2,7 +2,13 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentRun, AgentSession } from '@/types'
+import type {
+  AgentRun,
+  AgentSession,
+  AgentToolCallResponse,
+  AgentToolUndoResponse,
+  ListedAgentTool,
+} from '@/types'
 import { useExamStore } from '@/stores/exam'
 
 const client = vi.hoisted(() => ({
@@ -11,6 +17,9 @@ const client = vi.hoisted(() => ({
   createAgentRun: vi.fn(),
   startAgentRun: vi.fn(),
   cancelAgentRun: vi.fn(),
+  listAgentTools: vi.fn(),
+  executeAgentTool: vi.fn(),
+  undoAgentTool: vi.fn(),
 }))
 
 vi.mock('@/services/agent-client', () => client)
@@ -42,6 +51,32 @@ const queuedRun: AgentRun = {
 
 const runningRun: AgentRun = { ...queuedRun, status: 'running', started_at: '2026-07-18T00:01:00Z' }
 
+function listedTool(
+  name: 'plan.get_today' | 'record.checkin_plan',
+  ownership: ListedAgentTool['ownership'],
+): ListedAgentTool {
+  return {
+    descriptor: {
+      name,
+      version: '1',
+      risk: name === 'plan.get_today' ? 'R0' : 'R1',
+      confirmation: 'automatic',
+      supports_undo: name === 'record.checkin_plan',
+      timeout_ms: 5_000,
+      idempotency: name === 'plan.get_today' ? 'retry_safe' : 'required_exactly_once',
+      data_permissions: ['study_plans'],
+      input_schema: {},
+      output_schema: {},
+    },
+    ownership,
+  }
+}
+
+const defaultTools: ListedAgentTool[] = [
+  listedTool('plan.get_today', 'shadow'),
+  listedTool('record.checkin_plan', 'typescript'),
+]
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((resolvePromise) => {
@@ -65,6 +100,9 @@ describe('AgentDebug', () => {
     client.createAgentRun.mockResolvedValue(queuedRun)
     client.startAgentRun.mockResolvedValue(runningRun)
     client.cancelAgentRun.mockResolvedValue({ ...runningRun, status: 'cancelled' })
+    client.listAgentTools.mockResolvedValue(defaultTools)
+    client.executeAgentTool.mockResolvedValue(undefined)
+    client.undoAgentTool.mockResolvedValue(undefined)
   })
 
   it('shows health and creates then starts a runtime run', async () => {
@@ -132,5 +170,116 @@ describe('AgentDebug', () => {
 
     expect(wrapper.get('[data-test=health]').text()).toContain('不可用')
     expect(wrapper.get('[role=alert]').text()).toContain('agent unavailable')
+  })
+
+  it('executes a shadow plan read and keeps a TypeScript-owned check-in disabled', async () => {
+    const response: AgentToolCallResponse = {
+      state: 'completed',
+      step_id: 'step-plan',
+      output: { business_date: '2026-07-18', plans: [{ id: 'plan-1' }] },
+      replayed: false,
+      undo_available: false,
+    }
+    client.executeAgentTool.mockResolvedValue(response)
+    const wrapper = mountPage()
+    await flushPromises()
+
+    expect(wrapper.get('[data-test=tool-plan-descriptor]').text()).toContain('plan.get_today')
+    expect(wrapper.get('[data-test=tool-plan-descriptor]').text()).toContain('v1')
+    expect(wrapper.get('[data-test=tool-plan-descriptor]').text()).toContain('R0')
+    expect(wrapper.get('[data-test=tool-plan-ownership]').text()).toContain('shadow')
+    expect(wrapper.get('[data-test=tool-checkin-ownership]').text()).toContain('typescript')
+    expect(wrapper.get('[data-test=tool-checkin-execute]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-test=create-session]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=start-run]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=tool-plan-exam-id]').setValue('exam-shadow')
+    await wrapper.get('[data-test=tool-plan-execute]').trigger('click')
+    await flushPromises()
+
+    expect(client.executeAgentTool).toHaveBeenCalledWith({
+      run_id: 'run-1',
+      step_index: 0,
+      tool_name: 'plan.get_today',
+      tool_version: '1',
+      input: { exam_id: 'exam-shadow' },
+      idempotency_key: null,
+      approval_id: null,
+    })
+    expect(wrapper.get('[data-test=tool-plan-output]').text()).toContain('business_date')
+    expect(wrapper.get('[data-test=tool-plan-output]').text()).toContain('plan-1')
+  })
+
+  it('executes a rust-owned check-in exactly once and enables undo from its receipt', async () => {
+    client.listAgentTools.mockResolvedValue([
+      listedTool('plan.get_today', 'shadow'),
+      listedTool('record.checkin_plan', 'rust-owned'),
+    ])
+    const response: AgentToolCallResponse = {
+      state: 'completed',
+      step_id: 'step-checkin',
+      output: { record_id: 'record-1' },
+      replayed: false,
+      undo_available: true,
+    }
+    const undo: AgentToolUndoResponse = {
+      step_id: 'step-checkin',
+      output: {
+        record_id: 'record-1',
+        plan_id: 'plan-1',
+        removed_wrong_question_ids: [],
+        actual_duration: 0,
+        actual_tasks: null,
+        status: 'pending',
+      },
+    }
+    client.executeAgentTool.mockResolvedValue(response)
+    client.undoAgentTool.mockResolvedValue(undo)
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-test=create-session]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=start-run]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
+    await wrapper.get('[data-test=tool-checkin-execute]').trigger('click')
+    await flushPromises()
+
+    expect(client.executeAgentTool).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-test=tool-checkin-receipt]').text()).toContain('step-checkin')
+    expect(wrapper.get('[data-test=tool-checkin-receipt]').text()).toContain('false')
+    expect(wrapper.get('[data-test=tool-checkin-receipt]').text()).toContain('true')
+    expect(wrapper.get('[data-test=tool-checkin-undo]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[data-test=tool-checkin-undo]').trigger('click')
+    await flushPromises()
+
+    expect(client.undoAgentTool).toHaveBeenCalledWith('step-checkin')
+  })
+
+  it('shows a redacted persistence list error and disables every write control', async () => {
+    client.listAgentTools.mockRejectedValue({
+      code: 'persistence_error',
+      message: 'agent persistence failed',
+    })
+    const wrapper = mountPage()
+    await flushPromises()
+
+    expect(wrapper.get('[role=alert]').text()).toContain('agent persistence failed')
+    for (const selector of [
+      '[data-test=create-session]',
+      '[data-test=start-run]',
+      '[data-test=cancel-run]',
+      '[data-test=tool-plan-execute]',
+      '[data-test=tool-checkin-execute]',
+      '[data-test=tool-checkin-undo]',
+    ]) {
+      expect(wrapper.get(selector).attributes('disabled')).toBeDefined()
+    }
+    expect(client.executeAgentTool).not.toHaveBeenCalled()
+    expect(client.undoAgentTool).not.toHaveBeenCalled()
   })
 })

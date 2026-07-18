@@ -9,8 +9,13 @@ import {
   cancelAgentRun,
   createAgentRun,
   createAgentSession,
+  decideAgentApproval,
+  executeAgentTool,
+  listAgentTools,
   startAgentRun,
+  undoAgentTool,
 } from './agent-client'
+import type { AgentToolCallRequest } from '@/types'
 
 describe('agent runtime client', () => {
   beforeEach(() => {
@@ -60,5 +65,30 @@ describe('agent runtime client', () => {
     vi.mocked(invoke).mockRejectedValue(commandError)
 
     await expect(createAgentRun('session-1', '')).rejects.toBe(commandError)
+  })
+
+  it('invokes typed tool commands with camelCase boundary arguments', async () => {
+    const request: AgentToolCallRequest = {
+      run_id: 'run-1',
+      step_index: 0,
+      tool_name: 'plan.get_today',
+      tool_version: '1',
+      input: { exam_id: 'exam-1' },
+      idempotency_key: null,
+      approval_id: null,
+    }
+    vi.mocked(invoke).mockResolvedValue(undefined)
+
+    await listAgentTools()
+    expect(invoke).toHaveBeenLastCalledWith('agent_list_tools')
+    await executeAgentTool(request)
+    expect(invoke).toHaveBeenLastCalledWith('agent_execute_tool', { request })
+    await decideAgentApproval('approval-1', true)
+    expect(invoke).toHaveBeenLastCalledWith('agent_decide_approval', {
+      approvalId: 'approval-1',
+      approve: true,
+    })
+    await undoAgentTool('step-1')
+    expect(invoke).toHaveBeenLastCalledWith('agent_undo_tool', { stepId: 'step-1' })
   })
 })

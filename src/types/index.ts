@@ -159,13 +159,7 @@ export interface AgentSession {
 
 /** Agent runtime run state */
 export type AgentRunStatus =
-  | 'queued'
-  | 'running'
-  | 'waiting_approval'
-  | 'completed'
-  | 'cancelled'
-  | 'failed'
-  | 'interrupted'
+  'queued' | 'running' | 'waiting_approval' | 'completed' | 'cancelled' | 'failed' | 'interrupted'
 
 /** Agent runtime run */
 export interface AgentRun {
@@ -180,4 +174,94 @@ export interface AgentRun {
   updated_at: string
   started_at: string | null
   completed_at: string | null
+}
+
+/** Dynamic execution ownership for a registered Agent tool. */
+export type AgentToolOwnership = 'typescript' | 'shadow' | 'rust-owned' | 'unavailable'
+export type AgentToolRisk = 'R0' | 'R1' | 'R2' | 'R3' | 'R4'
+export type AgentToolConfirmation =
+  'automatic' | 'summary_or_setting' | 'required' | 'navigation_only'
+export type AgentToolIdempotency = 'retry_safe' | 'required_exactly_once' | 'no_automatic_retry'
+
+/** Static metadata serialized by Rust's ToolDescriptor. */
+export interface AgentToolDescriptor {
+  name: string
+  version: string
+  input_schema: unknown
+  output_schema: unknown
+  risk: AgentToolRisk
+  confirmation: AgentToolConfirmation
+  supports_undo: boolean
+  timeout_ms: number
+  idempotency: AgentToolIdempotency
+  data_permissions: string[]
+}
+
+/** Static descriptor paired with its current persistence-backed ownership. */
+export interface ListedAgentTool {
+  descriptor: AgentToolDescriptor
+  ownership: AgentToolOwnership
+}
+
+export interface AgentToolCallRequest {
+  run_id: string
+  step_index: number
+  tool_name: string
+  tool_version: string
+  input: unknown
+  idempotency_key: string | null
+  approval_id: string | null
+}
+
+export type AgentToolCallResponse =
+  | {
+      state: 'completed'
+      step_id: string
+      output: unknown
+      replayed: boolean
+      undo_available: boolean
+    }
+  | {
+      state: 'waiting_approval'
+      step_id: string
+      approval_id: string
+      preview: unknown
+      expires_at: string
+    }
+  | {
+      state: 'summary_required'
+      step_id: string
+      preview: unknown
+    }
+  | {
+      state: 'navigation_required'
+      route: string
+      reason: string
+    }
+
+export interface AgentApproval {
+  id: string
+  run_id: string
+  step_id: string
+  risk: number
+  preview: unknown
+  precondition_hash: string
+  status: string
+  expires_at: string
+  decided_at: string | null
+  created_at: string
+}
+
+export type AgentApprovalRecord = AgentApproval
+
+export interface AgentToolUndoResponse {
+  step_id: string
+  output: {
+    record_id: string
+    plan_id: string
+    removed_wrong_question_ids: string[]
+    actual_duration: number
+    actual_tasks: string | null
+    status: string
+  }
 }
