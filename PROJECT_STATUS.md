@@ -1,12 +1,12 @@
 # 项目进度状态
 
-更新时间：2026-07-18（Asia/Shanghai）  
+更新时间：2026-07-18（Asia/Shanghai，用户要求状态总结后更新）  
 工作区：`D:\智研\zhiyan\.worktrees\agent-tools-policy-phase2`  
 分支：`codex/agent-tools-policy-phase2`
 
 ## 当前结论
 
-第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 3 已完成并通过规格与质量双审查；Task 4 即将开始。当前没有已知阻塞。
+第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 3 已完成并通过规格与质量双审查；Task 4 已实现并通过规格审查，质量审查因本轮用户中断尚待补做。当前没有代码实现阻塞。
 
 ## 已完成的修改
 
@@ -55,17 +55,29 @@
 - 修复审查发现的非法 `properties: null` schema，并恢复后续 `list_tools` 所需的 `ListedTool` 公共 DTO。
 - focused tools tests：5/5；commands tests：4/4；Clippy `-D warnings`、fmt、diff-check 通过。
 
-## 正在处理的问题
-
 ### Task 4：R0–R4 策略引擎
 
-- 下一项工作将先写完整决策表 RED 测试，再实现纯函数策略判定和 R3 approval precondition 校验。
-- 策略层只能使用 descriptor 的不可变 risk/confirmation/data permissions，不接受请求覆盖这些元数据。
+提交：`133d310`  
+提交信息：`feat: enforce supervised agent tool policy`
+
+- 新增 `src-tauri/src/agent/policy.rs` 并从 `agent/mod.rs` 导出。
+- 实现 `PolicyDecision` 五态：Execute、ExecuteWithUndo、PresentSummary、AwaitApproval、NavigateOnly。
+- 实现 R0/R1 自动执行、R2 摘要/设置闸门、R3 有效审批（状态、步骤、过期时间、前置条件 hash）校验、R4 仅导航。
+- TDD RED 已确认缺少策略 API；GREEN focused policy tests：7/7。
+- `cargo fmt --check`、Clippy `-D warnings`、`git diff --check` 通过。
+- 规格审查通过；代码质量审查代理在用户中断时处于 interrupted，尚未形成独立结论。
+
+## 正在处理的问题
+
+### 当前待处理：Task 4 质量复审
+
+- 需要补做 Task 4 的只读代码质量复审；在复审通过前不将 Task 4 标记为完全关闭。
+- 复审通过后，下一项是 Task 5：`plan.get_today` 的业务日边界、真实 SQLite 查询和 Rust/TypeScript parity。
 
 ## 下一步计划
 
-1. 等待 Task 2 实现代理提交，独立进行规格审查和代码质量审查；若有 Critical/Important 问题，先修复并复审。
-2. 依次执行 Task 3–Task 6：工具协议/注册表、R0–R4 policy、`plan.get_today`、原子 exactly-once `record.checkin_plan` 与 undo。
+1. 补做 Task 4 代码质量复审；若发现 Critical/Important，先修复并复审。
+2. 执行 Task 5–Task 6：`plan.get_today` parity、原子 exactly-once `record.checkin_plan` 与 undo。
 3. 执行 Task 7–Task 8：连接 executor/runtime/approval/ownership，并增加类型化 Tauri 命令和隐藏 `/agent-debug` 调试切片。
 4. 执行 Task 9：并发幂等、隐私稳定错误、迁移升级/恢复测试及所有权切换/回滚文档。
 5. 执行 Task 10：跑完整 Vitest、typecheck、build、Rust test/fmt/clippy/diff 门禁；无法在当前环境完成的打包手测项将保持未勾选并如实记录。
