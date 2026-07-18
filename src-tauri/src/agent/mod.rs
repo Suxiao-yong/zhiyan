@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod error;
 pub mod model;
+pub mod policy;
 pub mod repository;
 pub mod runtime;
 pub mod state;
