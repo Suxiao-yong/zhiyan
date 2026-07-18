@@ -65,3 +65,14 @@
 - [ ] 侧边栏各页切换正常
 - [ ] 删除考试/科目 → 弹级联确认框（告知数量）→ 子数据清空（应用层级联兜底）
 - [ ] `npx vitest run` 单测全过
+
+## Agent Runtime Foundation
+
+- [ ] 运行 `npm.cmd run tauri dev`，直接打开 `/agent-debug`（该隐藏路由不出现在侧边栏）。
+- [ ] 页面健康状态显示“可用”，且启动日志没有 panic、migration 或数据库路径错误。
+- [ ] 创建测试会话；创建并启动 Run；确认页面状态为 `running`。
+- [ ] 保留该 Run 为 `running` 并重启应用；只读检查数据库确认该 Run 变为 `interrupted`，同时存在 `run.interrupted` 审计事件。
+- [ ] 重启前处于 `waiting_approval` 的 Run 保持 `waiting_approval`，不会被误改为 `interrupted`。
+- [ ] 回归 Dashboard、学习计划、计划打卡、学习记录、分析、可视化和设置，确认原有数据与操作不受 Agent 表影响。
+- [ ] 在设置中创建数据库备份；恢复时确认执行顺序为 `closeDb()` -> `agent_prepare_database_restore` -> 替换数据库 -> 重启应用。
+- [ ] 恢复后再次打开 `/agent-debug`，确认 Runtime 健康、原有业务数据可读，且 Agent 五表仍存在。

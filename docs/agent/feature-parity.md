@@ -9,6 +9,6 @@
 | Analysis and prediction | TypeScript services | Rust tools | legacy | `npm.cmd test -- src/services/analyzer.test.ts` |
 | Visualization datasets | TypeScript services | Rust tools | legacy | `npm.cmd test` |
 | Import, export, backup and restore | TypeScript services plus Tauri plugins | Rust tools | legacy | `npm.cmd test -- src/services/export.test.ts` |
-| Agent session and run state | none | Rust Runtime | foundation | `cargo test --manifest-path src-tauri/Cargo.toml` |
+| Agent session and run state | Rust Runtime | Rust Runtime | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` |
 
 States: `legacy`, `shadow`, `rust-owned`, `retired`.
