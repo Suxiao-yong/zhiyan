@@ -406,6 +406,22 @@ mod tests {
                     );
                 }
 
+                let tool_status_index_count: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_steps_tool_status'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(tool_status_index_count, 1);
+
+                let tool_status_index_columns: Vec<String> = sqlx::query_scalar(
+                    "SELECT name FROM pragma_index_info('idx_agent_steps_tool_status') ORDER BY seqno",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+                assert_eq!(tool_status_index_columns, vec!["tool_name", "status"]);
+
                 let owners: Vec<(String, String)> = sqlx::query_as(
                     "SELECT key, value FROM settings WHERE key LIKE 'agent_tool_owner.%' ORDER BY key",
                 )
