@@ -1295,6 +1295,7 @@ export interface AgentRun {
   error_code: string | null
   created_at: string
   updated_at: string
+  started_at: string | null
   completed_at: string | null
 }
 ```

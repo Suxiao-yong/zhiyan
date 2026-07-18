@@ -146,3 +146,38 @@ export interface Setting {
   description: string | null
   updated_at: string
 }
+
+/** Agent runtime session */
+export interface AgentSession {
+  id: string
+  exam_id: string | null
+  title: string
+  status: 'active' | 'archived'
+  created_at: string
+  updated_at: string
+}
+
+/** Agent runtime run state */
+export type AgentRunStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting_approval'
+  | 'completed'
+  | 'cancelled'
+  | 'failed'
+  | 'interrupted'
+
+/** Agent runtime run */
+export interface AgentRun {
+  id: string
+  session_id: string
+  goal: string
+  status: AgentRunStatus
+  trigger_source: 'user' | 'startup' | 'schedule' | 'recovery'
+  current_step: number
+  error_code: string | null
+  created_at: string
+  updated_at: string
+  started_at: string | null
+  completed_at: string | null
+}
