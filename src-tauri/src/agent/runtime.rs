@@ -1,16 +1,47 @@
 use super::error::AgentError;
-use super::model::{AgentRun, AgentSession, RunEvent};
+use super::executor::{AgentExecutor, ToolUndoResponse};
+use super::model::{
+    AgentRun, AgentSession, ApprovalRecord, RunEvent, ToolCallRequest, ToolCallResponse,
+};
 use super::repository::AgentRepository;
 use super::state;
+use super::tools::ListedTool;
 
 #[derive(Clone)]
 pub struct AgentRuntime {
     repository: AgentRepository,
+    executor: AgentExecutor,
 }
 
 impl AgentRuntime {
-    pub fn new(repository: AgentRepository) -> Self {
-        Self { repository }
+    pub fn new(repository: AgentRepository, executor: AgentExecutor) -> Self {
+        Self {
+            repository,
+            executor,
+        }
+    }
+
+    pub async fn list_tools(&self) -> Result<Vec<ListedTool>, AgentError> {
+        self.executor.list_tools().await
+    }
+
+    pub async fn execute_tool(
+        &self,
+        request: ToolCallRequest,
+    ) -> Result<ToolCallResponse, AgentError> {
+        self.executor.execute(request).await
+    }
+
+    pub async fn decide_approval(
+        &self,
+        approval_id: &str,
+        approve: bool,
+    ) -> Result<ApprovalRecord, AgentError> {
+        self.executor.decide_approval(approval_id, approve).await
+    }
+
+    pub async fn undo_tool(&self, step_id: &str) -> Result<ToolUndoResponse, AgentError> {
+        self.executor.undo(step_id).await
     }
 
     pub async fn create_session(
@@ -58,9 +89,10 @@ mod tests {
 
     use super::AgentRuntime;
     use crate::agent::error::AgentError;
-    use crate::agent::model::{RunEvent, RunStatus};
+    use crate::agent::executor::AgentExecutor;
+    use crate::agent::model::{RunEvent, RunStatus, ToolCallRequest, ToolCallResponse};
     use crate::agent::repository::AgentRepository;
-    use crate::db::AGENT_SCHEMA_SQL;
+    use crate::agent::tools::ToolOwnership;
 
     async fn test_runtime() -> (AgentRuntime, sqlx::SqlitePool) {
         let options = SqliteConnectOptions::from_str("sqlite::memory:")
@@ -78,16 +110,17 @@ mod tests {
             .unwrap();
         assert_eq!(foreign_keys, 1);
 
-        sqlx::query("CREATE TABLE exams (id TEXT PRIMARY KEY)")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::raw_sql(AGENT_SCHEMA_SQL)
-            .execute(&pool)
-            .await
-            .unwrap();
+        for migration in crate::db::migrations() {
+            sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+        }
 
-        (AgentRuntime::new(AgentRepository::new(pool.clone())), pool)
+        (
+            AgentRuntime::new(
+                AgentRepository::new(pool.clone()),
+                AgentExecutor::new(pool.clone()),
+            ),
+            pool,
+        )
     }
 
     async fn status_event_count(pool: &sqlx::SqlitePool, run_id: &str) -> i64 {
@@ -186,5 +219,58 @@ mod tests {
         let (runtime, _pool) = test_runtime().await;
 
         runtime.health().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn runtime_is_the_public_tool_execution_boundary() {
+        let (runtime, pool) = test_runtime().await;
+        let listed = runtime.list_tools().await.unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(
+            listed
+                .iter()
+                .find(|tool| tool.descriptor.name == "plan.get_today")
+                .unwrap()
+                .ownership,
+            ToolOwnership::Shadow
+        );
+
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO exams(id,name,exam_date) VALUES('exam-runtime','Runtime','2030-01-01');
+            INSERT INTO subjects(id,exam_id,name) VALUES('subject-runtime','exam-runtime','Runtime');
+            INSERT INTO agent_sessions(id,title) VALUES('session-tool','Tool');
+            INSERT INTO agent_runs(id,session_id,goal,status)
+            VALUES('run-tool','session-tool','Tool','running');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let response = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 0,
+                tool_name: "plan.get_today".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"exam_id":"exam-runtime"}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(response, ToolCallResponse::Completed { .. }));
+        assert_eq!(
+            runtime
+                .decide_approval("missing-approval", true)
+                .await
+                .unwrap_err()
+                .code(),
+            "not_found"
+        );
+        assert_eq!(
+            runtime.undo_tool("missing-step").await.unwrap_err().code(),
+            "not_found"
+        );
     }
 }

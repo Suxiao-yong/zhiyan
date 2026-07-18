@@ -83,6 +83,16 @@ impl ToolRegistry {
         Self { tools }
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_test(descriptors: Vec<ToolDescriptor>) -> Self {
+        Self {
+            tools: descriptors
+                .into_iter()
+                .map(|descriptor| (descriptor.name, descriptor))
+                .collect(),
+        }
+    }
+
     pub fn descriptors(&self) -> Vec<&ToolDescriptor> {
         self.tools.values().collect()
     }

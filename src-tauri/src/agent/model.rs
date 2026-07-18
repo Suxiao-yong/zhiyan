@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
@@ -105,4 +106,54 @@ pub struct AgentRun {
     pub updated_at: String,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolCallRequest {
+    pub run_id: String,
+    pub step_index: i64,
+    pub tool_name: String,
+    pub tool_version: String,
+    pub input: Value,
+    pub idempotency_key: Option<String>,
+    pub approval_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ToolCallResponse {
+    Completed {
+        step_id: String,
+        output: Value,
+        replayed: bool,
+        undo_available: bool,
+    },
+    WaitingApproval {
+        step_id: String,
+        approval_id: String,
+        preview: Value,
+        expires_at: String,
+    },
+    SummaryRequired {
+        step_id: String,
+        preview: Value,
+    },
+    NavigationRequired {
+        route: String,
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ApprovalRecord {
+    pub id: String,
+    pub run_id: String,
+    pub step_id: String,
+    pub risk: i64,
+    pub preview: Value,
+    pub precondition_hash: String,
+    pub status: String,
+    pub expires_at: String,
+    pub decided_at: Option<String>,
+    pub created_at: String,
 }

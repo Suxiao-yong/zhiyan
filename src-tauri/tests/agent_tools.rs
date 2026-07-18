@@ -4,6 +4,7 @@ use chrono::DateTime;
 use serde_json::Value;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use zhiyan_lib::{
+    agent::model::{ToolCallRequest, ToolCallResponse},
     agent::tools::plan::{self, PlanGetTodayInput},
     agent::{
         executor::{AgentExecutor, RecordCheckinExecutionRequest},
@@ -1492,5 +1493,375 @@ fn plan_get_today_content_ties_keep_created_at_as_the_only_order_key() {
 
         assert!(matches!(actual_tasks, "Tie Z" | "Tie A"));
         assert_eq!(output.plans[0].actual_duration, Some(30));
+    });
+}
+
+#[test]
+fn executor_dto_contract_has_exact_tagged_wire_shape() {
+    let request = ToolCallRequest {
+        run_id: "run-1".to_owned(),
+        step_index: 2,
+        tool_name: "plan.get_today".to_owned(),
+        tool_version: "1".to_owned(),
+        input: serde_json::json!({"exam_id":"exam-1"}),
+        idempotency_key: None,
+        approval_id: None,
+    };
+    let request_json = serde_json::to_value(request).unwrap();
+    assert_eq!(
+        request_json
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            "approval_id",
+            "idempotency_key",
+            "input",
+            "run_id",
+            "step_index",
+            "tool_name",
+            "tool_version",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+
+    let response = ToolCallResponse::Completed {
+        step_id: "step-1".to_owned(),
+        output: serde_json::json!({"ok":true}),
+        replayed: false,
+        undo_available: true,
+    };
+    assert_eq!(
+        serde_json::to_value(response).unwrap(),
+        serde_json::json!({
+            "state":"completed",
+            "step_id":"step-1",
+            "output":{"ok":true},
+            "replayed":false,
+            "undo_available":true
+        })
+    );
+}
+
+#[test]
+fn executor_rejects_request_policy_fields_as_tool_input() {
+    let registry = zhiyan_lib::agent::tools::ToolRegistry::built_in();
+    for forbidden in ["risk", "permissions", "policy", "data_permissions"] {
+        let mut input = serde_json::json!({"exam_id":"exam-1"});
+        input[forbidden] = serde_json::json!("attacker-controlled");
+        assert_eq!(
+            registry
+                .validate_input("plan.get_today", "1", &input)
+                .unwrap_err()
+                .code(),
+            "tool_schema_invalid",
+            "descriptor field {forbidden} must not be accepted in input"
+        );
+    }
+}
+
+#[test]
+fn executor_lists_dynamic_ownership_and_fails_closed() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let executor = AgentExecutor::new(pool.clone());
+
+        let listed = executor.list_tools().await.unwrap();
+        let ownership = |name: &str| {
+            listed
+                .iter()
+                .find(|tool| tool.descriptor.name == name)
+                .unwrap()
+                .ownership
+        };
+        assert_eq!(
+            ownership("plan.get_today"),
+            zhiyan_lib::agent::tools::ToolOwnership::Shadow
+        );
+        assert_eq!(
+            ownership("record.checkin_plan"),
+            zhiyan_lib::agent::tools::ToolOwnership::Typescript
+        );
+
+        sqlx::query("DELETE FROM settings WHERE key = ?")
+            .bind("agent_tool_owner.plan.get_today")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE settings SET value='future-owner' WHERE key = ?")
+            .bind("agent_tool_owner.record.checkin_plan")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let listed = executor.list_tools().await.unwrap();
+        assert!(listed.iter().all(|tool| {
+            tool.ownership == zhiyan_lib::agent::tools::ToolOwnership::Unavailable
+        }));
+
+        sqlx::query("DROP TABLE settings")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            executor.list_tools().await.unwrap_err().code(),
+            "persistence_error"
+        );
+    });
+}
+
+#[test]
+fn executor_runs_shadow_read_with_trusted_local_business_date() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_exam_tree(&pool).await;
+        seed_agent_run(&pool).await;
+        let business_date = plan::business_date_at(chrono::Local::now().fixed_offset());
+        sqlx::query(
+            "INSERT INTO study_plans (id, exam_id, subject_id, date) VALUES ('plan-today', ?, 'subject-math', ?)",
+        )
+        .bind(EXAM_ID)
+        .bind(&business_date)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let response = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "plan.get_today".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"exam_id":EXAM_ID}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+
+        let ToolCallResponse::Completed {
+            output,
+            replayed,
+            undo_available,
+            ..
+        } = response
+        else {
+            panic!("R0 must complete")
+        };
+        assert_eq!(output["business_date"], business_date);
+        assert_eq!(output["plans"][0]["id"], "plan-today");
+        assert!(!replayed);
+        assert!(!undo_available);
+        let (risk, policy_json, receipt_json): (i64, String, String) = sqlx::query_as(
+            "SELECT risk, policy_json, receipt_json FROM agent_steps WHERE run_id='run-checkin' AND step_index=0",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(risk, 0);
+        let policy: Value = serde_json::from_str(&policy_json).unwrap();
+        assert_eq!(policy["delivery"], "shadow");
+        assert_eq!(policy["decision"], "execute");
+        assert_eq!(
+            serde_json::from_str::<Value>(&receipt_json).unwrap()["delivery"],
+            "shadow"
+        );
+        let events: Vec<String> = sqlx::query_scalar(
+            "SELECT event_type FROM agent_events WHERE run_id='run-checkin' ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(events, ["tool.requested", "tool.completed"]);
+    });
+}
+
+#[test]
+fn executor_never_dispatches_write_until_explicitly_rust_owned() {
+    block_on(async {
+        for owner in ["typescript", "shadow", "invalid"] {
+            let pool = migrated_pool().await;
+            let fixture = seed_checkin_fixture(&pool).await;
+            seed_agent_run(&pool).await;
+            sqlx::query(
+                "UPDATE settings SET value=? WHERE key='agent_tool_owner.record.checkin_plan'",
+            )
+            .bind(owner)
+            .execute(&pool)
+            .await
+            .unwrap();
+            let records_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let error = AgentExecutor::new(pool.clone())
+                .execute(ToolCallRequest {
+                    run_id: "run-checkin".to_owned(),
+                    step_index: 0,
+                    tool_name: "record.checkin_plan".to_owned(),
+                    tool_version: "1".to_owned(),
+                    input: fixture["input"].clone(),
+                    idempotency_key: Some(format!("owner/{owner}")),
+                    approval_id: None,
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.code(),
+                if owner == "invalid" {
+                    "ownership_unavailable"
+                } else {
+                    "ownership_not_rust"
+                }
+            );
+            let business_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let steps: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_steps")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!((business_rows, steps), (records_before, 0), "owner={owner}");
+        }
+    });
+}
+
+#[test]
+fn executor_generic_r1_reuses_exactly_once_transaction_and_undo_receipt() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        sqlx::query(
+            "UPDATE settings SET value='rust-owned' WHERE key='agent_tool_owner.record.checkin_plan'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let request = ToolCallRequest {
+            run_id: "run-checkin".to_owned(),
+            step_index: 0,
+            tool_name: "record.checkin_plan".to_owned(),
+            tool_version: "1".to_owned(),
+            input: fixture["input"].clone(),
+            idempotency_key: Some("generic/r1/once".to_owned()),
+            approval_id: None,
+        };
+        let executor = AgentExecutor::new(pool.clone());
+
+        let first = executor.execute(request.clone()).await.unwrap();
+        let replay = executor.execute(request).await.unwrap();
+
+        let ToolCallResponse::Completed {
+            step_id,
+            replayed: false,
+            undo_available: true,
+            ..
+        } = first
+        else {
+            panic!("first R1 call must complete with undo")
+        };
+        let ToolCallResponse::Completed {
+            step_id: replay_step,
+            replayed: true,
+            undo_available: true,
+            ..
+        } = replay
+        else {
+            panic!("duplicate R1 call must replay")
+        };
+        assert_eq!(replay_step, step_id);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2
+        );
+        executor.undo(&step_id).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+    });
+}
+
+#[test]
+fn executor_completion_event_failure_rolls_back_generic_business_and_step() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        sqlx::query(
+            "UPDATE settings SET value='rust-owned' WHERE key='agent_tool_owner.record.checkin_plan'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(
+            r#"
+            CREATE TRIGGER reject_generic_completed BEFORE INSERT ON agent_events
+            WHEN NEW.event_type='tool.completed'
+            BEGIN SELECT RAISE(ABORT,'generic audit failure'); END;
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let error = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "record.checkin_plan".to_owned(),
+                tool_version: "1".to_owned(),
+                input: fixture["input"].clone(),
+                idempotency_key: Some("generic/audit/rollback".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "persistence_error");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        let (status, error_code): (String, String) =
+            sqlx::query_as("SELECT status, error FROM agent_steps")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            (status.as_str(), error_code.as_str()),
+            ("failed", "persistence_error")
+        );
+        let events: Vec<(String, String)> =
+            sqlx::query_as("SELECT event_type, payload_json FROM agent_events ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.0.as_str())
+                .collect::<Vec<_>>(),
+            ["tool.requested", "tool.failed"]
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&events[1].1).unwrap()["error_code"],
+            "persistence_error"
+        );
+        assert!(!events[1].1.contains("generic audit failure"));
     });
 }

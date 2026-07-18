@@ -4,6 +4,7 @@ pub mod agent;
 mod credentials;
 pub mod db;
 
+use agent::executor::AgentExecutor;
 use agent::repository::AgentRepository;
 use agent::runtime::AgentRuntime;
 use tauri::Manager;
@@ -48,7 +49,8 @@ pub fn run() {
             let database_path = agent_database_path(&config_dir);
             let pool = tauri::async_runtime::block_on(db::runtime::connect(&database_path))
                 .map_err(|error| setup_error("database", &error))?;
-            let runtime = AgentRuntime::new(AgentRepository::new(pool));
+            let runtime =
+                AgentRuntime::new(AgentRepository::new(pool.clone()), AgentExecutor::new(pool));
             tauri::async_runtime::block_on(runtime.recover_interrupted())
                 .map_err(|error| setup_error("recovery", &error))?;
             app.manage(runtime);

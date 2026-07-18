@@ -1,7 +1,7 @@
 use chrono::{DateTime, Duration, FixedOffset, Timelike};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{Executor, FromRow, Sqlite};
 
 use crate::agent::error::AgentError;
 
@@ -50,11 +50,14 @@ pub fn business_date_at(now: DateTime<FixedOffset>) -> String {
     date.format("%Y-%m-%d").to_string()
 }
 
-pub async fn get_today(
-    pool: &SqlitePool,
+pub async fn get_today<'e, E>(
+    executor: E,
     input: PlanGetTodayInput,
     business_date: &str,
-) -> Result<PlanGetTodayOutput, AgentError> {
+) -> Result<PlanGetTodayOutput, AgentError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let plans = sqlx::query_as::<_, PlanWithNames>(
         r#"
         SELECT
@@ -108,7 +111,7 @@ pub async fn get_today(
     )
     .bind(input.exam_id)
     .bind(business_date)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await
     .map_err(|_| AgentError::Persistence("plan.get_today query failed".to_owned()))?;
 
