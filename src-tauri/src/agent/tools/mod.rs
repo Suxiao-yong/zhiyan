@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use jsonschema::validator_for;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agent::error::AgentError;
@@ -9,7 +9,7 @@ use crate::agent::error::AgentError;
 pub mod plan;
 pub mod record;
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RiskLevel {
     #[serde(rename = "R0")]
     R0,
@@ -23,7 +23,7 @@ pub enum RiskLevel {
     R4,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Confirmation {
     Automatic,
@@ -32,7 +32,7 @@ pub enum Confirmation {
     NavigationOnly,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Idempotency {
     RetrySafe,
@@ -54,7 +54,7 @@ pub struct ToolDescriptor {
     pub data_permissions: Vec<&'static str>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ToolOwnership {
     Typescript,
@@ -63,25 +63,16 @@ pub enum ToolOwnership {
     Unavailable,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ListedTool {
-    pub descriptor: ToolDescriptor,
-    pub ownership: ToolOwnership,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ToolRegistry {
-    tools: BTreeMap<(String, String), ToolDescriptor>,
+    tools: BTreeMap<&'static str, ToolDescriptor>,
 }
 
 impl ToolRegistry {
     pub fn built_in() -> Self {
         let mut tools = BTreeMap::new();
         for descriptor in [plan::descriptor(), record::descriptor()] {
-            tools.insert(
-                (descriptor.name.to_string(), descriptor.version.to_string()),
-                descriptor,
-            );
+            tools.insert(descriptor.name, descriptor);
         }
         Self { tools }
     }
@@ -93,30 +84,20 @@ impl ToolRegistry {
         self.tools.values().map(|d| d.name).collect()
     }
     pub fn get(&self, name: &str, version: &str) -> Result<&ToolDescriptor, AgentError> {
-        if let Some(descriptor) = self.tools.get(&(name.to_string(), version.to_string())) {
-            return Ok(descriptor);
-        }
-        if self.tools.keys().any(|(n, _)| n == name) {
-            Err(AgentError::ToolVersionMismatch)
+        let descriptor = self.tools.get(name).ok_or(AgentError::ToolNotFound)?;
+        if descriptor.version == version {
+            Ok(descriptor)
         } else {
-            Err(AgentError::ToolNotFound)
+            Err(AgentError::ToolVersionMismatch)
         }
-    }
-    pub fn listed(&self, ownership: ToolOwnership) -> Vec<ListedTool> {
-        self.descriptors()
-            .into_iter()
-            .cloned()
-            .map(|descriptor| ListedTool {
-                descriptor,
-                ownership: ownership.clone(),
-            })
-            .collect()
     }
     pub fn validate_input(
         &self,
-        descriptor: &ToolDescriptor,
+        name: &str,
+        version: &str,
         input: &Value,
     ) -> Result<(), AgentError> {
+        let descriptor = self.get(name, version)?;
         validate(&descriptor.input_schema, input)
     }
     pub fn validate_output(
@@ -159,30 +140,66 @@ mod tests {
     #[test]
     fn checkin_schema_rejects_unlocked_and_invalid_fields() {
         let registry = ToolRegistry::built_in();
-        let descriptor = registry.get("record.checkin_plan", "1").unwrap();
         let invalid = json!({"plan_id":"p", "duration_min":0, "finish":false});
-        let error = registry.validate_input(descriptor, &invalid).unwrap_err();
+        let error = registry
+            .validate_input("record.checkin_plan", "1", &invalid)
+            .unwrap_err();
         assert_eq!(error.code(), "tool_schema_invalid");
         let top_unknown =
             json!({"plan_id":"p", "duration_min":1, "subject_id":"s", "finish":false});
-        assert!(registry.validate_input(descriptor, &top_unknown).is_err());
+        assert!(registry
+            .validate_input("record.checkin_plan", "1", &top_unknown)
+            .is_err());
         let top_knowledge_point_unknown =
             json!({"plan_id":"p", "duration_min":1, "knowledge_point_id":"k", "finish":false});
         assert!(registry
-            .validate_input(descriptor, &top_knowledge_point_unknown)
+            .validate_input("record.checkin_plan", "1", &top_knowledge_point_unknown)
             .is_err());
         let nested_unknown = json!({"plan_id":"p", "duration_min":1, "finish":false, "wrong_questions":[{"subject_id":"s"}]});
         assert!(registry
-            .validate_input(descriptor, &nested_unknown)
+            .validate_input("record.checkin_plan", "1", &nested_unknown)
             .is_err());
         let nested_knowledge_point_unknown = json!({"plan_id":"p", "duration_min":1, "finish":false, "wrong_questions":[{"knowledge_point_id":"k"}]});
         assert!(registry
-            .validate_input(descriptor, &nested_knowledge_point_unknown)
+            .validate_input("record.checkin_plan", "1", &nested_knowledge_point_unknown)
             .is_err());
         let nested: Result<RecordCheckinPlanInput, _> = serde_json::from_value(json!({
             "plan_id":"p", "duration_min":1, "finish":false,
             "wrong_questions":[{"knowledge_point_id":"k", "unexpected":1}]
         }));
         assert!(nested.is_err());
+    }
+
+    #[test]
+    fn plan_output_fixture_is_valid_and_missing_field_is_rejected() {
+        let registry = ToolRegistry::built_in();
+        let plan = json!({
+            "id":"p1", "exam_id":"e1", "subject_id":"s1", "knowledge_point_id":null,
+            "date":"2026-07-18", "planned_tasks":null, "planned_duration":30,
+            "actual_duration":null, "actual_tasks":null, "status":"pending", "generated_by":"local",
+            "ai_suggestion":null, "user_modified":0, "sort_order":0, "created_at":"now", "updated_at":"now",
+            "subject_name":"Math", "knowledge_point_name":null, "record_count":0
+        });
+        let expected_output = json!({"business_date":"2026-07-18", "plans":[plan]});
+        let descriptor = registry.get("plan.get_today", "1").unwrap();
+        assert!(registry
+            .validate_output(descriptor, &expected_output)
+            .is_ok());
+        let mut missing = expected_output.clone();
+        missing["plans"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("record_count");
+        assert!(registry.validate_output(descriptor, &missing).is_err());
+    }
+
+    #[test]
+    fn valid_record_input_passes_schema_validation() {
+        let registry = ToolRegistry::built_in();
+        let input = json!({"plan_id":"p1", "duration_min":30, "finish":true,
+            "questions_count":5, "correct_count":4, "wrong_questions":[]});
+        assert!(registry
+            .validate_input("record.checkin_plan", "1", &input)
+            .is_ok());
     }
 }

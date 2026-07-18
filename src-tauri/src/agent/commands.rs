@@ -158,4 +158,15 @@ mod tests {
             "invalid transition from completed using start"
         );
     }
+
+    #[test]
+    fn idempotency_conflict_has_stable_safe_command_error() {
+        let error = CommandError::from(AgentError::IdempotencyConflict);
+        assert_eq!(error.code, "idempotency_conflict");
+        assert_eq!(
+            error.message,
+            "idempotency key is already being resolved; retry"
+        );
+        assert!(!error.message.contains("constraint"));
+    }
 }
