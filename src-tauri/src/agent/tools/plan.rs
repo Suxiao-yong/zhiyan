@@ -1,11 +1,121 @@
+use chrono::{DateTime, Duration, FixedOffset, Timelike};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sqlx::{FromRow, SqlitePool};
+
+use crate::agent::error::AgentError;
 
 use super::{Confirmation, Idempotency, RiskLevel, ToolDescriptor};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanGetTodayInput {
     pub exam_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct PlanWithNames {
+    pub id: String,
+    pub exam_id: String,
+    pub subject_id: String,
+    pub knowledge_point_id: Option<String>,
+    pub date: String,
+    pub planned_tasks: Option<String>,
+    pub planned_duration: Option<i64>,
+    pub actual_duration: Option<i64>,
+    pub actual_tasks: Option<String>,
+    pub status: String,
+    pub generated_by: String,
+    pub ai_suggestion: Option<String>,
+    pub user_modified: i64,
+    pub sort_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub subject_name: Option<String>,
+    pub knowledge_point_name: Option<String>,
+    pub record_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanGetTodayOutput {
+    pub business_date: String,
+    pub plans: Vec<PlanWithNames>,
+}
+
+pub fn business_date_at(now: DateTime<FixedOffset>) -> String {
+    let date = if now.hour() < 4 {
+        now.date_naive() - Duration::days(1)
+    } else {
+        now.date_naive()
+    };
+    date.format("%Y-%m-%d").to_string()
+}
+
+pub async fn get_today(
+    pool: &SqlitePool,
+    input: PlanGetTodayInput,
+    business_date: &str,
+) -> Result<PlanGetTodayOutput, AgentError> {
+    let plans = sqlx::query_as::<_, PlanWithNames>(
+        r#"
+        SELECT
+            p.id,
+            p.exam_id,
+            p.subject_id,
+            p.knowledge_point_id,
+            p.date,
+            p.planned_tasks,
+            p.planned_duration,
+            CASE
+                WHEN COUNT(r.id) > 0 THEN COALESCE(SUM(r.duration_min), 0)
+                ELSE p.actual_duration
+            END AS actual_duration,
+            CASE
+                WHEN COUNT(r.id) > 0 THEN COALESCE(
+                    (
+                        SELECT latest.content
+                        FROM study_records latest
+                        WHERE latest.plan_id = p.id
+                          AND latest.content IS NOT NULL
+                          AND latest.content <> ''
+                        ORDER BY latest.created_at DESC
+                        LIMIT 1
+                    ),
+                    p.planned_tasks
+                )
+                ELSE p.actual_tasks
+            END AS actual_tasks,
+            CASE
+                WHEN p.status = 'pending' AND COUNT(r.id) > 0 THEN 'in_progress'
+                ELSE p.status
+            END AS status,
+            p.generated_by,
+            p.ai_suggestion,
+            p.user_modified,
+            p.sort_order,
+            p.created_at,
+            p.updated_at,
+            s.name AS subject_name,
+            k.name AS knowledge_point_name,
+            COUNT(r.id) AS record_count
+        FROM study_plans p
+        LEFT JOIN subjects s ON s.id = p.subject_id
+        LEFT JOIN knowledge_points k ON k.id = p.knowledge_point_id
+        LEFT JOIN study_records r ON r.plan_id = p.id
+        WHERE p.exam_id = ? AND p.date = ?
+        GROUP BY p.id
+        ORDER BY p.date, p.sort_order, p.created_at
+        "#,
+    )
+    .bind(input.exam_id)
+    .bind(business_date)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| AgentError::Persistence("plan.get_today query failed".to_owned()))?;
+
+    Ok(PlanGetTodayOutput {
+        business_date: business_date.to_owned(),
+        plans,
+    })
 }
 
 pub fn descriptor() -> ToolDescriptor {
