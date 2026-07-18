@@ -1,13 +1,27 @@
+use std::borrow::Cow;
 use std::future::Future;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::DateTime;
 use serde_json::Value;
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+use sqlx::{
+    migrate::{Migration as SqlxMigration, MigrationType, Migrator},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
+    SqlitePool,
+};
+use tokio::sync::Barrier;
+use uuid::Uuid;
 use zhiyan_lib::{
+    agent::commands::CommandError,
+    agent::error::AgentError,
     agent::model::{ToolCallRequest, ToolCallResponse},
     agent::tools::plan::{self, PlanGetTodayInput},
     agent::{
         executor::{AgentExecutor, RecordCheckinExecutionRequest},
+        repository::AgentRepository,
+        runtime::AgentRuntime,
         tools::record::{self, RecordCheckinPlanInput},
     },
     db,
@@ -66,6 +80,249 @@ async fn migrated_pool() -> SqlitePool {
         sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
     }
     pool
+}
+
+struct WalDatabase {
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+impl WalDatabase {
+    fn new() -> Self {
+        let directory =
+            std::env::temp_dir().join(format!("zhiyan-agent-tools-wal-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("agent-tools.sqlite");
+        Self { directory, path }
+    }
+
+    async fn migrated_pool(&self) -> SqlitePool {
+        let pool = self.open_pool().await;
+        for migration in db::migrations() {
+            sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+        }
+        pool
+    }
+
+    async fn open_pool(&self) -> SqlitePool {
+        let options = SqliteConnectOptions::new()
+            .filename(&self.path)
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(options)
+            .await
+            .unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("PRAGMA journal_mode")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            "wal"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("PRAGMA busy_timeout")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            5_000
+        );
+        pool
+    }
+}
+
+impl Drop for WalDatabase {
+    fn drop(&mut self) {
+        for _ in 0..20 {
+            match std::fs::remove_dir_all(&self.directory) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(_) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+    }
+}
+
+fn migrator_through(max_version: i64) -> Migrator {
+    let migrations = db::migrations()
+        .into_iter()
+        .filter(|migration| migration.version <= max_version)
+        .map(|migration| {
+            SqlxMigration::new(
+                migration.version,
+                Cow::Borrowed(migration.description),
+                MigrationType::ReversibleUp,
+                Cow::Borrowed(migration.sql),
+                false,
+            )
+        })
+        .collect::<Vec<_>>();
+    Migrator {
+        migrations: Cow::Owned(migrations),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
+}
+
+async fn seed_versioned_database(pool: &SqlitePool, version: i64, label: &str) {
+    sqlx::query("INSERT INTO exams(id,name,exam_date) VALUES(?,?, '2030-01-01')")
+        .bind(format!("exam-{label}"))
+        .bind(format!("Exam {label}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO subjects(id,exam_id,name) VALUES(?,?,?)")
+        .bind(format!("subject-{label}"))
+        .bind(format!("exam-{label}"))
+        .bind(format!("Subject {label}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO study_plans(id,exam_id,subject_id,date,planned_tasks) VALUES(?,?,?,'2030-01-01',?)",
+    )
+    .bind(format!("plan-{label}"))
+    .bind(format!("exam-{label}"))
+    .bind(format!("subject-{label}"))
+    .bind(format!("Keep plan {label}"))
+    .execute(pool)
+    .await
+    .unwrap();
+    if version >= 3 {
+        sqlx::query(
+            "INSERT INTO study_records(id,plan_id,date,subject_id,duration_min,content) VALUES(?,?, '2030-01-01',?,15,?)",
+        )
+        .bind(format!("record-{label}"))
+        .bind(format!("plan-{label}"))
+        .bind(format!("subject-{label}"))
+        .bind(format!("Keep record {label}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    } else {
+        sqlx::query(
+            "INSERT INTO study_records(id,date,subject_id,duration_min,content) VALUES(?,'2030-01-01',?,15,?)",
+        )
+        .bind(format!("record-{label}"))
+        .bind(format!("subject-{label}"))
+        .bind(format!("Keep record {label}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    if version >= 4 {
+        sqlx::query("INSERT INTO agent_sessions(id,title) VALUES(?,?)")
+            .bind(format!("session-{label}"))
+            .bind(format!("Session {label}"))
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO agent_runs(id,session_id,goal) VALUES(?,?,?)")
+            .bind(format!("run-{label}"))
+            .bind(format!("session-{label}"))
+            .bind(format!("Keep run {label}"))
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO agent_steps(id,run_id,step_index,tool_name,tool_version,status) VALUES(?,?,0,'plan.get_today','1','completed')",
+        )
+        .bind(format!("step-{label}"))
+        .bind(format!("run-{label}"))
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agent_events(run_id,step_id,event_type,payload_json) VALUES(?,?,'tool.completed','{}')",
+        )
+        .bind(format!("run-{label}"))
+        .bind(format!("step-{label}"))
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO agent_approvals(id,run_id,step_id,risk,status,expires_at) VALUES(?,?,?,3,'approved','2030-01-01T00:00:00Z')",
+        )
+        .bind(format!("approval-{label}"))
+        .bind(format!("run-{label}"))
+        .bind(format!("step-{label}"))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
+
+async fn assert_v5_database(pool: &SqlitePool, label: &str, expected_agent_rows: i64) {
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_plans WHERE id=?")
+            .bind(format!("plan-{label}"))
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records WHERE id=?")
+            .bind(format!("record-{label}"))
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        1
+    );
+    for table in [
+        "agent_sessions",
+        "agent_runs",
+        "agent_steps",
+        "agent_events",
+        "agent_approvals",
+    ] {
+        let exists: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?")
+                .bind(table)
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(exists, 1, "missing {table}");
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_steps WHERE id=?")
+            .bind(format!("step-{label}"))
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        expected_agent_rows
+    );
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('agent_steps')")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    for column in ["policy_json", "receipt_json", "undo_json", "undone_at"] {
+        assert!(columns.iter().any(|actual| actual == column));
+    }
+    let owners: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key,value FROM settings WHERE key LIKE 'agent_tool_owner.%' ORDER BY key",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        owners,
+        [
+            (
+                "agent_tool_owner.plan.get_today".to_owned(),
+                "shadow".to_owned()
+            ),
+            (
+                "agent_tool_owner.record.checkin_plan".to_owned(),
+                "typescript".to_owned()
+            )
+        ]
+    );
 }
 
 async fn seed_exam_tree(pool: &SqlitePool) {
@@ -1793,6 +2050,455 @@ fn executor_generic_r1_reuses_exactly_once_transaction_and_undo_receipt() {
                 .unwrap(),
             1
         );
+    });
+}
+
+#[test]
+fn concurrent_generic_r1_duplicate_on_wal_completes_once_and_replays_once() {
+    block_on(async {
+        let database = WalDatabase::new();
+        let pool = database.migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let request = ToolCallRequest {
+            run_id: "run-checkin".to_owned(),
+            step_index: 0,
+            tool_name: "record.checkin_plan".to_owned(),
+            tool_version: "1".to_owned(),
+            input: fixture["input"].clone(),
+            idempotency_key: Some("generic/r1/wal-barrier".to_owned()),
+            approval_id: None,
+        };
+        let executor = AgentExecutor::new(pool.clone());
+        let barrier = Arc::new(Barrier::new(2));
+        let left = {
+            let barrier = barrier.clone();
+            let executor = executor.clone();
+            let request = request.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                executor.execute(request).await
+            })
+        };
+        let right = {
+            let barrier = barrier.clone();
+            let executor = executor.clone();
+            tokio::spawn(async move {
+                barrier.wait().await;
+                executor.execute(request).await
+            })
+        };
+
+        let responses = [left.await.unwrap().unwrap(), right.await.unwrap().unwrap()];
+
+        assert_eq!(
+            responses
+                .iter()
+                .filter(|response| matches!(
+                    response,
+                    ToolCallResponse::Completed { replayed: true, .. }
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(
+            responses
+                .iter()
+                .filter(|response| matches!(
+                    response,
+                    ToolCallResponse::Completed {
+                        replayed: false,
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM study_records WHERE plan_id='plan-1'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM agent_steps WHERE idempotency_key='generic/r1/wal-barrier'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM agent_events WHERE event_type='tool.completed'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1
+        );
+
+        pool.close().await;
+        drop(pool);
+        drop(database);
+    });
+}
+
+#[test]
+fn generic_r1_does_not_treat_run_step_uniqueness_as_idempotency_replay() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let mut request = ToolCallRequest {
+            run_id: "run-checkin".to_owned(),
+            step_index: 0,
+            tool_name: "record.checkin_plan".to_owned(),
+            tool_version: "1".to_owned(),
+            input: fixture["input"].clone(),
+            idempotency_key: Some("generic/r1/run-step-first".to_owned()),
+            approval_id: None,
+        };
+
+        executor.execute(request.clone()).await.unwrap();
+        request.idempotency_key = Some("generic/r1/run-step-second".to_owned());
+        let error = executor.execute(request).await.unwrap_err();
+
+        assert_eq!(error.code(), "conflict");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_steps")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2
+        );
+    });
+}
+
+#[test]
+fn generic_r1_receipts_redact_free_text_and_list_descriptor_permissions() {
+    block_on(async {
+        const SECRET: &str = "SECRET_MARKER";
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let mut input = fixture["input"].clone();
+        input["content"] = serde_json::json!(format!("{SECRET} private content"));
+        input["difficulty_notes"] = serde_json::json!(format!("{SECRET} private notes"));
+        input["wrong_questions"][0]["error_reason"] =
+            serde_json::json!(format!("{SECRET} private answer notes"));
+
+        AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "record.checkin_plan".to_owned(),
+                tool_version: "1".to_owned(),
+                input,
+                idempotency_key: Some("generic/r1/privacy".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+
+        let (input_json, receipt_json): (String, String) = sqlx::query_as(
+            "SELECT input_json,receipt_json FROM agent_steps WHERE idempotency_key='generic/r1/privacy'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!input_json.contains(SECRET));
+        let snapshot: Value = serde_json::from_str(&input_json).unwrap();
+        assert_eq!(
+            snapshot["fields"],
+            serde_json::json!({
+                "plan_id":"plan-1",
+                "duration_min":30,
+                "questions_count":10,
+                "correct_count":8,
+                "mastery_rating":4,
+                "mood":5,
+                "session_time":"evening",
+                "finish":false,
+                "wrong_question_count":1
+            })
+        );
+        assert!(snapshot["fingerprint"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:")));
+        let receipt: Value = serde_json::from_str(&receipt_json).unwrap();
+        assert_eq!(
+            receipt["permissions"],
+            serde_json::json!([
+                "study_plans:read_write",
+                "study_records:write",
+                "wrong_questions:write",
+                "agent_audit:write"
+            ])
+        );
+        let events: Vec<String> =
+            sqlx::query_scalar("SELECT payload_json FROM agent_events ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(events.iter().all(|event| !event.contains(SECRET)));
+    });
+}
+
+#[test]
+fn record_fingerprint_replays_after_pool_reopen_and_conflicts_on_free_text_change() {
+    block_on(async {
+        let database = WalDatabase::new();
+        let pool = database.migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let request = ToolCallRequest {
+            run_id: "run-checkin".to_owned(),
+            step_index: 0,
+            tool_name: "record.checkin_plan".to_owned(),
+            tool_version: "1".to_owned(),
+            input: fixture["input"].clone(),
+            idempotency_key: Some("generic/r1/reopen-fingerprint".to_owned()),
+            approval_id: None,
+        };
+        let first = AgentExecutor::new(pool.clone())
+            .execute(request.clone())
+            .await
+            .unwrap();
+        pool.close().await;
+        drop(pool);
+
+        let reopened = database.open_pool().await;
+        let replay = AgentExecutor::new(reopened.clone())
+            .execute(request.clone())
+            .await
+            .unwrap();
+        assert!(matches!(
+            replay,
+            ToolCallResponse::Completed { replayed: true, .. }
+        ));
+        assert_eq!(
+            serde_json::to_value(first).unwrap()["output"],
+            serde_json::to_value(replay).unwrap()["output"]
+        );
+
+        let mut changed = request;
+        changed.input["difficulty_notes"] = serde_json::json!("different private free text");
+        let error = AgentExecutor::new(reopened.clone())
+            .execute(changed)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "idempotency_conflict");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM agent_steps WHERE idempotency_key='generic/r1/reopen-fingerprint'"
+            )
+            .fetch_one(&reopened)
+            .await
+            .unwrap(),
+            1
+        );
+        reopened.close().await;
+        drop(reopened);
+        drop(database);
+    });
+}
+
+#[test]
+fn sql_failures_and_command_errors_never_expose_private_diagnostics() {
+    block_on(async {
+        const SECRET: &str = "SECRET_MARKER";
+        const SQL_TEXT: &str = "SELECT secret FROM private_table";
+        const ABSOLUTE_PATH: &str = r"C:\private\zhiyan.db";
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let mut input = fixture["input"].clone();
+        input["difficulty_notes"] =
+            serde_json::json!(format!("{SECRET} {SQL_TEXT} %APPDATA% {ABSOLUTE_PATH}"));
+        sqlx::raw_sql(
+            r#"
+            CREATE TRIGGER reject_private_completed BEFORE INSERT ON agent_events
+            WHEN NEW.event_type='tool.completed'
+            BEGIN SELECT RAISE(ABORT,'SECRET_MARKER SELECT secret FROM private_table %APPDATA% C:\private\zhiyan.db'); END;
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let error = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "record.checkin_plan".to_owned(),
+                tool_version: "1".to_owned(),
+                input,
+                idempotency_key: Some("generic/r1/private-error".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        let command_error = CommandError::from(AgentError::Persistence(format!(
+            "{SECRET} {SQL_TEXT} %APPDATA% {ABSOLUTE_PATH}"
+        )));
+        let stored: Vec<String> = sqlx::query_scalar(
+            r#"
+            SELECT input_json FROM agent_steps
+            UNION ALL SELECT policy_json FROM agent_steps
+            UNION ALL SELECT payload_json FROM agent_events
+            "#,
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(error.code(), "persistence_error");
+        assert_eq!(command_error.code, "persistence_error");
+        assert_eq!(command_error.message, "agent persistence failed");
+        for serialized in stored.into_iter().chain([command_error.message]) {
+            assert!(!serialized.contains(SECRET));
+            assert!(!serialized.contains(SQL_TEXT));
+            assert!(!serialized.contains("%APPDATA%"));
+            assert!(!serialized.contains(ABSOLUTE_PATH));
+        }
+        let conflict = CommandError::from(AgentError::IdempotencyConflict);
+        assert_eq!(conflict.code, "idempotency_conflict");
+        assert_eq!(
+            conflict.message,
+            "idempotency key is already being resolved; retry"
+        );
+        assert!(!conflict.message.contains("constraint"));
+    });
+}
+
+#[test]
+fn file_databases_from_v1_through_v4_upgrade_once_and_reopen_through_both_pools() {
+    block_on(async {
+        for version in 1..=4 {
+            let database = WalDatabase::new();
+            let seed_pool = database.open_pool().await;
+            migrator_through(version).run(&seed_pool).await.unwrap();
+            let label = format!("v{version}");
+            seed_versioned_database(&seed_pool, version, &label).await;
+            sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                .execute(&seed_pool)
+                .await
+                .unwrap();
+            seed_pool.close().await;
+            drop(seed_pool);
+
+            let plugin_pool = database.open_pool().await;
+            migrator_through(5).run(&plugin_pool).await.unwrap();
+            let runtime_pool = db::runtime::connect(&database.path).await.unwrap();
+            assert_v5_database(&plugin_pool, &label, i64::from(version == 4)).await;
+            assert_v5_database(&runtime_pool, &label, i64::from(version == 4)).await;
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM _sqlx_migrations WHERE version=5 AND success=1"
+                )
+                .fetch_one(&plugin_pool)
+                .await
+                .unwrap(),
+                1
+            );
+            migrator_through(5).run(&plugin_pool).await.unwrap();
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM _sqlx_migrations WHERE version=5 AND success=1"
+                )
+                .fetch_one(&plugin_pool)
+                .await
+                .unwrap(),
+                1
+            );
+            runtime_pool.close().await;
+            plugin_pool.close().await;
+            drop(runtime_pool);
+            drop(plugin_pool);
+            drop(database);
+        }
+    });
+}
+
+#[test]
+fn prepared_restore_replaces_with_v4_backup_and_relaunch_upgrades_it_once() {
+    block_on(async {
+        let primary = WalDatabase::new();
+        let backup = WalDatabase::new();
+
+        let backup_pool = backup.open_pool().await;
+        migrator_through(4).run(&backup_pool).await.unwrap();
+        seed_versioned_database(&backup_pool, 4, "backup").await;
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&backup_pool)
+            .await
+            .unwrap();
+        backup_pool.close().await;
+        drop(backup_pool);
+
+        let plugin_pool = primary.open_pool().await;
+        migrator_through(5).run(&plugin_pool).await.unwrap();
+        seed_versioned_database(&plugin_pool, 5, "primary").await;
+        let runtime_pool = db::runtime::connect(&primary.path).await.unwrap();
+        let runtime = AgentRuntime::new(
+            AgentRepository::new(runtime_pool.clone()),
+            AgentExecutor::new(runtime_pool.clone()),
+        );
+
+        runtime.prepare_database_restore().await.unwrap();
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&plugin_pool)
+            .await
+            .unwrap();
+        plugin_pool.close().await;
+        drop(runtime_pool);
+        drop(plugin_pool);
+        std::fs::copy(&backup.path, &primary.path).unwrap();
+
+        let relaunched_plugin = primary.open_pool().await;
+        migrator_through(5).run(&relaunched_plugin).await.unwrap();
+        let relaunched_runtime = db::runtime::connect(&primary.path).await.unwrap();
+        assert_v5_database(&relaunched_plugin, "backup", 1).await;
+        assert_v5_database(&relaunched_runtime, "backup", 1).await;
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM study_plans WHERE id='plan-primary'"
+            )
+            .fetch_one(&relaunched_plugin)
+            .await
+            .unwrap(),
+            0
+        );
+        migrator_through(5).run(&relaunched_plugin).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM _sqlx_migrations WHERE version=5 AND success=1"
+            )
+            .fetch_one(&relaunched_plugin)
+            .await
+            .unwrap(),
+            1
+        );
+
+        relaunched_runtime.close().await;
+        relaunched_plugin.close().await;
+        drop(relaunched_runtime);
+        drop(relaunched_plugin);
+        drop(backup);
+        drop(primary);
     });
 }
 

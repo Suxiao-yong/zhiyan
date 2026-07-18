@@ -76,3 +76,15 @@
 - [ ] 回归 Dashboard、学习计划、计划打卡、学习记录、分析、可视化和设置，确认原有数据与操作不受 Agent 表影响。
 - [ ] 在设置中创建数据库备份；恢复时确认执行顺序为 `closeDb()` -> `agent_prepare_database_restore` -> 替换数据库 -> 重启应用。
 - [ ] 恢复后再次打开 `/agent-debug`，确认 Runtime 健康、原有业务数据可读，且 Agent 五表仍存在。
+
+## Agent Tools Policy Vertical Slice
+
+> 以下检查需在打包后的 Windows 应用上执行。未完成的项保持未勾选并如实记录。
+
+- [ ] 备份 `%APPDATA%\com.zhiyan.app\zhiyan.db`，构建并安装 Windows 包。
+- [ ] 回归 Dashboard、学习计划、计划打卡、学习记录、错题、分析、可视化、设置、导出、备份和恢复流程。
+- [ ] `/agent-debug` 列出两个版本 1 工具描述符；`plan.get_today` 输出与 TypeScript 视图匹配。
+- [ ] 在一次性数据库中设置 `record.checkin_plan` 为 `rust-owned`，提交一次打卡并用相同幂等键重复调用；确认只有一条记录和一次时长增量。
+- [ ] 执行一次和两次 undo；第一次补偿、第二次为幂等回放。
+- [ ] 通过调试构建的 R3 合成测试：无审批零写入、有效审批一次写入、过期/陈旧/拒绝审批零写入。
+- [ ] 使用 `closeDb -> agent_prepare_database_restore -> 替换 -> 重启` 恢复备份；验证旧业务和 Agent 行。

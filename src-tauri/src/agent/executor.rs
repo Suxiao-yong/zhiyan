@@ -1,9 +1,10 @@
-use std::hash::{Hash, Hasher};
+use std::fmt::Write;
 
 use chrono::Duration as ChronoDuration;
 use chrono::{Local, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 use uuid::Uuid;
 
@@ -65,6 +66,7 @@ struct StoredStep {
     status: String,
     input_json: Option<String>,
     output_json: Option<String>,
+    idempotency_key: Option<String>,
     undone_at: Option<String>,
 }
 
@@ -122,6 +124,8 @@ pub(crate) struct TestDispatcherConfig {
     dispatch_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     invalid_output: bool,
     ownership_flip: Option<String>,
+    rollback_before_dispatch_once: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    start_idempotency_race_once: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 #[derive(Clone)]
@@ -202,16 +206,30 @@ impl AgentExecutor {
         self.registry
             .validate_input(&request.tool_name, &request.tool_version, &request.input)?;
         let normalized_input = normalize_input(&descriptor, request.input.clone())?;
-        let input_json = canonical_json(normalized_input.clone()).to_string();
+        let input_json = input_snapshot(&descriptor, &normalized_input)?.to_string();
+        let first = self
+            .execute_once(&request, &descriptor, normalized_input.clone(), &input_json)
+            .await;
+        if first != Err(AgentError::IdempotencyConflict) || request.idempotency_key.is_none() {
+            return first;
+        }
+        self.resolve_idempotency_race(&request, &descriptor, normalized_input, &input_json)
+            .await
+    }
+
+    async fn execute_once(
+        &self,
+        request: &ToolCallRequest,
+        descriptor: &ToolDescriptor,
+        normalized_input: Value,
+        input_json: &str,
+    ) -> Result<ToolCallResponse, AgentError> {
+        if self.dispatcher.start_idempotency_race() {
+            return Err(AgentError::IdempotencyConflict);
+        }
         let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
         let result = self
-            .execute_in_transaction(
-                &mut tx,
-                &request,
-                &descriptor,
-                normalized_input,
-                &input_json,
-            )
+            .execute_in_transaction(&mut tx, request, descriptor, normalized_input, input_json)
             .await;
         match result {
             Ok(CoreOutcome::Response(response)) => {
@@ -227,9 +245,9 @@ impl AgentExecutor {
                 if should_persist_failure(&error) {
                     persist_failed_attempt(
                         &self.pool,
-                        &request,
-                        &descriptor,
-                        &input_json,
+                        request,
+                        descriptor,
+                        input_json,
                         error.code(),
                     )
                     .await?;
@@ -237,6 +255,59 @@ impl AgentExecutor {
                 Err(error)
             }
         }
+    }
+
+    async fn resolve_idempotency_race(
+        &self,
+        request: &ToolCallRequest,
+        descriptor: &ToolDescriptor,
+        normalized_input: Value,
+        input_json: &str,
+    ) -> Result<ToolCallResponse, AgentError> {
+        let key = request
+            .idempotency_key
+            .as_deref()
+            .ok_or(AgentError::IdempotencyConflict)?;
+        for _ in 0..3 {
+            let mut tx = match self.pool.begin().await {
+                Ok(tx) => tx,
+                Err(error) if is_sqlite_busy(&error) => continue,
+                Err(error) => return Err(map_sqlx(error)),
+            };
+            let stored = match find_step_by_idempotency_key(&mut tx, key).await {
+                Ok(stored) => stored,
+                Err(AgentError::IdempotencyConflict) => {
+                    tx.rollback().await.map_err(map_sqlx)?;
+                    continue;
+                }
+                Err(error) => {
+                    tx.rollback().await.map_err(map_sqlx)?;
+                    return Err(error);
+                }
+            };
+            tx.rollback().await.map_err(map_sqlx)?;
+            match stored {
+                Some(stored) if stored.status == "completed" => {
+                    validate_stored_step(&stored, request, input_json)?;
+                    return replay_response(&stored, descriptor.supports_undo);
+                }
+                Some(_) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                None => {
+                    match self
+                        .execute_once(request, descriptor, normalized_input.clone(), input_json)
+                        .await
+                    {
+                        Err(AgentError::IdempotencyConflict) => {
+                            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                        }
+                        result => return result,
+                    }
+                }
+            }
+        }
+        Err(AgentError::IdempotencyConflict)
     }
 
     pub async fn decide_approval(
@@ -378,6 +449,7 @@ impl AgentExecutor {
         }
 
         set_step_running(tx, &reserved.id).await?;
+        self.dispatcher.rollback_before_dispatch()?;
         // Built-in dispatch is transaction-local SQLite work. Dropping the timeout future
         // cancels only statements on this transaction, which is rolled back by the caller.
         let dispatched = tokio::time::timeout(
@@ -519,10 +591,10 @@ impl AgentExecutor {
             .filter(|key| !key.trim().is_empty())
             .ok_or(AgentError::IdempotencyRequired)?
             .to_owned();
-        let input_json = canonical_json(
-            serde_json::to_value(&request.input).map_err(|_| AgentError::ToolSchemaInvalid)?,
-        )
-        .to_string();
+        let descriptor = record::descriptor();
+        let normalized =
+            serde_json::to_value(&request.input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+        let input_json = input_snapshot(&descriptor, &normalized)?.to_string();
         let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
         let result = async {
             let ownership = ownership_for_in_transaction(&mut tx, RECORD_CHECKIN_TOOL).await?;
@@ -546,6 +618,33 @@ impl AgentExecutor {
 }
 
 impl ToolDispatcher {
+    fn start_idempotency_race(&self) -> bool {
+        #[cfg(test)]
+        if let Self::Synthetic(config) = self {
+            use std::sync::atomic::Ordering;
+            return config
+                .start_idempotency_race_once
+                .as_ref()
+                .is_some_and(|flag| flag.swap(false, Ordering::SeqCst));
+        }
+        false
+    }
+
+    fn rollback_before_dispatch(&self) -> Result<(), AgentError> {
+        #[cfg(test)]
+        if let Self::Synthetic(config) = self {
+            use std::sync::atomic::Ordering;
+            if config
+                .rollback_before_dispatch_once
+                .as_ref()
+                .is_some_and(|flag| flag.swap(false, Ordering::SeqCst))
+            {
+                return Err(AgentError::IdempotencyConflict);
+            }
+        }
+        Ok(())
+    }
+
     async fn before_ownership_check(
         &self,
         _tx: &mut Transaction<'_, Sqlite>,
@@ -722,7 +821,7 @@ pub(crate) async fn execute_checkin_in_transaction(
 ) -> Result<RecordCheckinExecutionResponse, AgentError> {
     let stored = sqlx::query_as::<_, StoredStep>(
         r#"
-        SELECT id, tool_name, tool_version, status, input_json, output_json, undone_at
+        SELECT id, tool_name, tool_version, status, input_json, output_json, idempotency_key, undone_at
         FROM agent_steps WHERE idempotency_key = ?
         "#,
     )
@@ -1170,9 +1269,20 @@ fn canonical_json(value: Value) -> Value {
 }
 
 fn map_reservation_error(error: sqlx::Error) -> AgentError {
+    if is_sqlite_busy(&error) {
+        return AgentError::IdempotencyConflict;
+    }
     match &error {
-        sqlx::Error::Database(database_error) if database_error.is_unique_violation() => {
+        sqlx::Error::Database(database_error)
+            if database_error.is_unique_violation()
+                && database_error
+                    .message()
+                    .contains("agent_steps.idempotency_key") =>
+        {
             AgentError::IdempotencyConflict
+        }
+        sqlx::Error::Database(database_error) if database_error.is_unique_violation() => {
+            AgentError::Conflict
         }
         _ => map_sqlx(error),
     }
@@ -1180,6 +1290,16 @@ fn map_reservation_error(error: sqlx::Error) -> AgentError {
 
 fn map_sqlx(_error: sqlx::Error) -> AgentError {
     AgentError::Persistence("tool transaction failed".to_owned())
+}
+
+fn is_sqlite_busy(error: &sqlx::Error) -> bool {
+    let sqlx::Error::Database(database_error) = error else {
+        return false;
+    };
+    matches!(
+        database_error.code().as_deref(),
+        Some("5" | "6" | "261" | "517")
+    )
 }
 
 fn parse_ownership(value: Option<&str>) -> ToolOwnership {
@@ -1201,11 +1321,37 @@ fn normalize_input(descriptor: &ToolDescriptor, input: Value) -> Result<Value, A
     }
 }
 
+fn input_snapshot(descriptor: &ToolDescriptor, input: &Value) -> Result<Value, AgentError> {
+    if descriptor.name != RECORD_CHECKIN_TOOL {
+        return Ok(canonical_json(input.clone()));
+    }
+    let typed: RecordCheckinPlanInput =
+        serde_json::from_value(input.clone()).map_err(|_| AgentError::ToolSchemaInvalid)?;
+    Ok(canonical_json(json!({
+        "fields": {
+            "plan_id": typed.plan_id,
+            "duration_min": typed.duration_min,
+            "questions_count": typed.questions_count,
+            "correct_count": typed.correct_count,
+            "mastery_rating": typed.mastery_rating,
+            "mood": typed.mood,
+            "session_time": typed.session_time,
+            "finish": typed.finish,
+            "wrong_question_count": typed.wrong_questions.len(),
+        },
+        "fingerprint": hash_value(input),
+    })))
+}
+
 fn hash_value(value: &Value) -> String {
     let canonical = canonical_json(value.clone()).to_string();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    canonical.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    let digest = Sha256::digest(canonical.as_bytes());
+    let mut fingerprint = String::with_capacity(7 + digest.len() * 2);
+    fingerprint.push_str("sha256:");
+    for byte in digest {
+        write!(&mut fingerprint, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    fingerprint
 }
 
 fn should_persist_failure(error: &AgentError) -> bool {
@@ -1244,23 +1390,13 @@ async fn find_existing_step(
     request: &ToolCallRequest,
 ) -> Result<Option<StoredStep>, AgentError> {
     if let Some(key) = request.idempotency_key.as_deref() {
-        if let Some(stored) = sqlx::query_as::<_, StoredStep>(
-            r#"
-            SELECT id,tool_name,tool_version,status,input_json,output_json,undone_at
-            FROM agent_steps WHERE idempotency_key=?
-            "#,
-        )
-        .bind(key)
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(map_sqlx)?
-        {
+        if let Some(stored) = find_step_by_idempotency_key(tx, key).await? {
             return Ok(Some(stored));
         }
     }
-    sqlx::query_as::<_, StoredStep>(
+    let stored = sqlx::query_as::<_, StoredStep>(
         r#"
-        SELECT id,tool_name,tool_version,status,input_json,output_json,undone_at
+        SELECT id,tool_name,tool_version,status,input_json,output_json,idempotency_key,undone_at
         FROM agent_steps WHERE run_id=? AND step_index=?
         "#,
     )
@@ -1268,7 +1404,35 @@ async fn find_existing_step(
     .bind(request.step_index)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(map_sqlx)
+    .map_err(map_sqlx)?;
+    if stored.as_ref().is_some_and(|stored| {
+        stored.idempotency_key.as_deref() != request.idempotency_key.as_deref()
+    }) {
+        return Err(AgentError::Conflict);
+    }
+    Ok(stored)
+}
+
+async fn find_step_by_idempotency_key(
+    tx: &mut Transaction<'_, Sqlite>,
+    key: &str,
+) -> Result<Option<StoredStep>, AgentError> {
+    sqlx::query_as::<_, StoredStep>(
+        r#"
+        SELECT id,tool_name,tool_version,status,input_json,output_json,idempotency_key,undone_at
+        FROM agent_steps WHERE idempotency_key=?
+        "#,
+    )
+    .bind(key)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|error| {
+        if is_sqlite_busy(&error) {
+            AgentError::IdempotencyConflict
+        } else {
+            map_sqlx(error)
+        }
+    })
 }
 
 fn validate_stored_step(
@@ -1336,6 +1500,7 @@ async fn complete_dispatched_step(
     dispatched: &DispatchResult,
     policy: Value,
 ) -> Result<(), AgentError> {
+    let receipt = receipt_with_permissions(dispatched.receipt.clone(), descriptor);
     let updated = sqlx::query(
         r#"
         UPDATE agent_steps
@@ -1346,7 +1511,7 @@ async fn complete_dispatched_step(
     )
     .bind(dispatched.output.to_string())
     .bind(policy.to_string())
-    .bind(dispatched.receipt.as_ref().map(Value::to_string))
+    .bind(receipt.to_string())
     .bind(dispatched.undo.as_ref().map(Value::to_string))
     .bind(step_id)
     .execute(&mut **tx)
@@ -1365,6 +1530,15 @@ async fn complete_dispatched_step(
         None,
     )
     .await
+}
+
+fn receipt_with_permissions(receipt: Option<Value>, descriptor: &ToolDescriptor) -> Value {
+    let mut receipt = match receipt {
+        Some(Value::Object(receipt)) => receipt,
+        _ => Map::new(),
+    };
+    receipt.insert("permissions".to_owned(), json!(descriptor.data_permissions));
+    Value::Object(receipt)
 }
 
 async fn advance_run(
@@ -1810,7 +1984,7 @@ fn waiting_response(approval: &StoredApproval) -> Result<ToolCallResponse, Agent
 #[cfg(test)]
 mod policy_executor_tests {
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     };
 
@@ -1846,7 +2020,11 @@ mod policy_executor_tests {
             },
             supports_undo: false,
             timeout_ms: 1_000,
-            idempotency: Idempotency::NoAutomaticRetry,
+            idempotency: if risk == RiskLevel::R1 {
+                Idempotency::RequiredExactlyOnce
+            } else {
+                Idempotency::NoAutomaticRetry
+            },
             data_permissions: vec!["synthetic:write"],
         }
     }
@@ -1855,6 +2033,16 @@ mod policy_executor_tests {
         risk: RiskLevel,
         invalid_output: bool,
         ownership_flip: Option<&str>,
+    ) -> (AgentExecutor, sqlx::SqlitePool, Arc<AtomicUsize>, String) {
+        setup_with_hooks(risk, invalid_output, ownership_flip, None, None).await
+    }
+
+    async fn setup_with_hooks(
+        risk: RiskLevel,
+        invalid_output: bool,
+        ownership_flip: Option<&str>,
+        rollback_before_dispatch_once: Option<Arc<std::sync::atomic::AtomicBool>>,
+        start_idempotency_race_once: Option<Arc<std::sync::atomic::AtomicBool>>,
     ) -> (AgentExecutor, sqlx::SqlitePool, Arc<AtomicUsize>, String) {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -1878,6 +2066,7 @@ mod policy_executor_tests {
         .await
         .unwrap();
         let name = match risk {
+            RiskLevel::R1 => "synthetic.r1",
             RiskLevel::R2 => "synthetic.r2",
             RiskLevel::R3 => "synthetic.r3",
             RiskLevel::R4 => "synthetic.r4",
@@ -1896,6 +2085,8 @@ mod policy_executor_tests {
                 dispatch_count: counter.clone(),
                 invalid_output,
                 ownership_flip: ownership_flip.map(str::to_owned),
+                rollback_before_dispatch_once,
+                start_idempotency_race_once,
             },
         );
         (executor, pool, counter, name.to_owned())
@@ -1915,6 +2106,139 @@ mod policy_executor_tests {
             idempotency_key: None,
             approval_id,
         }
+    }
+
+    fn r1_request(name: &str, key: &str) -> ToolCallRequest {
+        ToolCallRequest {
+            idempotency_key: Some(key.to_owned()),
+            ..request(name, None)
+        }
+    }
+
+    #[test]
+    fn canonical_fingerprint_uses_stable_prefixed_sha256() {
+        assert_eq!(
+            hash_value(&json!({"b":2,"a":1})),
+            "sha256:43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777"
+        );
+    }
+
+    #[tokio::test]
+    async fn r1_first_transaction_rollback_is_retried_to_one_completion() {
+        let rollback_once = Arc::new(AtomicBool::new(true));
+        let (executor, pool, counter, name) =
+            setup_with_hooks(RiskLevel::R1, false, None, Some(rollback_once), None).await;
+
+        let response = executor
+            .execute(r1_request(&name, "synthetic/r1/rollback"))
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            response,
+            ToolCallResponse::Completed {
+                replayed: false,
+                ..
+            }
+        ));
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM synthetic_business")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_steps")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_events")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn r1_unresolved_key_stops_after_three_reads_without_dispatch_or_audit() {
+        let race_once = Arc::new(AtomicBool::new(true));
+        let (executor, pool, counter, name) =
+            setup_with_hooks(RiskLevel::R1, false, None, None, Some(race_once)).await;
+        sqlx::query(
+            r#"
+            INSERT INTO agent_steps(
+                id,run_id,step_index,tool_name,tool_version,risk,status,input_json,idempotency_key
+            ) VALUES('unresolved-step','run-policy',0,?, '1',1,'running',?,?)
+            "#,
+        )
+        .bind(&name)
+        .bind(canonical_json(json!({"source_id":"source-1"})).to_string())
+        .bind("synthetic/r1/unresolved")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let error = executor
+            .execute(r1_request(&name, "synthetic/r1/unresolved"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "idempotency_conflict");
+        assert_eq!(
+            error.to_string(),
+            "idempotency key is already being resolved; retry"
+        );
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM synthetic_business")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_events")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn r1_dispatch_counter_stays_zero_until_rust_owns_the_write() {
+        let (executor, pool, counter, name) = setup(RiskLevel::R1).await;
+        for owner in ["typescript", "shadow"] {
+            sqlx::query("UPDATE settings SET value=? WHERE key=?")
+                .bind(owner)
+                .bind(format!("agent_tool_owner.{name}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+            let error = executor
+                .execute(r1_request(&name, &format!("synthetic/r1/{owner}")))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "ownership_not_rust");
+            assert_eq!(counter.load(Ordering::SeqCst), 0);
+        }
+
+        sqlx::query("UPDATE settings SET value='rust-owned' WHERE key=?")
+            .bind(format!("agent_tool_owner.{name}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        executor
+            .execute(r1_request(&name, "synthetic/r1/rust-owned"))
+            .await
+            .unwrap();
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

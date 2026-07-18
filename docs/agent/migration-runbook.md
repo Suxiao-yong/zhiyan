@@ -51,6 +51,31 @@ Use this order so neither SQLite pool retains the main database or WAL file duri
 
 Do not reopen either pool between steps 2 and 5.
 
+## Agent tool ownership cutover
+
+Cut over only after parity and packaged checks pass.
+
+```sql
+-- Switch record.checkin_plan to Rust-owned (irreversible until rollback).
+UPDATE settings SET value='rust-owned'
+WHERE key='agent_tool_owner.record.checkin_plan' AND value='typescript';
+```
+
+Roll back before reopening the TypeScript writer.
+
+```sql
+-- Revert record.checkin_plan to TypeScript ownership.
+UPDATE settings SET value='typescript'
+WHERE key='agent_tool_owner.record.checkin_plan' AND value='rust-owned';
+```
+
+Rules:
+
+- The application must close/relaunch after either ownership change.
+- Never leave TypeScript and Rust writers enabled concurrently.
+- `plan.get_today` may move `shadow -> rust-owned` independently because it is read-only.
+- `record.checkin_plan` stays `typescript` or `shadow` until the packaged manual vertical slice in `MANUAL_TEST.md` is signed off.
+
 ## Milestone 1 rollback
 
 - Disable access to `/agent-debug`.
