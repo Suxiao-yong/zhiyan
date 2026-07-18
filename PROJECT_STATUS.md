@@ -6,7 +6,7 @@
 
 ## 当前结论
 
-第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1、Task 2 已完成并通过规格与质量双审查；Task 3 即将开始。当前没有已知阻塞。
+第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 3 已完成并通过规格与质量双审查；Task 4 即将开始。当前没有已知阻塞。
 
 ## 已完成的修改
 
@@ -42,12 +42,25 @@
 - 迁移测试覆盖 v4→v5 升级和全量初始化，并确认既有 `study_plans` 与 v4 Agent 行保留。
 - focused db tests：8/8 通过；`cargo fmt -- --check`、`git diff --check` 通过。
 
-## 正在处理的问题
-
 ### Task 3：稳定工具协议、注册表与 JSON Schema
 
-- 下一项工作将先写协议/注册表 RED 测试，再实现 `jsonschema` 校验、两个内置工具 descriptor/DTO 及稳定错误码。
-- 重点约束：`additionalProperties: false` 拒绝 caller 覆盖锁定字段；descriptor 元数据不可由请求输入覆盖；不向模型暴露 repository/SQL。
+提交：`aa71034`、`30f4322`、`7e20fec`  
+主提交信息：`feat: define agent tool protocol registry`
+
+- 新增 `jsonschema 0.33.0` 直接依赖及稳定的 `ToolRegistry`、risk/confirmation/idempotency/ownership 类型。
+- 新增 `plan.get_today@1`、`record.checkin_plan@1` descriptor 与输入 DTO。
+- plan 输出 schema 精确要求共享 fixture 的 19 个字段；check-in schema 拒绝顶层/嵌套锁定字段和未知字段。
+- registry 按工具名保持唯一版本，输入校验必须先通过 name/version lookup，不能由调用方传入 descriptor 绕过。
+- 新增安全稳定错误码及 `IdempotencyConflict` 命令边界精确 code/message 回归测试。
+- 修复审查发现的非法 `properties: null` schema，并恢复后续 `list_tools` 所需的 `ListedTool` 公共 DTO。
+- focused tools tests：5/5；commands tests：4/4；Clippy `-D warnings`、fmt、diff-check 通过。
+
+## 正在处理的问题
+
+### Task 4：R0–R4 策略引擎
+
+- 下一项工作将先写完整决策表 RED 测试，再实现纯函数策略判定和 R3 approval precondition 校验。
+- 策略层只能使用 descriptor 的不可变 risk/confirmation/data permissions，不接受请求覆盖这些元数据。
 
 ## 下一步计划
 
