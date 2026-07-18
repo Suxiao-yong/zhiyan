@@ -1,0 +1,53 @@
+{
+  "business_date": "2026-07-17",
+  "plan": {
+    "id": "plan-1",
+    "exam_id": "exam-1",
+    "subject_id": "subject-math",
+    "knowledge_point_id": "kp-function",
+    "date": "2026-07-17",
+    "planned_tasks": "复习函数",
+    "planned_duration": 60,
+    "status": "pending"
+  },
+  "existing_records": [
+    {
+      "id": "record-old",
+      "duration_min": 20,
+      "content": "热身"
+    }
+  ],
+  "input": {
+    "plan_id": "plan-1",
+    "duration_min": 30,
+    "content": "完成第一节",
+    "questions_count": 10,
+    "correct_count": 8,
+    "mastery_rating": 4,
+    "difficulty_notes": "复合函数仍需练习",
+    "mood": 5,
+    "session_time": "evening",
+    "finish": false,
+    "wrong_questions": [
+      {
+        "question_source": "练习册 1-3",
+        "question_desc": "定义域判断",
+        "correct_answer": "[-1, 1]",
+        "my_answer": "(-1, 1)",
+        "error_type": "概念不清",
+        "error_reason": "忽略端点"
+      }
+    ]
+  },
+  "expected": {
+    "date": "2026-07-17",
+    "subject_id": "subject-math",
+    "knowledge_point_id": "kp-function",
+    "actual_duration": 50,
+    "actual_tasks": "完成第一节",
+    "status": "in_progress",
+    "questions_count": 10,
+    "correct_count": 8,
+    "mastery_rating": 4
+  }
+}

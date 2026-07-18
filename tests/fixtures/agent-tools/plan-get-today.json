@@ -1,0 +1,33 @@
+{
+  "now_local": "2026-07-18T02:30:00+08:00",
+  "business_date": "2026-07-17",
+  "input": {
+    "exam_id": "exam-1"
+  },
+  "expected_output": {
+    "business_date": "2026-07-17",
+    "plans": [
+      {
+        "id": "plan-1",
+        "exam_id": "exam-1",
+        "subject_id": "subject-math",
+        "knowledge_point_id": "kp-function",
+        "date": "2026-07-17",
+        "planned_tasks": "复习函数",
+        "planned_duration": 60,
+        "actual_duration": 30,
+        "actual_tasks": "完成第一节",
+        "status": "in_progress",
+        "generated_by": "local",
+        "ai_suggestion": null,
+        "user_modified": 0,
+        "sort_order": 0,
+        "created_at": "2026-07-16 09:00:00",
+        "updated_at": "2026-07-17 21:00:00",
+        "subject_name": "数学",
+        "knowledge_point_name": "函数",
+        "record_count": 1
+      }
+    ]
+  }
+}
