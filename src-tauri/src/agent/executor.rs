@@ -173,8 +173,14 @@ async fn execute_checkin_in_transaction(
 
     let baseline_completed: bool = sqlx::query_scalar(
         r#"
-        SELECT p.status = 'completed' AND NOT EXISTS(
-            SELECT 1
+        SELECT p.status = 'completed' AND COALESCE((
+            SELECT MAX(CASE
+                WHEN json_extract(
+                    prior.receipt_json,
+                    '$.compensation.baseline_completed'
+                ) = 1 THEN 1
+                ELSE 0
+            END)
             FROM agent_steps AS prior
             JOIN study_records AS prior_record
               ON prior_record.id = json_extract(prior.undo_json, '$.record_id')
@@ -187,7 +193,7 @@ async fn execute_checkin_in_transaction(
               AND json_extract(prior.undo_json, '$.kind') = ?
               AND json_extract(prior.undo_json, '$.plan_id') = p.id
               AND json_extract(prior.receipt_json, '$.compensation.finish') = 1
-        )
+        ), 1)
         FROM study_plans AS p
         WHERE p.id = ?
         "#,

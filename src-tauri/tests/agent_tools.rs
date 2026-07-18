@@ -1026,6 +1026,42 @@ fn checkin_undo_preserves_a_plan_that_was_already_completed_before_execution() {
 }
 
 #[test]
+fn checkin_undo_propagates_legacy_completed_baseline_through_active_finish_receipts() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        sqlx::query("UPDATE study_plans SET status='completed' WHERE id='plan-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let mut input_a = fixture_checkin_input(&fixture);
+        input_a.content = Some("legacy finish A".to_owned());
+        input_a.finish = true;
+        let a = executor
+            .execute_record_checkin_plan(execution_request(input_a, "checkin/legacy-chain/a", 0))
+            .await
+            .unwrap();
+        let mut input_b = fixture_checkin_input(&fixture);
+        input_b.content = Some("legacy non-finish B".to_owned());
+        input_b.finish = false;
+        let b = executor
+            .execute_record_checkin_plan(execution_request(input_b, "checkin/legacy-chain/b", 1))
+            .await
+            .unwrap();
+
+        let undo_a = executor.undo(&a.step_id).await.unwrap();
+        assert_eq!(undo_a.output.status, "completed");
+        let undo_b = executor.undo(&b.step_id).await.unwrap();
+
+        assert_eq!(undo_b.output.actual_duration, 20);
+        assert_eq!(undo_b.output.actual_tasks.as_deref(), Some("热身"));
+        assert_eq!(undo_b.output.status, "completed");
+    });
+}
+
+#[test]
 fn checkin_undo_audit_failure_rolls_back_every_compensation_write() {
     block_on(async {
         let pool = migrated_pool().await;
