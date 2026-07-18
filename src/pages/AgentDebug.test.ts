@@ -308,7 +308,7 @@ describe('AgentDebug', () => {
     )
   })
 
-  it('does not advance the local step when a completed call is replayed', async () => {
+  it('synchronizes past the submitted step when a completed call is replayed', async () => {
     client.listAgentTools.mockResolvedValue([
       listedTool('plan.get_today', 'shadow'),
       listedTool('record.checkin_plan', 'rust-owned'),
@@ -343,7 +343,49 @@ describe('AgentDebug', () => {
 
     expect(client.executeAgentTool).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ step_index: 0, idempotency_key: 'agent-debug:run-1:0' }),
+      expect.objectContaining({ step_index: 1, idempotency_key: 'agent-debug:run-1:1' }),
+    )
+  })
+
+  it('does not move a newer local step backward for an old replay response', async () => {
+    client.listAgentTools.mockResolvedValue([
+      listedTool('plan.get_today', 'shadow'),
+      listedTool('record.checkin_plan', 'rust-owned'),
+    ])
+    const oldReplay = deferred<AgentToolCallResponse>()
+    client.executeAgentTool.mockReturnValueOnce(oldReplay.promise).mockResolvedValueOnce({
+      state: 'completed',
+      step_id: 'step-checkin',
+      output: { record_id: 'record-1' },
+      replayed: false,
+      undo_available: true,
+    } satisfies AgentToolCallResponse)
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-test=create-session]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=start-run]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=tool-plan-execute]').trigger('click')
+
+    const vm = wrapper.vm as unknown as { state: { run: AgentRun | null } }
+    vm.state.run = { ...vm.state.run!, current_step: 2 }
+    oldReplay.resolve({
+      state: 'completed',
+      step_id: 'step-plan-old',
+      output: { business_date: '2026-07-18', plans: [] },
+      replayed: true,
+      undo_available: false,
+    })
+    await flushPromises()
+    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
+    await wrapper.get('[data-test=tool-checkin-execute]').trigger('click')
+    await flushPromises()
+
+    expect(client.executeAgentTool).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ step_index: 2, idempotency_key: 'agent-debug:run-1:2' }),
     )
   })
 

@@ -81,9 +81,12 @@ function errorMessage(error: unknown): string {
   return '运行命令失败'
 }
 
-function advanceLocalRun(response: AgentToolCallResponse): void {
-  if (response.state === 'completed' && !response.replayed && state.run) {
-    state.run = { ...state.run, current_step: state.run.current_step + 1 }
+function advanceLocalRun(response: AgentToolCallResponse, submittedStep: number): void {
+  if (response.state === 'completed' && state.run) {
+    state.run = {
+      ...state.run,
+      current_step: Math.max(state.run.current_step, submittedStep + 1),
+    }
   }
 }
 
@@ -127,9 +130,10 @@ async function cancelRun(): Promise<void> {
 async function executePlanRead(): Promise<void> {
   if (!state.run || !planTool.value || !planExecutable.value) return
   await perform(async () => {
+    const submittedStep = state.run!.current_step
     const response = await executeAgentTool({
       run_id: state.run!.id,
-      step_index: state.run!.current_step,
+      step_index: submittedStep,
       tool_name: planTool.value!.descriptor.name,
       tool_version: planTool.value!.descriptor.version,
       input: { exam_id: state.planExamId.trim() },
@@ -137,16 +141,17 @@ async function executePlanRead(): Promise<void> {
       approval_id: null,
     })
     planOutput.value = response.state === 'completed' ? response.output : response
-    advanceLocalRun(response)
+    advanceLocalRun(response, submittedStep)
   })
 }
 
 async function executeCheckin(): Promise<void> {
   if (!state.run || !checkinTool.value || !checkinExecutable.value) return
   await perform(async () => {
+    const submittedStep = state.run!.current_step
     const response = await executeAgentTool({
       run_id: state.run!.id,
-      step_index: state.run!.current_step,
+      step_index: submittedStep,
       tool_name: checkinTool.value!.descriptor.name,
       tool_version: checkinTool.value!.descriptor.version,
       input: {
@@ -154,11 +159,11 @@ async function executeCheckin(): Promise<void> {
         duration_min: state.checkinDuration,
         finish: false,
       },
-      idempotency_key: `agent-debug:${state.run!.id}:${state.run!.current_step}`,
+      idempotency_key: `agent-debug:${state.run!.id}:${submittedStep}`,
       approval_id: null,
     })
     if (response.state === 'completed') checkinReceipt.value = response
-    advanceLocalRun(response)
+    advanceLocalRun(response, submittedStep)
   })
 }
 
