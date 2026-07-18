@@ -260,6 +260,154 @@ describe('AgentDebug', () => {
     expect(client.undoAgentTool).toHaveBeenCalledWith('step-checkin')
   })
 
+  it('advances the local step between a fresh plan read and check-in in the same run', async () => {
+    client.listAgentTools.mockResolvedValue([
+      listedTool('plan.get_today', 'shadow'),
+      listedTool('record.checkin_plan', 'rust-owned'),
+    ])
+    client.executeAgentTool
+      .mockResolvedValueOnce({
+        state: 'completed',
+        step_id: 'step-plan',
+        output: { business_date: '2026-07-18', plans: [] },
+        replayed: false,
+        undo_available: false,
+      } satisfies AgentToolCallResponse)
+      .mockResolvedValueOnce({
+        state: 'completed',
+        step_id: 'step-checkin',
+        output: { record_id: 'record-1' },
+        replayed: false,
+        undo_available: true,
+      } satisfies AgentToolCallResponse)
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-test=create-session]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=start-run]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=tool-plan-execute]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
+    await wrapper.get('[data-test=tool-checkin-execute]').trigger('click')
+    await flushPromises()
+
+    expect(client.executeAgentTool).toHaveBeenCalledTimes(2)
+    expect(client.executeAgentTool).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ tool_name: 'plan.get_today', step_index: 0 }),
+    )
+    expect(client.executeAgentTool).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        tool_name: 'record.checkin_plan',
+        step_index: 1,
+        idempotency_key: 'agent-debug:run-1:1',
+      }),
+    )
+  })
+
+  it('does not advance the local step when a completed call is replayed', async () => {
+    client.listAgentTools.mockResolvedValue([
+      listedTool('plan.get_today', 'shadow'),
+      listedTool('record.checkin_plan', 'rust-owned'),
+    ])
+    client.executeAgentTool
+      .mockResolvedValueOnce({
+        state: 'completed',
+        step_id: 'step-plan',
+        output: { business_date: '2026-07-18', plans: [] },
+        replayed: true,
+        undo_available: false,
+      } satisfies AgentToolCallResponse)
+      .mockResolvedValueOnce({
+        state: 'completed',
+        step_id: 'step-checkin',
+        output: { record_id: 'record-1' },
+        replayed: false,
+        undo_available: true,
+      } satisfies AgentToolCallResponse)
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-test=create-session]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=start-run]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=tool-plan-execute]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
+    await wrapper.get('[data-test=tool-checkin-execute]').trigger('click')
+    await flushPromises()
+
+    expect(client.executeAgentTool).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ step_index: 0, idempotency_key: 'agent-debug:run-1:0' }),
+    )
+  })
+
+  it('disables plan and check-in execution when run start leaves it queued', async () => {
+    client.listAgentTools.mockResolvedValue([
+      listedTool('plan.get_today', 'shadow'),
+      listedTool('record.checkin_plan', 'rust-owned'),
+    ])
+    client.startAgentRun.mockRejectedValue({ message: 'start rejected' })
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
+    await wrapper.get('[data-test=create-session]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=start-run]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test=run-status]').text()).toContain('queued')
+    expect(wrapper.get('[data-test=tool-plan-execute]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test=tool-checkin-execute]').attributes('disabled')).toBeDefined()
+  })
+
+  it('disables plan and check-in execution after the run is cancelled', async () => {
+    client.listAgentTools.mockResolvedValue([
+      listedTool('plan.get_today', 'shadow'),
+      listedTool('record.checkin_plan', 'rust-owned'),
+    ])
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
+    await wrapper.get('[data-test=create-session]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=start-run]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=cancel-run]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test=run-status]').text()).toContain('cancelled')
+    expect(wrapper.get('[data-test=tool-plan-execute]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test=tool-checkin-execute]').attributes('disabled')).toBeDefined()
+  })
+
+  it('rejects a fractional check-in duration in the debug gate', async () => {
+    client.listAgentTools.mockResolvedValue([
+      listedTool('plan.get_today', 'shadow'),
+      listedTool('record.checkin_plan', 'rust-owned'),
+    ])
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-test=create-session]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=start-run]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
+    const duration = wrapper.get('[data-test=tool-checkin-duration]')
+    await duration.setValue('1.5')
+
+    expect(duration.attributes('step')).toBe('1')
+    expect(wrapper.get('[data-test=tool-checkin-execute]').attributes('disabled')).toBeDefined()
+  })
+
   it('shows a redacted persistence list error and disables every write control', async () => {
     client.listAgentTools.mockRejectedValue({
       code: 'persistence_error',

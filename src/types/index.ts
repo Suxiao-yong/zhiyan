@@ -203,12 +203,15 @@ export interface ListedAgentTool {
   ownership: AgentToolOwnership
 }
 
+export type JsonValue =
+  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
+
 export interface AgentToolCallRequest {
   run_id: string
   step_index: number
   tool_name: string
   tool_version: string
-  input: unknown
+  input: JsonValue
   idempotency_key: string | null
   approval_id: string | null
 }

@@ -186,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_tool_commands_are_exposed_at_the_tauri_boundary() {
+    fn typed_tool_command_functions_compile() {
         let _ = agent_list_tools;
         let _ = agent_execute_tool;
         let _ = agent_decide_approval;

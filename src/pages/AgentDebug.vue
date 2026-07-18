@@ -52,15 +52,16 @@ const planExecutable = computed(
   () =>
     !!planTool.value &&
     ['shadow', 'rust-owned'].includes(planTool.value.ownership) &&
-    !!state.run &&
+    state.run?.status === 'running' &&
     !!state.planExamId.trim() &&
     !toolListFailed.value,
 )
 const checkinExecutable = computed(
   () =>
     checkinTool.value?.ownership === 'rust-owned' &&
-    !!state.run &&
+    state.run?.status === 'running' &&
     !!state.checkinPlanId.trim() &&
+    Number.isSafeInteger(state.checkinDuration) &&
     state.checkinDuration > 0 &&
     !checkinReceipt.value &&
     !toolListFailed.value,
@@ -78,6 +79,12 @@ function errorMessage(error: unknown): string {
     if (typeof message === 'string') return message
   }
   return '运行命令失败'
+}
+
+function advanceLocalRun(response: AgentToolCallResponse): void {
+  if (response.state === 'completed' && !response.replayed && state.run) {
+    state.run = { ...state.run, current_step: state.run.current_step + 1 }
+  }
 }
 
 async function perform(operation: () => Promise<void>): Promise<void> {
@@ -130,6 +137,7 @@ async function executePlanRead(): Promise<void> {
       approval_id: null,
     })
     planOutput.value = response.state === 'completed' ? response.output : response
+    advanceLocalRun(response)
   })
 }
 
@@ -150,6 +158,7 @@ async function executeCheckin(): Promise<void> {
       approval_id: null,
     })
     if (response.state === 'completed') checkinReceipt.value = response
+    advanceLocalRun(response)
   })
 }
 
@@ -257,6 +266,7 @@ onMounted(() => {
           data-test="tool-checkin-duration"
           type="number"
           min="1"
+          step="1"
         />
       </label>
       <button
