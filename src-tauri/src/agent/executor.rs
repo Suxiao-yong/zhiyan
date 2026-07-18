@@ -53,6 +53,7 @@ struct StoredStep {
     status: String,
     input_json: Option<String>,
     output_json: Option<String>,
+    undone_at: Option<String>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -73,6 +74,10 @@ struct RecordCheckinUndoReceipt {
     record_id: String,
     plan_id: String,
     wrong_question_ids: Vec<String>,
+    #[serde(default)]
+    finish: bool,
+    #[serde(default)]
+    plan_was_completed: bool,
 }
 
 #[derive(Clone)]
@@ -119,7 +124,7 @@ async fn execute_checkin_in_transaction(
 ) -> Result<RecordCheckinExecutionResponse, AgentError> {
     let stored = sqlx::query_as::<_, StoredStep>(
         r#"
-        SELECT id, tool_name, tool_version, status, input_json, output_json
+        SELECT id, tool_name, tool_version, status, input_json, output_json, undone_at
         FROM agent_steps WHERE idempotency_key = ?
         "#,
     )
@@ -146,7 +151,7 @@ async fn execute_checkin_in_transaction(
             step_id: stored.id,
             output,
             replayed: true,
-            undo_available: true,
+            undo_available: stored.undone_at.is_none(),
         });
     }
 
@@ -170,7 +175,15 @@ async fn execute_checkin_in_transaction(
     .await
     .map_err(map_reservation_error)?;
 
+    let plan_was_completed: bool =
+        sqlx::query_scalar("SELECT status = 'completed' FROM study_plans WHERE id = ?")
+            .bind(&request.input.plan_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(map_sqlx)?
+            .unwrap_or(false);
     let record_id = Uuid::new_v4().to_string();
+    let finish = request.input.finish;
     let output =
         record::checkin_plan(tx, request.input, &request.business_date, &record_id).await?;
     let output_json = serde_json::to_string(&output).map_err(|_| AgentError::ToolSchemaInvalid)?;
@@ -179,6 +192,8 @@ async fn execute_checkin_in_transaction(
         record_id: output.record_id.clone(),
         plan_id: output.plan_id.clone(),
         wrong_question_ids: output.wrong_question_ids.clone(),
+        finish,
+        plan_was_completed,
     };
     let undo_json = serde_json::to_string(&undo).map_err(|_| AgentError::ToolSchemaInvalid)?;
     let policy_json = json!({"risk":"R1","confirmation":"automatic"}).to_string();
@@ -270,27 +285,81 @@ async fn undo_in_transaction(
         return Err(AgentError::ToolSchemaInvalid);
     }
 
-    for wrong_id in &undo.wrong_question_ids {
-        sqlx::query("DELETE FROM wrong_questions WHERE id = ? AND record_id = ?")
-            .bind(wrong_id)
+    let target_plan_id: Option<Option<String>> =
+        sqlx::query_scalar("SELECT plan_id FROM study_records WHERE id = ?")
             .bind(&undo.record_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(map_sqlx)?;
+    let target_exists = match target_plan_id {
+        Some(Some(plan_id)) if plan_id == undo.plan_id => true,
+        Some(_) => return Err(AgentError::Conflict),
+        None => false,
+    };
+
+    for wrong_id in &undo.wrong_question_ids {
+        let wrong_record_id: Option<Option<String>> =
+            sqlx::query_scalar("SELECT record_id FROM wrong_questions WHERE id = ?")
+                .bind(wrong_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_sqlx)?;
+        match wrong_record_id {
+            Some(Some(record_id)) if record_id == undo.record_id => {}
+            Some(None) => {}
+            _ => return Err(AgentError::Conflict),
+        }
+    }
+
+    for wrong_id in &undo.wrong_question_ids {
+        let deleted = sqlx::query("DELETE FROM wrong_questions WHERE id = ?")
+            .bind(wrong_id)
             .execute(&mut **tx)
             .await
             .map_err(map_sqlx)?;
+        if deleted.rows_affected() != 1 {
+            return Err(AgentError::Conflict);
+        }
     }
-    sqlx::query("DELETE FROM study_records WHERE id = ? AND plan_id = ?")
+    let deleted_record = sqlx::query("DELETE FROM study_records WHERE id = ? AND plan_id = ?")
         .bind(&undo.record_id)
         .bind(&undo.plan_id)
         .execute(&mut **tx)
         .await
         .map_err(map_sqlx)?;
+    if deleted_record.rows_affected() != u64::from(target_exists) {
+        return Err(AgentError::Conflict);
+    }
 
     let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records WHERE plan_id = ?")
         .bind(&undo.plan_id)
         .fetch_one(&mut **tx)
         .await
         .map_err(map_sqlx)?;
-    if remaining == 0 {
+    let other_finish: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM agent_steps
+            WHERE id <> ?
+              AND tool_name = ?
+              AND tool_version = ?
+              AND status = 'completed'
+              AND undone_at IS NULL
+              AND json_extract(undo_json, '$.kind') = ?
+              AND json_extract(undo_json, '$.plan_id') = ?
+              AND json_extract(undo_json, '$.finish') = 1
+        )
+        "#,
+    )
+    .bind(&step.id)
+    .bind(RECORD_CHECKIN_TOOL)
+    .bind(RECORD_CHECKIN_VERSION)
+    .bind(RECORD_CHECKIN_UNDO_KIND)
+    .bind(&undo.plan_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    let updated_plan = if remaining == 0 {
         sqlx::query(
             r#"
             UPDATE study_plans
@@ -303,7 +372,7 @@ async fn undo_in_transaction(
         .bind(&undo.plan_id)
         .execute(&mut **tx)
         .await
-        .map_err(map_sqlx)?;
+        .map_err(map_sqlx)?
     } else {
         sqlx::query(
             r#"
@@ -316,14 +385,23 @@ async fn undo_in_transaction(
                   WHERE plan_id = study_plans.id AND content IS NOT NULL AND content <> ''
                   ORDER BY created_at DESC, id DESC LIMIT 1
                 ), planned_tasks),
-                status = CASE WHEN status='skipped' THEN 'skipped' ELSE 'in_progress' END
+                status = CASE
+                    WHEN status='skipped' THEN 'skipped'
+                    WHEN ? = 1 OR ? = 1 THEN 'completed'
+                    ELSE 'in_progress'
+                END
             WHERE id=?
             "#,
         )
+        .bind(other_finish)
+        .bind(undo.plan_was_completed)
         .bind(&undo.plan_id)
         .execute(&mut **tx)
         .await
-        .map_err(map_sqlx)?;
+        .map_err(map_sqlx)?
+    };
+    if updated_plan.rows_affected() != 1 {
+        return Err(AgentError::Conflict);
     }
 
     let (actual_duration, actual_tasks, status): (i64, Option<String>, String) = sqlx::query_as(

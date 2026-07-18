@@ -437,6 +437,64 @@ fn checkin_idempotency_requires_a_non_empty_key_before_writing() {
 }
 
 #[test]
+fn checkin_idempotency_replay_after_undo_keeps_original_output_without_new_writes() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let request = execution_request(fixture_checkin_input(&fixture), "checkin/undo/replay", 0);
+        let completed = executor
+            .execute_record_checkin_plan(request.clone())
+            .await
+            .unwrap();
+        executor.undo(&completed.step_id).await.unwrap();
+        let records_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let wrongs_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM wrong_questions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let steps_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_steps")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let events_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let replay = executor.execute_record_checkin_plan(request).await.unwrap();
+
+        assert_eq!(replay.output, completed.output);
+        assert!(replay.replayed);
+        assert!(!replay.undo_available);
+        let records_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let wrongs_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM wrong_questions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let steps_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_steps")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let events_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(records_after, records_before);
+        assert_eq!(wrongs_after, wrongs_before);
+        assert_eq!(steps_after, steps_before);
+        assert_eq!(events_after, events_before);
+    });
+}
+
+#[test]
 fn checkin_crash_window_rolls_back_business_aggregate_step_and_event() {
     block_on(async {
         let pool = migrated_pool().await;
@@ -580,6 +638,288 @@ fn checkin_undo_without_remaining_records_restores_planned_pending_aggregate() {
             fixture["plan"]["planned_tasks"].as_str()
         );
         assert_eq!(undone.output.status, "pending");
+    });
+}
+
+#[test]
+fn checkin_undo_removes_receipted_orphans_after_external_record_deletion() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let completed = executor
+            .execute_record_checkin_plan(execution_request(
+                fixture_checkin_input(&fixture),
+                "checkin/orphan/1",
+                0,
+            ))
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM study_records WHERE id = ?")
+            .bind(&completed.output.record_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let orphan_record_id: Option<String> =
+            sqlx::query_scalar("SELECT record_id FROM wrong_questions WHERE id = ?")
+                .bind(&completed.output.wrong_question_ids[0])
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(orphan_record_id, None);
+
+        let undone = executor.undo(&completed.step_id).await.unwrap();
+
+        assert_eq!(
+            undone.output.removed_wrong_question_ids,
+            completed.output.wrong_question_ids
+        );
+        assert_eq!(undone.output.actual_duration, 20);
+        assert_eq!(undone.output.actual_tasks.as_deref(), Some("热身"));
+        assert_eq!(undone.output.status, "in_progress");
+        let wrong_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM wrong_questions WHERE id = ?")
+                .bind(&completed.output.wrong_question_ids[0])
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(wrong_count, 0);
+    });
+}
+
+#[test]
+fn checkin_undo_conflicts_on_missing_or_reassigned_wrong_question_without_damage() {
+    block_on(async {
+        for tamper in ["missing", "reassigned"] {
+            let pool = migrated_pool().await;
+            let fixture = seed_checkin_fixture(&pool).await;
+            seed_agent_run(&pool).await;
+            let executor = AgentExecutor::new(pool.clone());
+            let completed = executor
+                .execute_record_checkin_plan(execution_request(
+                    fixture_checkin_input(&fixture),
+                    &format!("checkin/integrity/{tamper}"),
+                    0,
+                ))
+                .await
+                .unwrap();
+            let wrong_id = &completed.output.wrong_question_ids[0];
+            match tamper {
+                "missing" => {
+                    sqlx::query("DELETE FROM wrong_questions WHERE id = ?")
+                        .bind(wrong_id)
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                }
+                "reassigned" => {
+                    sqlx::query("UPDATE wrong_questions SET record_id='record-old' WHERE id = ?")
+                        .bind(wrong_id)
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let plan_before: (Option<i64>, Option<String>, String) = sqlx::query_as(
+                "SELECT actual_duration, actual_tasks, status FROM study_plans WHERE id='plan-1'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let receipt_before: (Option<String>, Option<String>) =
+                sqlx::query_as("SELECT receipt_json, undone_at FROM agent_steps WHERE id = ?")
+                    .bind(&completed.step_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let events_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_events")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+            let error = executor.undo(&completed.step_id).await.unwrap_err();
+
+            assert_eq!(error.code(), "conflict", "tamper={tamper}");
+            let target_count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM study_records WHERE id = ?")
+                    .bind(&completed.output.record_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let plan_after: (Option<i64>, Option<String>, String) = sqlx::query_as(
+                "SELECT actual_duration, actual_tasks, status FROM study_plans WHERE id='plan-1'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let receipt_after: (Option<String>, Option<String>) =
+                sqlx::query_as("SELECT receipt_json, undone_at FROM agent_steps WHERE id = ?")
+                    .bind(&completed.step_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let events_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_events")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(target_count, 1, "tamper={tamper}");
+            assert_eq!(plan_after, plan_before, "tamper={tamper}");
+            assert_eq!(receipt_after, receipt_before, "tamper={tamper}");
+            assert_eq!(events_after, events_before, "tamper={tamper}");
+            if tamper == "reassigned" {
+                let record_id: Option<String> =
+                    sqlx::query_scalar("SELECT record_id FROM wrong_questions WHERE id = ?")
+                        .bind(wrong_id)
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(record_id.as_deref(), Some("record-old"));
+            }
+        }
+    });
+}
+
+#[test]
+fn checkin_undo_preserves_other_finish_receipts_and_recalculates_after_they_are_undone() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let mut input_a = fixture_checkin_input(&fixture);
+        input_a.content = Some("A task".to_owned());
+        input_a.finish = false;
+        let a = executor
+            .execute_record_checkin_plan(execution_request(input_a, "checkin/status/a", 0))
+            .await
+            .unwrap();
+        let mut input_b = fixture_checkin_input(&fixture);
+        input_b.content = Some("B task".to_owned());
+        input_b.finish = true;
+        let b = executor
+            .execute_record_checkin_plan(execution_request(input_b, "checkin/status/b", 1))
+            .await
+            .unwrap();
+        assert_eq!(b.output.status, "completed");
+
+        let undo_a = executor.undo(&a.step_id).await.unwrap();
+
+        assert_eq!(undo_a.output.actual_duration, 50);
+        assert_eq!(undo_a.output.actual_tasks.as_deref(), Some("B task"));
+        assert_eq!(undo_a.output.status, "completed");
+
+        let undo_b = executor.undo(&b.step_id).await.unwrap();
+        assert_eq!(undo_b.output.actual_duration, 20);
+        assert_eq!(undo_b.output.actual_tasks.as_deref(), Some("热身"));
+        assert_eq!(undo_b.output.status, "in_progress");
+    });
+}
+
+#[test]
+fn checkin_undo_preserves_a_plan_that_was_already_completed_before_execution() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        sqlx::query("UPDATE study_plans SET status='completed' WHERE id='plan-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let mut input = fixture_checkin_input(&fixture);
+        input.finish = true;
+        let completed = executor
+            .execute_record_checkin_plan(execution_request(input, "checkin/status/precompleted", 0))
+            .await
+            .unwrap();
+
+        let undone = executor.undo(&completed.step_id).await.unwrap();
+
+        assert_eq!(undone.output.actual_duration, 20);
+        assert_eq!(undone.output.actual_tasks.as_deref(), Some("热身"));
+        assert_eq!(undone.output.status, "completed");
+    });
+}
+
+#[test]
+fn checkin_undo_audit_failure_rolls_back_every_compensation_write() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let completed = executor
+            .execute_record_checkin_plan(execution_request(
+                fixture_checkin_input(&fixture),
+                "checkin/undo/audit-failure",
+                0,
+            ))
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            r#"
+            CREATE TRIGGER reject_tool_undone BEFORE INSERT ON agent_events
+            WHEN NEW.event_type='tool.undone'
+            BEGIN SELECT RAISE(ABORT,'undo crash window'); END;
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let plan_before: (Option<i64>, Option<String>, String) = sqlx::query_as(
+            "SELECT actual_duration, actual_tasks, status FROM study_plans WHERE id='plan-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let step_before: (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT receipt_json, undone_at FROM agent_steps WHERE id = ?")
+                .bind(&completed.step_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let events_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let error = executor.undo(&completed.step_id).await.unwrap_err();
+
+        assert_eq!(error.code(), "persistence_error");
+        let record_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM study_records WHERE id = ?")
+                .bind(&completed.output.record_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let wrong_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM wrong_questions WHERE record_id = ?")
+                .bind(&completed.output.record_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let plan_after: (Option<i64>, Option<String>, String) = sqlx::query_as(
+            "SELECT actual_duration, actual_tasks, status FROM study_plans WHERE id='plan-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let step_after: (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT receipt_json, undone_at FROM agent_steps WHERE id = ?")
+                .bind(&completed.step_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let events_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!((record_count, wrong_count), (1, 1));
+        assert_eq!(plan_after, plan_before);
+        assert_eq!(step_after, step_before);
+        assert_eq!(events_after, events_before);
     });
 }
 
