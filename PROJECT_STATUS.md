@@ -1,12 +1,12 @@
 # 项目进度状态
 
-更新时间：2026-07-18（Asia/Shanghai，用户要求状态总结后更新）  
+更新时间：2026-07-18（Asia/Shanghai，Task 9–10 完成后更新）  
 工作区：`D:\智研\zhiyan\.worktrees\agent-tools-policy-phase2`  
 分支：`codex/agent-tools-policy-phase2`
 
 ## 当前结论
 
-第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 8 已完成并通过规格与质量双审查；下一项为 Task 9。当前没有代码实现阻塞。
+第二阶段（Agent tools/policy vertical slice）全部完成。Task 1–Task 10 均已提交并通过验证。分支保留供用户选择后续合并、PR 或继续保留。
 
 ## 已完成的修改
 
@@ -122,19 +122,50 @@
 - 最终 frontend focused：19/19；全 Vitest：55/55；typecheck/build、Rust commands/full suite、Clippy、fmt、diff-check 通过。
 - 最终规格与质量复审通过，Critical/Important 均为 None。
 
-## 正在处理的问题
+### Task 9：并发幂等、隐私稳定错误、迁移升级/恢复与所有权切换文档
 
-### 当前待处理：Task 9 并发、隐私、升级恢复与回滚
+提交：`f1fcdf6`  
+提交信息：`test: harden agent tool ownership and recovery`
 
-- 增加 WAL 双连接同 key 并发 race、三次 bounded replay read、稳定 idempotency_conflict。
-- 加固事件/命令隐私、v1–v4 升级与 restore、ownership cutover/rollback 文档。
+- 新增 `sha2` 依赖，用于 canonical input SHA-256 fingerprint；input snapshot 只保留结构化字段和 fingerprint，不保留 free text。
+- WAL 双连接同 key 并发 race：Barrier 同步启动两个 Tokio task，结果为一个 normal completion + 一个 replay，study_records/agent_steps/tool.completed 各恰好为 1。
+- 首次事务 rollback 后第二次调用自动重试成为唯一完成者；未解析 key 三次 bounded read 后返回 `idempotency_conflict`（code 和 message 精确匹配），零业务/审计写入。
+- 事件 payload 和 command error 不暴露 SECRET_MARKER、SQL 文本、`%APPDATA%` 或绝对路径；`IdempotencyConflict` 命令边界返回精确脱敏 message。
+- receipt 的 `permissions` 列表与 descriptor 的 `data_permissions` 一致。
+- Pool reopen 后 fingerprint 仍能 replay；free text 变化触发 `idempotency_conflict`。
+- v1–v4 文件数据库各自升级到 v5 一次，通过 plugin pool 和 runtime pool 双路径 reopen 验证五表 + 四收据列 + 所有权默认值。
+- `prepare_database_restore` 后替换 v4 备份，重启升级一次并保持所有权默认。
+- 42 个集成测试、51 个单元测试、12 个 db 测试全部通过；Clippy、fmt、diff-check 通过。
+- `migration-runbook.md` 新增精确的 cutover/rollback SQL 和操作规则。
+- `feature-parity.md` 新增 `plan.get_today@1` (shadow) 和 `record.checkin_plan@1` (typescript) 两行。
+
+### Task 10：里程碑 2 完整验证与打包出口门
+
+提交：`c210f42`  
+提交信息：`docs: complete agent tools policy milestone`
+
+- Vitest：12 个测试文件、55 个用例通过。
+- TypeScript typecheck：exit 0。
+- Frontend build：exit 0（仅已有 Rollup chunk size 警告）。
+- Rust fmt：exit 0。
+- Rust 全量测试（parallel）：51 + 12 + 42 = 105 通过。
+- Rust 全量测试（serial `--test-threads=1`）：105 通过。
+- Clippy `-D warnings`：exit 0。
+- `git diff --check`：exit 0。
+- `migration-runbook.md` 新增 Milestone 2 Verification Evidence 小节，如实记录并发、隐私、升级和恢复验证结果。
+- `feature-parity.md` 补充诚实所有权说明：`plan.get_today` 可在打包读 parity 签字后升为 `rust-owned`；`record.checkin_plan` 保持 `typescript` 直到打包手测签字。
+- `MANUAL_TEST.md` 新增 Agent Tools Policy Vertical Slice 手测清单；未完成的打包项保持未勾选。
+- 未能在当前环境完成打包手测项（Windows 安装包构建/WebView 交互/R3 UI 审批/备份恢复替换），已如实记录。
 
 ## 下一步计划
 
-1. 执行 Task 9：并发幂等、隐私稳定错误、迁移升级/恢复测试及所有权切换/回滚文档。
-2. 执行 Task 10：跑完整 Vitest、typecheck、build、Rust test/fmt/clippy/diff 门禁；无法在当前环境完成的打包手测项将保持未勾选并如实记录。
-3. 最终使用 `finishing-a-development-branch` 进行新鲜验证，并保留分支供用户选择后续合并、PR 或继续保留。
+分支 `codex/agent-tools-policy-phase2` 保留供用户选择：
+
+1. 合并到 `main`。
+2. 创建 Pull Request。
+3. 继续保留分支进行打包手测验证。
+4. 使用 `finishing-a-development-branch` 进行新鲜验证。
 
 ## 额度监控
 
-当前线程没有设置可查询的 token 预算（`remainingTokens: null`）。我会在每个任务提交和验证节点更新状态；若上下文或执行额度接近上限，将优先保存本文件、记录实际测试证据和未完成任务，再停止扩展工作。
+Task 9 和 Task 10 均已完成并提交。
