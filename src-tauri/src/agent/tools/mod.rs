@@ -54,13 +54,19 @@ pub struct ToolDescriptor {
     pub data_permissions: Vec<&'static str>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ToolOwnership {
     Typescript,
     Shadow,
     RustOwned,
     Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListedTool {
+    pub descriptor: ToolDescriptor,
+    pub ownership: ToolOwnership,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -201,5 +207,17 @@ mod tests {
         assert!(registry
             .validate_input("record.checkin_plan", "1", &input)
             .is_ok());
+    }
+
+    #[test]
+    fn listed_tool_serializes_descriptor_and_ownership() {
+        let descriptor = plan::descriptor();
+        let listed = ListedTool {
+            descriptor,
+            ownership: ToolOwnership::RustOwned,
+        };
+        let value = serde_json::to_value(listed).unwrap();
+        assert_eq!(value["descriptor"]["name"], "plan.get_today");
+        assert_eq!(value["ownership"], "rust-owned");
     }
 }
