@@ -6,7 +6,7 @@
 
 ## 当前结论
 
-第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 5 已完成并通过规格与质量双审查；Task 6 即将开始。当前没有代码实现阻塞。
+第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 6 已完成并通过规格与质量双审查；下一项为 Task 7。当前没有代码实现阻塞。
 
 ## 已完成的修改
 
@@ -79,17 +79,33 @@
 - Rust focused tests：6/6；TypeScript parity/plan tests：5/5；Clippy、fmt、diff-check 通过。
 - 规格与质量复审通过，Critical/Important 均为 None。
 
+### Task 6：原子 exactly-once check-in 与 undo
+
+提交：`7dff6f2`、`7a2c048`、`9978340`、`5022f56`  
+主提交信息：`feat: add exactly-once plan check-in tool`
+
+- 实现 `record.checkin_plan` 的锁定计划字段复制、全学习指标、错题写入和精确聚合更新。
+- 实现 Task 6 专用最小 `AgentExecutor`：canonical input、幂等 Step reservation/replay/conflict、业务写入、Step receipt 与 `tool.completed` 单事务提交。
+- 审计事件 trigger 失败时，业务记录、计划聚合和 Step 全部回滚；Persistence 错误固定脱敏。
+- 实现精确四字段 `record.checkin_plan.v1` undo payload、定向补偿、重复 undo 回放及 `tool.undone` 原子回滚。
+- 修复审查发现的撤销后 replay 标志、orphan/reassigned wrong question、影响行数校验和完成状态 provenance 问题。
+- `receipt_json.compensation` 记录 finish/baseline provenance；有效 finish receipt 必须未撤销且联结仍存在、仍属于同一计划的 record。
+- 覆盖 pending/precompleted 的多步逆序撤销链，确保不错误复活或丢失 completed 状态。
+- 最终 agent_tools：24/24；Rust 全量：72/72；TypeScript parity/record：12/12；Clippy、fmt、diff-check 通过。
+- 最终规格与质量复审通过，Critical/Important 均为 None。
+
 ## 正在处理的问题
 
-### 当前待处理：Task 6 exactly-once check-in 与 undo
+### 当前待处理：Task 7 Runtime / Executor / policy / approval / ownership
 
-- 将先写成功、验证、幂等、审计失败回滚和重复 undo 的真实 SQLite RED 测试。
-- 业务写入、Step receipt 与 Event 必须共享同一事务；同一 idempotency key 只能产生一次业务效果。
+- 将把 Task 6 的专用 R1 executor 收敛到通用 `ToolCallRequest`/`ToolCallResponse`，保持 R1 事务核心不变。
+- 下一步重点：动态 ownership fail-closed、R2 summary、R3 持久审批/过期/前置条件重检、R4 navigation，以及 Runtime 作为唯一模型边界。
+- Task 9 明确负责 WAL 双连接并发 idempotency race 算法；Task 7 不应把唯一约束详情泄露到命令边界。
 
 ## 下一步计划
 
-1. 执行 Task 5–Task 6：`plan.get_today` parity、原子 exactly-once `record.checkin_plan` 与 undo。
-2. 执行 Task 7–Task 8：连接 executor/runtime/approval/ownership，并增加类型化 Tauri 命令和隐藏 `/agent-debug` 调试切片。
+1. 执行 Task 7：连接通用 executor/runtime/policy/approval/ownership，并保持已验证的 R1 事务核心。
+2. 执行 Task 8：增加类型化 Tauri 命令和隐藏 `/agent-debug` 调试切片。
 3. 执行 Task 9：并发幂等、隐私稳定错误、迁移升级/恢复测试及所有权切换/回滚文档。
 4. 执行 Task 10：跑完整 Vitest、typecheck、build、Rust test/fmt/clippy/diff 门禁；无法在当前环境完成的打包手测项将保持未勾选并如实记录。
 5. 最终使用 `finishing-a-development-branch` 进行新鲜验证，并保留分支供用户选择后续合并、PR 或继续保留。
