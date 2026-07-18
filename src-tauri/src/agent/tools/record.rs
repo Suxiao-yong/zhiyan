@@ -78,8 +78,11 @@ pub async fn checkin_plan(
     .map_err(map_sqlx)?
     .ok_or_else(|| AgentError::NotFound(input.plan_id.clone()))?;
 
+    // ponytail: skipped/future plan is a business-state conflict, not malformed input.
+    // Conflict (not persisted as a failed step) lets the run stay running so the
+    // caller can recover; schema-level field errors below stay ToolSchemaInvalid.
     if plan.status == "skipped" || plan.date.as_str() > business_date {
-        return Err(AgentError::ToolSchemaInvalid);
+        return Err(AgentError::Conflict);
     }
     let wrong_question_ids = input
         .wrong_questions

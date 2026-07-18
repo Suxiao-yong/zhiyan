@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Agent Runtime 基础（里程碑 1）**：通过 migration v4 新增五张持久化表（`agent_sessions`、`agent_runs`、`agent_steps`、`agent_events`、`agent_approvals`）；实现 Run 状态机、审计事件、启动恢复（`running` → `interrupted`，保留 `waiting_approval`）；暴露 `agent_health`、`agent_prepare_database_restore` 命令；新增隐藏路由 `/agent-debug`。
+- **Agent 工具与策略垂直切片（里程碑 2）**：
+  - Migration v5：为 `agent_steps` 增加 `policy_json`、`receipt_json`、`undo_json`、`undone_at` 收据列与 `idx_agent_steps_tool_status` 索引，并写入 `plan.get_today=shadow`、`record.checkin_plan=typescript` 所有权默认值。
+  - 稳定工具协议：`ToolRegistry` + JSON Schema 校验，注册 `plan.get_today@1`（R0 只读）与 `record.checkin_plan@1`（R1 exactly-once + undo）。
+  - R0–R4 策略引擎：R0 自动、R1 自动+撤销、R2 摘要/设置闸门、R3 有效审批校验、R4 仅导航。
+  - `plan.get_today`：本地 04:00 业务日边界、真实 SQLite 只读查询，输出与 TypeScript fixture 精确一致。
+  - `record.checkin_plan`：锁定计划字段复制、全学习指标、错题写入、聚合更新、原子 exactly-once 与幂等 replay；`record.checkin_plan.v1` undo 补偿事务定向回滚并重算聚合。
+  - 并发与幂等：WAL 双连接同 key race 解析（三次 bounded 重读，未解析返回 `idempotency_conflict`，零重复写入）。
+  - 所有权闸门：`shadow`/`typescript`/`rust-owned` 防止 TS/Rust 双写，`record.checkin_plan` 在显式切换前保持 TypeScript 所有。
+  - 隐私：输入只存结构化 snapshot + SHA-256 fingerprint，事件与命令错误脱敏，不含 free-text、SQL、路径。
+  - 类型化 Tauri 命令 `agent_list_tools`/`agent_execute_tool`/`agent_decide_approval`/`agent_undo_tool` 与隐藏调试页；生产打卡流程未改动。
+
+### Changed
+
+- `record.checkin_plan` 对 skipped/future 计划的拒绝从 `tool_schema_invalid` 改为 `conflict`（业务状态冲突而非输入畸形），不再因此将整个 Run 标记为失败。
+
 ## [0.1.0] - 2026-07-02
 
 ### Added
