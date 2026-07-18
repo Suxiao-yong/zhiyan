@@ -13,4 +13,9 @@
 | `plan.get_today@1` (R0 read) | Rust tool | Rust tool | shadow | `cargo test --manifest-path src-tauri/Cargo.toml --test agent_tools plan_get_today -- --test-threads=1` |
 | `record.checkin_plan@1` (R1 write + undo) | Rust tool | Rust tool | typescript | `cargo test --manifest-path src-tauri/Cargo.toml --test agent_tools checkin -- --test-threads=1` |
 
+Notes:
+
+- `plan.get_today` may be promoted `shadow -> rust-owned` after packaged read parity sign-off (read-only; no write-owner conflict).
+- `record.checkin_plan` stays `typescript` until the packaged manual vertical slice in `MANUAL_TEST.md` is signed off.
+
 States: `legacy`, `shadow`, `rust-owned`, `retired`.

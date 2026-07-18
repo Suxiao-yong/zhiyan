@@ -76,6 +76,24 @@ Rules:
 - `plan.get_today` may move `shadow -> rust-owned` independently because it is read-only.
 - `record.checkin_plan` stays `typescript` or `shadow` until the packaged manual vertical slice in `MANUAL_TEST.md` is signed off.
 
+## Milestone 2 Verification Evidence (2026-07-18)
+
+The following results were produced in the milestone worktree on 2026-07-18:
+
+- Vitest: 12 test files and 55 tests passed.
+- Rust: 51 unit tests, 12 db tests, and 42 integration tests passed in the default parallel run; the same tests passed with `--test-threads=1`.
+- `npm.cmd run typecheck`: exit code 0.
+- `npm.cmd run build`: exit code 0. The build emitted only existing Rollup annotation/chunk-size warnings; no build error occurred.
+- `cargo fmt --manifest-path src-tauri\Cargo.toml -- --check`: exit code 0.
+- `cargo clippy --manifest-path src-tauri\Cargo.toml --all-targets --all-features -- -D warnings`: exit code 0.
+- `git diff --check`: exit code 0.
+- Concurrency: WAL dual-connection race produces one completion and one replay with exactly one business row, one Step, and one event.
+- Privacy: event payloads and command errors never expose free-text secrets, SQL text, `%APPDATA%`, or absolute paths.
+- Migration upgrade: file databases seeded at v1–v4 each upgrade to v5 exactly once and reopen through both configured pools.
+- Restore: `prepare_database_restore` followed by a v4 backup replacement re-upgrades once with ownership defaults.
+
+The following checks remain manual pending and are not claimed as passed: packaged Windows build, native WebView agent-debug interaction, R3 approval UI flow, and backup-restore replacement in the running app.
+
 ## Milestone 1 rollback
 
 - Disable access to `/agent-debug`.
