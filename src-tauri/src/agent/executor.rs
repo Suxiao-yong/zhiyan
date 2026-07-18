@@ -1,7 +1,5 @@
-#[cfg(test)]
 use std::hash::{Hash, Hasher};
 
-#[cfg(test)]
 use chrono::Duration as ChronoDuration;
 use chrono::{Local, Utc};
 use serde::{Deserialize, Serialize};
@@ -20,7 +18,6 @@ use super::{
     },
 };
 
-#[cfg(test)]
 use super::policy::ApprovalGrant;
 
 const RECORD_CHECKIN_TOOL: &str = "record.checkin_plan";
@@ -97,6 +94,12 @@ struct StoredApproval {
     created_at: String,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct StoredRun {
+    status: String,
+    current_step: i64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct RecordCheckinUndoReceipt {
     kind: String,
@@ -105,12 +108,44 @@ struct RecordCheckinUndoReceipt {
     wrong_question_ids: Vec<String>,
 }
 
+#[derive(Debug)]
+pub(crate) struct DispatchResult {
+    output: Value,
+    receipt: Option<Value>,
+    undo: Option<Value>,
+    undo_available: bool,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TestDispatcherConfig {
+    dispatch_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    invalid_output: bool,
+    ownership_flip: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) enum ToolDispatcher {
+    BuiltIn,
+    #[cfg(test)]
+    Synthetic(TestDispatcherConfig),
+}
+
+enum CoreOutcome {
+    Response(ToolCallResponse),
+    CommittedError(AgentError),
+}
+
+struct ReservedStep {
+    id: String,
+    existing_status: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct AgentExecutor {
     pool: SqlitePool,
     registry: ToolRegistry,
-    #[cfg(test)]
-    test_dispatch_count: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    dispatcher: ToolDispatcher,
 }
 
 impl AgentExecutor {
@@ -118,8 +153,7 @@ impl AgentExecutor {
         Self {
             pool,
             registry: ToolRegistry::built_in(),
-            #[cfg(test)]
-            test_dispatch_count: None,
+            dispatcher: ToolDispatcher::BuiltIn,
         }
     }
 
@@ -127,12 +161,12 @@ impl AgentExecutor {
     fn for_test(
         pool: SqlitePool,
         registry: ToolRegistry,
-        dispatch_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        dispatcher: TestDispatcherConfig,
     ) -> Self {
         Self {
             pool,
             registry,
-            test_dispatch_count: Some(dispatch_count),
+            dispatcher: ToolDispatcher::Synthetic(dispatcher),
         }
     }
 
@@ -167,21 +201,40 @@ impl AgentExecutor {
             .clone();
         self.registry
             .validate_input(&request.tool_name, &request.tool_version, &request.input)?;
-        let ownership = self.ownership_for(descriptor.name).await?;
-        ensure_executable_ownership(&descriptor, ownership)?;
-
-        match descriptor.name {
-            "plan.get_today" => {
-                self.execute_plan_get_today(request, &descriptor, ownership)
-                    .await
+        let normalized_input = normalize_input(&descriptor, request.input.clone())?;
+        let input_json = canonical_json(normalized_input.clone()).to_string();
+        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+        let result = self
+            .execute_in_transaction(
+                &mut tx,
+                &request,
+                &descriptor,
+                normalized_input,
+                &input_json,
+            )
+            .await;
+        match result {
+            Ok(CoreOutcome::Response(response)) => {
+                tx.commit().await.map_err(map_sqlx)?;
+                Ok(response)
             }
-            RECORD_CHECKIN_TOOL => self.execute_generic_checkin(request, &descriptor).await,
-            _ => {
-                #[cfg(test)]
-                if self.test_dispatch_count.is_some() {
-                    return self.execute_synthetic(request, &descriptor).await;
+            Ok(CoreOutcome::CommittedError(error)) => {
+                tx.commit().await.map_err(map_sqlx)?;
+                Err(error)
+            }
+            Err(error) => {
+                tx.rollback().await.map_err(map_sqlx)?;
+                if should_persist_failure(&error) {
+                    persist_failed_attempt(
+                        &self.pool,
+                        &request,
+                        &descriptor,
+                        &input_json,
+                        error.code(),
+                    )
+                    .await?;
                 }
-                Err(AgentError::ToolNotFound)
+                Err(error)
             }
         }
     }
@@ -192,40 +245,69 @@ impl AgentExecutor {
         approve: bool,
     ) -> Result<ApprovalRecord, AgentError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+        let approval = load_approval(&mut tx, approval_id).await?;
+        let expires_at = chrono::DateTime::parse_from_rfc3339(&approval.expires_at)
+            .map_err(|_| AgentError::ApprovalInvalid)?
+            .with_timezone(&Utc);
+        if matches!(approval.status.as_str(), "pending" | "approved") && expires_at <= Utc::now() {
+            let (tool_name, tool_version): (String, String) = sqlx::query_as(
+                "SELECT tool_name,tool_version FROM agent_steps WHERE id=? AND run_id=?",
+            )
+            .bind(&approval.step_id)
+            .bind(&approval.run_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx)?;
+            let descriptor = self.registry.get(&tool_name, &tool_version)?.clone();
+            terminalize_expired_approval(&mut tx, &approval, &descriptor).await?;
+            tx.commit().await.map_err(map_sqlx)?;
+            return Err(AgentError::ApprovalInvalid);
+        }
         let result = decide_approval_in_transaction(&mut tx, approval_id, approve).await;
         finish_transaction(tx, result).await
     }
 
-    async fn ownership_for(&self, tool_name: &str) -> Result<ToolOwnership, AgentError> {
-        let key = format!("agent_tool_owner.{tool_name}");
-        let value: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
-            .bind(key)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx)?;
-        Ok(parse_ownership(value.as_deref()))
-    }
-
-    async fn execute_plan_get_today(
+    async fn execute_in_transaction(
         &self,
-        request: ToolCallRequest,
+        tx: &mut Transaction<'_, Sqlite>,
+        request: &ToolCallRequest,
         descriptor: &ToolDescriptor,
-        ownership: ToolOwnership,
-    ) -> Result<ToolCallResponse, AgentError> {
-        let input: PlanGetTodayInput = serde_json::from_value(request.input.clone())
-            .map_err(|_| AgentError::ToolSchemaInvalid)?;
-        let input_json = canonical_json(request.input.clone()).to_string();
-        let audit_request = request.clone();
-        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
-        let result = async {
-            if let Some(replay) =
-                replay_step(&mut tx, &request, &input_json, descriptor.supports_undo).await?
-            {
-                return Ok(replay);
+        input: Value,
+        input_json: &str,
+    ) -> Result<CoreOutcome, AgentError> {
+        self.dispatcher
+            .before_ownership_check(tx, descriptor)
+            .await?;
+        let ownership = ownership_for_in_transaction(tx, descriptor.name).await?;
+        ensure_executable_ownership(descriptor, ownership)?;
+
+        let run = load_run(tx, &request.run_id).await?;
+        let stored = find_existing_step(tx, request).await?;
+        if let Some(stored) = stored.as_ref() {
+            validate_stored_step(stored, request, input_json)?;
+            if stored.status == "completed" {
+                return Ok(CoreOutcome::Response(replay_response(
+                    stored,
+                    descriptor.supports_undo,
+                )?));
             }
-            let step_id = reserve_step(&mut tx, &request, descriptor, &input_json).await?;
+            if descriptor.risk == RiskLevel::R3
+                && matches!(stored.status.as_str(), "cancelled" | "failed")
+            {
+                return Err(AgentError::ApprovalInvalid);
+            }
+        }
+        validate_run_gate(&run, request, stored.as_ref())?;
+
+        let reserved = if let Some(stored) = stored {
+            ReservedStep {
+                id: stored.id,
+                existing_status: Some(stored.status),
+            }
+        } else {
+            let step_id = reserve_step(tx, request, descriptor, input_json).await?;
             insert_tool_event(
-                &mut tx,
+                tx,
                 &request.run_id,
                 &step_id,
                 "tool.requested",
@@ -234,316 +316,197 @@ impl AgentExecutor {
                 None,
             )
             .await?;
-            let decision = policy::decide(PolicyContext {
-                risk: descriptor.risk,
-                user_allows_r2: false,
+            ReservedStep {
+                id: step_id,
+                existing_status: None,
+            }
+        };
+
+        let user_allows_r2 = if descriptor.risk == RiskLevel::R2 {
+            read_bool_setting(tx, "agent_r2_auto_execute").await?
+        } else {
+            false
+        };
+        let decision = match descriptor.risk {
+            RiskLevel::R3 => {
+                return self
+                    .handle_r3(tx, request, descriptor, &reserved, input, ownership)
+                    .await;
+            }
+            risk => policy::decide(PolicyContext {
+                risk,
+                user_allows_r2,
                 approval: None,
-            })?;
-            if decision != PolicyDecision::Execute {
-                return Err(AgentError::Conflict);
-            }
-            let business_date = plan::business_date_at(Local::now().fixed_offset());
-            let output = tokio::time::timeout(
-                std::time::Duration::from_millis(descriptor.timeout_ms),
-                plan::get_today(&mut *tx, input, &business_date),
-            )
-            .await
-            .map_err(|_| AgentError::ToolTimeout)??;
-            let output = serde_json::to_value(output).map_err(|_| AgentError::ToolSchemaInvalid)?;
-            self.registry.validate_output(descriptor, &output)?;
-            complete_step(
-                &mut tx,
+            })?,
+        };
+
+        if decision == PolicyDecision::PresentSummary {
+            sqlx::query("UPDATE agent_steps SET status='pending', policy_json=? WHERE id=?")
+                .bind(policy_receipt(descriptor, "summary", ownership).to_string())
+                .bind(&reserved.id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_sqlx)?;
+            return Ok(CoreOutcome::Response(ToolCallResponse::SummaryRequired {
+                step_id: reserved.id,
+                preview: input,
+            }));
+        }
+        if decision == PolicyDecision::NavigateOnly {
+            set_step_running(tx, &reserved.id).await?;
+            complete_dispatched_step(
+                tx,
                 &request.run_id,
-                &step_id,
+                &reserved.id,
                 descriptor,
-                &output,
-                json!({
-                    "risk": descriptor.risk,
-                    "confirmation": descriptor.confirmation,
-                    "decision": "execute",
-                    "delivery": if ownership == ToolOwnership::Shadow { "shadow" } else { "rust" }
-                }),
-                Some(json!({
-                    "delivery": if ownership == ToolOwnership::Shadow { "shadow" } else { "rust" }
-                })),
-            )
-            .await?;
-            Ok(ToolCallResponse::Completed {
-                step_id,
-                output,
-                replayed: false,
-                undo_available: false,
-            })
-        }
-        .await;
-        finish_tool_transaction(
-            &self.pool,
-            tx,
-            result,
-            &audit_request,
-            descriptor,
-            &input_json,
-        )
-        .await
-    }
-
-    async fn execute_generic_checkin(
-        &self,
-        request: ToolCallRequest,
-        descriptor: &ToolDescriptor,
-    ) -> Result<ToolCallResponse, AgentError> {
-        let input: RecordCheckinPlanInput =
-            serde_json::from_value(request.input).map_err(|_| AgentError::ToolSchemaInvalid)?;
-        let key = request
-            .idempotency_key
-            .as_deref()
-            .filter(|key| !key.trim().is_empty())
-            .ok_or(AgentError::IdempotencyRequired)?
-            .to_owned();
-        let input_json = canonical_json(
-            serde_json::to_value(&input).map_err(|_| AgentError::ToolSchemaInvalid)?,
-        )
-        .to_string();
-        let execution_request = RecordCheckinExecutionRequest {
-            run_id: request.run_id,
-            step_index: request.step_index,
-            input,
-            business_date: plan::business_date_at(Local::now().fixed_offset()),
-            idempotency_key: Some(key.clone()),
-        };
-        let audit_request = ToolCallRequest {
-            run_id: execution_request.run_id.clone(),
-            step_index: execution_request.step_index,
-            tool_name: RECORD_CHECKIN_TOOL.to_owned(),
-            tool_version: RECORD_CHECKIN_VERSION.to_owned(),
-            input: serde_json::to_value(&execution_request.input)
-                .map_err(|_| AgentError::ToolSchemaInvalid)?,
-            idempotency_key: execution_request.idempotency_key.clone(),
-            approval_id: None,
-        };
-        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
-        let result = async {
-            let response = tokio::time::timeout(
-                std::time::Duration::from_millis(descriptor.timeout_ms),
-                execute_checkin_in_transaction(&mut tx, execution_request, &key, &input_json, true),
-            )
-            .await
-            .map_err(|_| AgentError::ToolTimeout)??;
-            let output = serde_json::to_value(&response.output)
-                .map_err(|_| AgentError::ToolSchemaInvalid)?;
-            self.registry.validate_output(descriptor, &output)?;
-            Ok(ToolCallResponse::Completed {
-                step_id: response.step_id,
-                output,
-                replayed: response.replayed,
-                undo_available: response.undo_available,
-            })
-        }
-        .await;
-        finish_tool_transaction(
-            &self.pool,
-            tx,
-            result,
-            &audit_request,
-            descriptor,
-            &input_json,
-        )
-        .await
-    }
-
-    #[cfg(test)]
-    async fn execute_synthetic(
-        &self,
-        request: ToolCallRequest,
-        descriptor: &ToolDescriptor,
-    ) -> Result<ToolCallResponse, AgentError> {
-        let input_json = canonical_json(request.input.clone()).to_string();
-        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
-        let result = async {
-            let stored = sqlx::query_as::<_, StoredStep>(
-                r#"
-                SELECT id, tool_name, tool_version, status, input_json, output_json, undone_at
-                FROM agent_steps WHERE run_id=? AND step_index=?
-                "#,
-            )
-            .bind(&request.run_id)
-            .bind(request.step_index)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(map_sqlx)?;
-
-            let (step_id, existing_status) = if let Some(stored) = stored {
-                if stored.tool_name != request.tool_name
-                    || stored.tool_version != request.tool_version
-                    || stored.input_json.as_deref() != Some(input_json.as_str())
-                {
-                    return Err(AgentError::IdempotencyConflict);
-                }
-                if stored.status == "completed" {
-                    let output = serde_json::from_str(
-                        stored
-                            .output_json
-                            .as_deref()
-                            .ok_or(AgentError::IdempotencyConflict)?,
-                    )
-                    .map_err(|_| AgentError::IdempotencyConflict)?;
-                    return Ok(ToolCallResponse::Completed {
-                        step_id: stored.id,
-                        output,
-                        replayed: true,
-                        undo_available: false,
-                    });
-                }
-                (stored.id, Some(stored.status))
-            } else {
-                let step_id = reserve_step(&mut tx, &request, descriptor, &input_json).await?;
-                insert_tool_event(
-                    &mut tx,
-                    &request.run_id,
-                    &step_id,
-                    "tool.requested",
-                    descriptor,
-                    "requested",
-                    None,
-                )
-                .await?;
-                (step_id, None)
-            };
-
-            match descriptor.risk {
-                RiskLevel::R2 => {
-                    let allowed = read_bool_setting(&mut tx, "agent_r2_auto_execute").await?;
-                    if policy::decide(PolicyContext {
-                        risk: descriptor.risk,
-                        user_allows_r2: allowed,
-                        approval: None,
-                    })? == PolicyDecision::PresentSummary
-                    {
-                        sqlx::query(
-                            "UPDATE agent_steps SET status='pending', policy_json=? WHERE id=?",
-                        )
-                        .bind(json!({"risk":descriptor.risk,"decision":"summary"}).to_string())
-                        .bind(&step_id)
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(map_sqlx)?;
-                        return Ok(ToolCallResponse::SummaryRequired {
-                            step_id,
-                            preview: request.input,
-                        });
-                    }
-                }
-                RiskLevel::R3 => {
-                    let current_hash = synthetic_precondition_hash(&mut tx, &request.input).await?;
-                    if let Some(approval_id) = request.approval_id.as_deref() {
-                        let approval = load_approval(&mut tx, approval_id).await?;
-                        let expires_at = chrono::DateTime::parse_from_rfc3339(&approval.expires_at)
-                            .map_err(|_| AgentError::ApprovalInvalid)?
-                            .with_timezone(&Utc);
-                        let stored_hash = approval_precondition_hash(&approval)?;
-                        let decision = policy::decide(PolicyContext {
-                            risk: descriptor.risk,
-                            user_allows_r2: false,
-                            approval: Some(ApprovalGrant {
-                                approval_id: &approval.id,
-                                step_id: &approval.step_id,
-                                expected_step_id: &step_id,
-                                status: &approval.status,
-                                expires_at,
-                                now: Utc::now(),
-                                precondition_hash: &stored_hash,
-                                current_precondition_hash: &current_hash,
-                            }),
-                        })?;
-                        if decision != PolicyDecision::Execute {
-                            return Err(AgentError::ApprovalInvalid);
-                        }
-                    } else if existing_status.as_deref() == Some("waiting_approval") {
-                        let approval = load_approval_for_step(&mut tx, &step_id).await?;
-                        return waiting_response(&approval);
-                    } else {
-                        let approval = create_pending_approval(
-                            &mut tx,
-                            &request,
-                            descriptor,
-                            &step_id,
-                            &current_hash,
-                        )
-                        .await?;
-                        return waiting_response(&approval);
-                    }
-                }
-                RiskLevel::R4 => {
-                    let decision = policy::decide(PolicyContext {
-                        risk: descriptor.risk,
-                        user_allows_r2: false,
-                        approval: None,
-                    })?;
-                    if decision == PolicyDecision::NavigateOnly {
-                        set_step_running(&mut tx, &step_id).await?;
-                        complete_step(
-                            &mut tx,
-                            &request.run_id,
-                            &step_id,
-                            descriptor,
-                            &json!({"ok":false}),
-                            json!({"risk":descriptor.risk,"decision":"navigation"}),
-                            None,
-                        )
-                        .await?;
-                        return Ok(ToolCallResponse::NavigationRequired {
-                            route: "/settings".to_owned(),
-                            reason: "tool_requires_navigation".to_owned(),
-                        });
-                    }
-                }
-                _ => return Err(AgentError::ToolNotFound),
-            }
-
-            set_step_running(&mut tx, &step_id).await?;
-            let counter = self
-                .test_dispatch_count
-                .as_ref()
-                .expect("synthetic dispatcher must exist")
-                .clone();
-            let source_id = request.input["source_id"]
-                .as_str()
-                .ok_or(AgentError::ToolSchemaInvalid)?
-                .to_owned();
-            let output = tokio::time::timeout(
-                std::time::Duration::from_millis(descriptor.timeout_ms),
-                async {
-                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    sqlx::query("INSERT INTO synthetic_business(source_id) VALUES(?)")
-                        .bind(source_id)
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(map_sqlx)?;
-                    Ok::<_, AgentError>(json!({"ok":true}))
+                &DispatchResult {
+                    output: json!({"ok":false}),
+                    receipt: None,
+                    undo: None,
+                    undo_available: false,
                 },
-            )
-            .await
-            .map_err(|_| AgentError::ToolTimeout)??;
-            self.registry.validate_output(descriptor, &output)?;
-            complete_step(
-                &mut tx,
-                &request.run_id,
-                &step_id,
-                descriptor,
-                &output,
-                json!({"risk":descriptor.risk,"decision":"execute"}),
-                None,
+                policy_receipt(descriptor, "navigation", ownership),
             )
             .await?;
-            Ok(ToolCallResponse::Completed {
-                step_id,
-                output,
-                replayed: false,
-                undo_available: false,
-            })
+            advance_run(tx, request).await?;
+            return Ok(CoreOutcome::Response(
+                ToolCallResponse::NavigationRequired {
+                    route: "/settings".to_owned(),
+                    reason: "tool_requires_navigation".to_owned(),
+                },
+            ));
         }
-        .await;
-        finish_transaction(tx, result).await
+
+        set_step_running(tx, &reserved.id).await?;
+        // Built-in dispatch is transaction-local SQLite work. Dropping the timeout future
+        // cancels only statements on this transaction, which is rolled back by the caller.
+        let dispatched = tokio::time::timeout(
+            std::time::Duration::from_millis(descriptor.timeout_ms),
+            self.dispatcher
+                .dispatch(tx, descriptor, input, &reserved.id, ownership),
+        )
+        .await
+        .map_err(|_| AgentError::ToolTimeout)??;
+        self.registry
+            .validate_output(descriptor, &dispatched.output)?;
+        let decision_name = if decision == PolicyDecision::ExecuteWithUndo {
+            "execute_with_undo"
+        } else {
+            "execute"
+        };
+        complete_dispatched_step(
+            tx,
+            &request.run_id,
+            &reserved.id,
+            descriptor,
+            &dispatched,
+            policy_receipt(descriptor, decision_name, ownership),
+        )
+        .await?;
+        advance_run(tx, request).await?;
+        Ok(CoreOutcome::Response(ToolCallResponse::Completed {
+            step_id: reserved.id,
+            output: dispatched.output,
+            replayed: false,
+            undo_available: dispatched.undo_available,
+        }))
+    }
+
+    async fn handle_r3(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        request: &ToolCallRequest,
+        descriptor: &ToolDescriptor,
+        reserved: &ReservedStep,
+        input: Value,
+        ownership: ToolOwnership,
+    ) -> Result<CoreOutcome, AgentError> {
+        if reserved.existing_status.as_deref() != Some("waiting_approval") {
+            if request.approval_id.is_some() {
+                return Err(AgentError::ApprovalInvalid);
+            }
+            let current_hash = self.dispatcher.precondition_hash(tx, &input).await?;
+            let approval = create_pending_approval(
+                tx,
+                request,
+                descriptor,
+                &reserved.id,
+                &current_hash,
+                ownership,
+            )
+            .await?;
+            return Ok(CoreOutcome::Response(waiting_response(&approval)?));
+        }
+
+        let approval = load_approval_for_step(tx, &reserved.id).await?;
+        let expires_at = chrono::DateTime::parse_from_rfc3339(&approval.expires_at)
+            .map_err(|_| AgentError::ApprovalInvalid)?
+            .with_timezone(&Utc);
+        if expires_at <= Utc::now() {
+            terminalize_expired_approval(tx, &approval, descriptor).await?;
+            return Ok(CoreOutcome::CommittedError(AgentError::ApprovalInvalid));
+        }
+        let Some(requested_approval_id) = request.approval_id.as_deref() else {
+            if approval.status == "pending" {
+                return Ok(CoreOutcome::Response(waiting_response(&approval)?));
+            }
+            return Err(AgentError::ApprovalInvalid);
+        };
+        if requested_approval_id != approval.id || approval.run_id != request.run_id {
+            return Err(AgentError::ApprovalInvalid);
+        }
+
+        let current_hash = self.dispatcher.precondition_hash(tx, &input).await?;
+        let stored_hash = approval_precondition_hash(&approval)?;
+        let decision = policy::decide(PolicyContext {
+            risk: descriptor.risk,
+            user_allows_r2: false,
+            approval: Some(ApprovalGrant {
+                approval_id: &approval.id,
+                step_id: &approval.step_id,
+                expected_step_id: &reserved.id,
+                status: &approval.status,
+                expires_at,
+                now: Utc::now(),
+                precondition_hash: &stored_hash,
+                current_precondition_hash: &current_hash,
+            }),
+        });
+        if !matches!(decision, Ok(PolicyDecision::Execute)) {
+            if approval.status == "approved" && stored_hash != current_hash {
+                terminalize_failed_approval_step(tx, &approval, descriptor, "stale_precondition")
+                    .await?;
+                return Ok(CoreOutcome::CommittedError(AgentError::ApprovalInvalid));
+            }
+            return Err(AgentError::ApprovalInvalid);
+        }
+
+        set_step_running(tx, &reserved.id).await?;
+        let dispatched = tokio::time::timeout(
+            std::time::Duration::from_millis(descriptor.timeout_ms),
+            self.dispatcher
+                .dispatch(tx, descriptor, input, &reserved.id, ownership),
+        )
+        .await
+        .map_err(|_| AgentError::ToolTimeout)??;
+        self.registry
+            .validate_output(descriptor, &dispatched.output)?;
+        complete_dispatched_step(
+            tx,
+            &request.run_id,
+            &reserved.id,
+            descriptor,
+            &dispatched,
+            policy_receipt(descriptor, "execute", ownership),
+        )
+        .await?;
+        advance_run(tx, request).await?;
+        Ok(CoreOutcome::Response(ToolCallResponse::Completed {
+            step_id: reserved.id.clone(),
+            output: dispatched.output,
+            replayed: false,
+            undo_available: dispatched.undo_available,
+        }))
     }
 
     pub async fn execute_record_checkin_plan(
@@ -561,19 +524,196 @@ impl AgentExecutor {
         )
         .to_string();
         let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
-        let result =
-            execute_checkin_in_transaction(&mut tx, request, &key, &input_json, false).await;
+        let result = async {
+            let ownership = ownership_for_in_transaction(&mut tx, RECORD_CHECKIN_TOOL).await?;
+            ensure_executable_ownership(&record::descriptor(), ownership)?;
+            execute_checkin_in_transaction(&mut tx, request, &key, &input_json, false).await
+        }
+        .await;
         finish_transaction(tx, result).await
     }
 
     pub async fn undo(&self, step_id: &str) -> Result<ToolUndoResponse, AgentError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
-        let result = undo_in_transaction(&mut tx, step_id).await;
+        let result = async {
+            let ownership = ownership_for_in_transaction(&mut tx, RECORD_CHECKIN_TOOL).await?;
+            ensure_executable_ownership(&record::descriptor(), ownership)?;
+            undo_in_transaction(&mut tx, step_id).await
+        }
+        .await;
         finish_transaction(tx, result).await
     }
 }
 
-async fn execute_checkin_in_transaction(
+impl ToolDispatcher {
+    async fn before_ownership_check(
+        &self,
+        _tx: &mut Transaction<'_, Sqlite>,
+        _descriptor: &ToolDescriptor,
+    ) -> Result<(), AgentError> {
+        #[cfg(test)]
+        if let Self::Synthetic(config) = self {
+            if let Some(owner) = config.ownership_flip.as_deref() {
+                sqlx::query("UPDATE settings SET value=? WHERE key=?")
+                    .bind(owner)
+                    .bind(format!("agent_tool_owner.{}", _descriptor.name))
+                    .execute(&mut **_tx)
+                    .await
+                    .map_err(map_sqlx)?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn precondition_hash(
+        &self,
+        _tx: &mut Transaction<'_, Sqlite>,
+        input: &Value,
+    ) -> Result<String, AgentError> {
+        #[cfg(test)]
+        if let Self::Synthetic(_) = self {
+            let source_id = input["source_id"]
+                .as_str()
+                .ok_or(AgentError::ToolSchemaInvalid)?;
+            let source_value: String =
+                sqlx::query_scalar("SELECT value FROM synthetic_sources WHERE id=?")
+                    .bind(source_id)
+                    .fetch_optional(&mut **_tx)
+                    .await
+                    .map_err(map_sqlx)?
+                    .ok_or_else(|| AgentError::NotFound(source_id.to_owned()))?;
+            return Ok(hash_value(&json!({"id":source_id,"value":source_value})));
+        }
+        Ok(hash_value(input))
+    }
+
+    pub(crate) async fn dispatch(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        descriptor: &ToolDescriptor,
+        input: Value,
+        step_id: &str,
+        ownership: ToolOwnership,
+    ) -> Result<DispatchResult, AgentError> {
+        match self {
+            Self::BuiltIn => match descriptor.name {
+                "plan.get_today" => {
+                    let input: PlanGetTodayInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let business_date = plan::business_date_at(Local::now().fixed_offset());
+                    let output = plan::get_today(&mut **tx, input, &business_date).await?;
+                    let delivery = if ownership == ToolOwnership::Shadow {
+                        "shadow"
+                    } else {
+                        "rust"
+                    };
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":delivery})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                RECORD_CHECKIN_TOOL => {
+                    let input: RecordCheckinPlanInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    dispatch_record_checkin_business(
+                        tx,
+                        step_id,
+                        input,
+                        &plan::business_date_at(Local::now().fixed_offset()),
+                    )
+                    .await
+                }
+                _ => Err(AgentError::ToolNotFound),
+            },
+            #[cfg(test)]
+            Self::Synthetic(config) => {
+                use std::sync::atomic::Ordering;
+                config.dispatch_count.fetch_add(1, Ordering::SeqCst);
+                let source_id = input["source_id"]
+                    .as_str()
+                    .ok_or(AgentError::ToolSchemaInvalid)?;
+                sqlx::query("INSERT INTO synthetic_business(source_id) VALUES(?)")
+                    .bind(source_id)
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(map_sqlx)?;
+                Ok(DispatchResult {
+                    output: if config.invalid_output {
+                        json!({"invalid":true})
+                    } else {
+                        json!({"ok":true})
+                    },
+                    receipt: None,
+                    undo: None,
+                    undo_available: false,
+                })
+            }
+        }
+    }
+}
+
+pub(crate) async fn dispatch_record_checkin_business(
+    tx: &mut Transaction<'_, Sqlite>,
+    step_id: &str,
+    input: RecordCheckinPlanInput,
+    business_date: &str,
+) -> Result<DispatchResult, AgentError> {
+    let baseline_completed: bool = sqlx::query_scalar(
+        r#"
+        SELECT p.status = 'completed' AND COALESCE((
+            SELECT MAX(CASE
+                WHEN json_extract(prior.receipt_json,'$.compensation.baseline_completed') = 1
+                    THEN 1 ELSE 0 END)
+            FROM agent_steps AS prior
+            JOIN study_records AS prior_record
+              ON prior_record.id = json_extract(prior.undo_json,'$.record_id')
+             AND prior_record.plan_id = p.id
+            WHERE prior.id <> ?
+              AND prior.tool_name = ? AND prior.tool_version = ?
+              AND prior.status = 'completed' AND prior.undone_at IS NULL
+              AND json_extract(prior.undo_json,'$.kind') = ?
+              AND json_extract(prior.undo_json,'$.plan_id') = p.id
+              AND json_extract(prior.receipt_json,'$.compensation.finish') = 1
+        ),1)
+        FROM study_plans AS p WHERE p.id=?
+        "#,
+    )
+    .bind(step_id)
+    .bind(RECORD_CHECKIN_TOOL)
+    .bind(RECORD_CHECKIN_VERSION)
+    .bind(RECORD_CHECKIN_UNDO_KIND)
+    .bind(&input.plan_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(map_sqlx)?
+    .unwrap_or(false);
+    let finish = input.finish;
+    let record_id = Uuid::new_v4().to_string();
+    let output = record::checkin_plan(tx, input, business_date, &record_id).await?;
+    let undo = RecordCheckinUndoReceipt {
+        kind: RECORD_CHECKIN_UNDO_KIND.to_owned(),
+        record_id: output.record_id.clone(),
+        plan_id: output.plan_id.clone(),
+        wrong_question_ids: output.wrong_question_ids.clone(),
+    };
+    Ok(DispatchResult {
+        output: serde_json::to_value(output).map_err(|_| AgentError::ToolSchemaInvalid)?,
+        receipt: Some(json!({
+            "compensation": {
+                "finish": finish,
+                "baseline_completed": baseline_completed
+            },
+            "undo_result": null
+        })),
+        undo: Some(serde_json::to_value(undo).map_err(|_| AgentError::ToolSchemaInvalid)?),
+        undo_available: true,
+    })
+}
+
+pub(crate) async fn execute_checkin_in_transaction(
     tx: &mut Transaction<'_, Sqlite>,
     request: RecordCheckinExecutionRequest,
     idempotency_key: &str,
@@ -655,109 +795,22 @@ async fn execute_checkin_in_transaction(
         return Err(AgentError::Conflict);
     }
 
-    let baseline_completed: bool = sqlx::query_scalar(
-        r#"
-        SELECT p.status = 'completed' AND COALESCE((
-            SELECT MAX(CASE
-                WHEN json_extract(
-                    prior.receipt_json,
-                    '$.compensation.baseline_completed'
-                ) = 1 THEN 1
-                ELSE 0
-            END)
-            FROM agent_steps AS prior
-            JOIN study_records AS prior_record
-              ON prior_record.id = json_extract(prior.undo_json, '$.record_id')
-             AND prior_record.plan_id = p.id
-            WHERE prior.id <> ?
-              AND prior.tool_name = ?
-              AND prior.tool_version = ?
-              AND prior.status = 'completed'
-              AND prior.undone_at IS NULL
-              AND json_extract(prior.undo_json, '$.kind') = ?
-              AND json_extract(prior.undo_json, '$.plan_id') = p.id
-              AND json_extract(prior.receipt_json, '$.compensation.finish') = 1
-        ), 1)
-        FROM study_plans AS p
-        WHERE p.id = ?
-        "#,
+    let dispatched =
+        dispatch_record_checkin_business(tx, &step_id, request.input, &request.business_date)
+            .await?;
+    let descriptor = record::descriptor();
+    ToolRegistry::built_in().validate_output(&descriptor, &dispatched.output)?;
+    complete_dispatched_step(
+        tx,
+        &request.run_id,
+        &step_id,
+        &descriptor,
+        &dispatched,
+        policy_receipt(&descriptor, "execute_with_undo", ToolOwnership::RustOwned),
     )
-    .bind(&step_id)
-    .bind(RECORD_CHECKIN_TOOL)
-    .bind(RECORD_CHECKIN_VERSION)
-    .bind(RECORD_CHECKIN_UNDO_KIND)
-    .bind(&request.input.plan_id)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(map_sqlx)?
-    .unwrap_or(false);
-    let record_id = Uuid::new_v4().to_string();
-    let finish = request.input.finish;
-    let output =
-        record::checkin_plan(tx, request.input, &request.business_date, &record_id).await?;
-    let output_json = serde_json::to_string(&output).map_err(|_| AgentError::ToolSchemaInvalid)?;
-    let undo = RecordCheckinUndoReceipt {
-        kind: RECORD_CHECKIN_UNDO_KIND.to_owned(),
-        record_id: output.record_id.clone(),
-        plan_id: output.plan_id.clone(),
-        wrong_question_ids: output.wrong_question_ids.clone(),
-    };
-    let undo_json = serde_json::to_string(&undo).map_err(|_| AgentError::ToolSchemaInvalid)?;
-    let policy_json = json!({
-        "risk":"R1",
-        "confirmation":"automatic",
-        "decision":"execute_with_undo"
-    })
-    .to_string();
-    let receipt_json = json!({
-        "compensation": {
-            "finish": finish,
-            "baseline_completed": baseline_completed
-        },
-        "undo_result": null
-    })
-    .to_string();
-    let updated = sqlx::query(
-        r#"
-        UPDATE agent_steps
-        SET status='completed', output_json=?, policy_json=?, receipt_json=?, undo_json=?,
-            completed_at=datetime('now','localtime')
-        WHERE id=? AND status='running'
-        "#,
-    )
-    .bind(&output_json)
-    .bind(policy_json)
-    .bind(receipt_json)
-    .bind(undo_json)
-    .bind(&step_id)
-    .execute(&mut **tx)
-    .await
-    .map_err(map_sqlx)?;
-    if updated.rows_affected() != 1 {
-        return Err(AgentError::Conflict);
-    }
-
-    sqlx::query(
-        r#"
-        INSERT INTO agent_events(run_id, step_id, event_type, payload_json)
-        VALUES(?, ?, 'tool.completed', ?)
-        "#,
-    )
-    .bind(&request.run_id)
-    .bind(&step_id)
-    .bind(
-        json!({
-            "step_id": step_id,
-            "tool_name": RECORD_CHECKIN_TOOL,
-            "tool_version": RECORD_CHECKIN_VERSION,
-            "risk": "R1",
-            "result": "completed"
-        })
-        .to_string(),
-    )
-    .execute(&mut **tx)
-    .await
-    .map_err(map_sqlx)?;
+    .await?;
+    let output: RecordCheckinPlanOutput =
+        serde_json::from_value(dispatched.output).map_err(|_| AgentError::ToolSchemaInvalid)?;
 
     Ok(RecordCheckinExecutionResponse {
         step_id,
@@ -767,7 +820,7 @@ async fn execute_checkin_in_transaction(
     })
 }
 
-async fn undo_in_transaction(
+pub(crate) async fn undo_in_transaction(
     tx: &mut Transaction<'_, Sqlite>,
     step_id: &str,
 ) -> Result<ToolUndoResponse, AgentError> {
@@ -1030,34 +1083,6 @@ async fn finish_transaction<T>(
     }
 }
 
-async fn finish_tool_transaction<T>(
-    pool: &SqlitePool,
-    tx: Transaction<'_, Sqlite>,
-    result: Result<T, AgentError>,
-    request: &ToolCallRequest,
-    descriptor: &ToolDescriptor,
-    input_json: &str,
-) -> Result<T, AgentError> {
-    match result {
-        Ok(value) => {
-            tx.commit().await.map_err(map_sqlx)?;
-            Ok(value)
-        }
-        Err(error) => {
-            tx.rollback().await.map_err(map_sqlx)?;
-            if !matches!(
-                error,
-                AgentError::IdempotencyConflict
-                    | AgentError::IdempotencyRequired
-                    | AgentError::ApprovalInvalid
-            ) {
-                persist_failed_attempt(pool, request, descriptor, input_json, error.code()).await?;
-            }
-            Err(error)
-        }
-    }
-}
-
 async fn persist_failed_attempt(
     pool: &SqlitePool,
     request: &ToolCallRequest,
@@ -1068,12 +1093,13 @@ async fn persist_failed_attempt(
     let mut tx = pool.begin().await.map_err(map_sqlx)?;
     let result = async {
         let step_id = Uuid::new_v4().to_string();
+        let ownership = ownership_for_in_transaction(&mut tx, descriptor.name).await?;
         sqlx::query(
             r#"
             INSERT INTO agent_steps(
                 id,run_id,step_index,tool_name,tool_version,risk,status,input_json,
-                error,idempotency_key,started_at,completed_at
-            ) VALUES(?,?,?,?,?,?,'failed',?,?,?,datetime('now','localtime'),datetime('now','localtime'))
+                policy_json,error,idempotency_key,started_at,completed_at
+            ) VALUES(?,?,?,?,?,?,'failed',?,?,?,?,datetime('now','localtime'),datetime('now','localtime'))
             "#,
         )
         .bind(&step_id)
@@ -1083,11 +1109,24 @@ async fn persist_failed_attempt(
         .bind(descriptor.version)
         .bind(risk_number(descriptor.risk))
         .bind(input_json)
+        .bind(policy_receipt(descriptor, "failed", ownership).to_string())
         .bind(error_code)
         .bind(&request.idempotency_key)
         .execute(&mut *tx)
         .await
         .map_err(map_reservation_error)?;
+        let run_updated = sqlx::query(
+            "UPDATE agent_runs SET status='failed',error_code=?,completed_at=datetime('now','localtime') WHERE id=? AND status='running' AND current_step=?",
+        )
+        .bind(error_code)
+        .bind(&request.run_id)
+        .bind(request.step_index)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx)?;
+        if run_updated.rows_affected() != 1 {
+            return Err(AgentError::Conflict);
+        }
         insert_tool_event(
             &mut tx,
             &request.run_id,
@@ -1152,6 +1191,201 @@ fn parse_ownership(value: Option<&str>) -> ToolOwnership {
     }
 }
 
+fn normalize_input(descriptor: &ToolDescriptor, input: Value) -> Result<Value, AgentError> {
+    if descriptor.name == RECORD_CHECKIN_TOOL {
+        let typed: RecordCheckinPlanInput =
+            serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+        serde_json::to_value(typed).map_err(|_| AgentError::ToolSchemaInvalid)
+    } else {
+        Ok(input)
+    }
+}
+
+fn hash_value(value: &Value) -> String {
+    let canonical = canonical_json(value.clone()).to_string();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn should_persist_failure(error: &AgentError) -> bool {
+    matches!(
+        error,
+        AgentError::ToolSchemaInvalid
+            | AgentError::ToolTimeout
+            | AgentError::Persistence(_)
+            | AgentError::NotFound(_)
+    )
+}
+
+async fn ownership_for_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    tool_name: &str,
+) -> Result<ToolOwnership, AgentError> {
+    let value: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key=?")
+        .bind(format!("agent_tool_owner.{tool_name}"))
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(map_sqlx)?;
+    Ok(parse_ownership(value.as_deref()))
+}
+
+async fn load_run(tx: &mut Transaction<'_, Sqlite>, run_id: &str) -> Result<StoredRun, AgentError> {
+    sqlx::query_as::<_, StoredRun>("SELECT status,current_step FROM agent_runs WHERE id=?")
+        .bind(run_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(map_sqlx)?
+        .ok_or_else(|| AgentError::NotFound(run_id.to_owned()))
+}
+
+async fn find_existing_step(
+    tx: &mut Transaction<'_, Sqlite>,
+    request: &ToolCallRequest,
+) -> Result<Option<StoredStep>, AgentError> {
+    if let Some(key) = request.idempotency_key.as_deref() {
+        if let Some(stored) = sqlx::query_as::<_, StoredStep>(
+            r#"
+            SELECT id,tool_name,tool_version,status,input_json,output_json,undone_at
+            FROM agent_steps WHERE idempotency_key=?
+            "#,
+        )
+        .bind(key)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(map_sqlx)?
+        {
+            return Ok(Some(stored));
+        }
+    }
+    sqlx::query_as::<_, StoredStep>(
+        r#"
+        SELECT id,tool_name,tool_version,status,input_json,output_json,undone_at
+        FROM agent_steps WHERE run_id=? AND step_index=?
+        "#,
+    )
+    .bind(&request.run_id)
+    .bind(request.step_index)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(map_sqlx)
+}
+
+fn validate_stored_step(
+    stored: &StoredStep,
+    request: &ToolCallRequest,
+    input_json: &str,
+) -> Result<(), AgentError> {
+    if stored.tool_name == request.tool_name
+        && stored.tool_version == request.tool_version
+        && stored.input_json.as_deref() == Some(input_json)
+    {
+        Ok(())
+    } else {
+        Err(AgentError::IdempotencyConflict)
+    }
+}
+
+fn replay_response(
+    stored: &StoredStep,
+    supports_undo: bool,
+) -> Result<ToolCallResponse, AgentError> {
+    let output = serde_json::from_str(
+        stored
+            .output_json
+            .as_deref()
+            .ok_or(AgentError::IdempotencyConflict)?,
+    )
+    .map_err(|_| AgentError::IdempotencyConflict)?;
+    Ok(ToolCallResponse::Completed {
+        step_id: stored.id.clone(),
+        output,
+        replayed: true,
+        undo_available: supports_undo && stored.undone_at.is_none(),
+    })
+}
+
+fn validate_run_gate(
+    run: &StoredRun,
+    request: &ToolCallRequest,
+    stored: Option<&StoredStep>,
+) -> Result<(), AgentError> {
+    let waiting_replay = stored.is_some_and(|step| step.status == "waiting_approval")
+        && matches!(run.status.as_str(), "waiting_approval" | "running");
+    if request.step_index == run.current_step && (run.status == "running" || waiting_replay) {
+        Ok(())
+    } else {
+        Err(AgentError::Conflict)
+    }
+}
+
+fn policy_receipt(descriptor: &ToolDescriptor, decision: &str, ownership: ToolOwnership) -> Value {
+    json!({
+        "risk": descriptor.risk,
+        "confirmation": descriptor.confirmation,
+        "decision": decision,
+        "delivery": if ownership == ToolOwnership::Shadow { "shadow" } else { "rust" },
+    })
+}
+
+async fn complete_dispatched_step(
+    tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
+    step_id: &str,
+    descriptor: &ToolDescriptor,
+    dispatched: &DispatchResult,
+    policy: Value,
+) -> Result<(), AgentError> {
+    let updated = sqlx::query(
+        r#"
+        UPDATE agent_steps
+        SET status='completed',output_json=?,policy_json=?,receipt_json=?,undo_json=?,
+            error=NULL,completed_at=datetime('now','localtime')
+        WHERE id=? AND status='running'
+        "#,
+    )
+    .bind(dispatched.output.to_string())
+    .bind(policy.to_string())
+    .bind(dispatched.receipt.as_ref().map(Value::to_string))
+    .bind(dispatched.undo.as_ref().map(Value::to_string))
+    .bind(step_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    if updated.rows_affected() != 1 {
+        return Err(AgentError::Conflict);
+    }
+    insert_tool_event(
+        tx,
+        run_id,
+        step_id,
+        "tool.completed",
+        descriptor,
+        "completed",
+        None,
+    )
+    .await
+}
+
+async fn advance_run(
+    tx: &mut Transaction<'_, Sqlite>,
+    request: &ToolCallRequest,
+) -> Result<(), AgentError> {
+    let updated = sqlx::query(
+        "UPDATE agent_runs SET current_step=current_step+1 WHERE id=? AND status='running' AND current_step=?",
+    )
+    .bind(&request.run_id)
+    .bind(request.step_index)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    if updated.rows_affected() == 1 {
+        Ok(())
+    } else {
+        Err(AgentError::Conflict)
+    }
+}
+
 fn ensure_executable_ownership(
     descriptor: &ToolDescriptor,
     ownership: ToolOwnership,
@@ -1169,49 +1403,6 @@ fn ensure_executable_ownership(
     } else {
         Err(AgentError::OwnershipNotRust)
     }
-}
-
-async fn replay_step(
-    tx: &mut Transaction<'_, Sqlite>,
-    request: &ToolCallRequest,
-    input_json: &str,
-    supports_undo: bool,
-) -> Result<Option<ToolCallResponse>, AgentError> {
-    let stored = sqlx::query_as::<_, StoredStep>(
-        r#"
-        SELECT id, tool_name, tool_version, status, input_json, output_json, undone_at
-        FROM agent_steps
-        WHERE run_id = ? AND step_index = ?
-        "#,
-    )
-    .bind(&request.run_id)
-    .bind(request.step_index)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(map_sqlx)?;
-    let Some(stored) = stored else {
-        return Ok(None);
-    };
-    if stored.tool_name != request.tool_name
-        || stored.tool_version != request.tool_version
-        || stored.input_json.as_deref() != Some(input_json)
-        || stored.status != "completed"
-    {
-        return Err(AgentError::IdempotencyConflict);
-    }
-    let output = serde_json::from_str(
-        stored
-            .output_json
-            .as_deref()
-            .ok_or(AgentError::IdempotencyConflict)?,
-    )
-    .map_err(|_| AgentError::IdempotencyConflict)?;
-    Ok(Some(ToolCallResponse::Completed {
-        step_id: stored.id,
-        output,
-        replayed: true,
-        undo_available: supports_undo && stored.undone_at.is_none(),
-    }))
 }
 
 async fn reserve_step(
@@ -1249,40 +1440,6 @@ async fn reserve_step(
     .await
     .map_err(map_reservation_error)?;
     Ok(step_id)
-}
-
-async fn complete_step(
-    tx: &mut Transaction<'_, Sqlite>,
-    run_id: &str,
-    step_id: &str,
-    descriptor: &ToolDescriptor,
-    output: &Value,
-    policy: Value,
-    receipt: Option<Value>,
-) -> Result<(), AgentError> {
-    let updated = sqlx::query(
-        "UPDATE agent_steps SET status='completed', output_json=?, policy_json=?, receipt_json=?, completed_at=datetime('now','localtime') WHERE id=? AND status='running'",
-    )
-    .bind(output.to_string())
-    .bind(policy.to_string())
-    .bind(receipt.map(|value| value.to_string()))
-    .bind(step_id)
-    .execute(&mut **tx)
-    .await
-    .map_err(map_sqlx)?;
-    if updated.rows_affected() != 1 {
-        return Err(AgentError::Conflict);
-    }
-    insert_tool_event(
-        tx,
-        run_id,
-        step_id,
-        "tool.completed",
-        descriptor,
-        "completed",
-        None,
-    )
-    .await
 }
 
 async fn insert_tool_event(
@@ -1429,6 +1586,26 @@ async fn decide_approval_in_transaction(
     if run_updated.rows_affected() != 1 {
         return Err(AgentError::Conflict);
     }
+    if !approve {
+        let step_updated = sqlx::query(
+            "UPDATE agent_steps SET status='cancelled',policy_json=?,error='approval_rejected',completed_at=datetime('now','localtime') WHERE id=? AND status='waiting_approval'",
+        )
+        .bind(
+            json!({
+                "risk": format!("R{}", approval.risk),
+                "decision": "rejected",
+                "delivery": "rust",
+            })
+            .to_string(),
+        )
+        .bind(&approval.step_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(map_sqlx)?;
+        if step_updated.rows_affected() != 1 {
+            return Err(AgentError::Conflict);
+        }
+    }
 
     let (tool_name, tool_version, risk): (String, String, i64) = sqlx::query_as(
         "SELECT tool_name, tool_version, risk FROM agent_steps WHERE id=? AND run_id=?",
@@ -1465,7 +1642,58 @@ async fn decide_approval_in_transaction(
     approval_record(load_approval(tx, approval_id).await?)
 }
 
-#[cfg(test)]
+async fn terminalize_expired_approval(
+    tx: &mut Transaction<'_, Sqlite>,
+    approval: &StoredApproval,
+    descriptor: &ToolDescriptor,
+) -> Result<(), AgentError> {
+    sqlx::query(
+        "UPDATE agent_approvals SET status='expired',decided_at=? WHERE id=? AND status IN ('pending','approved')",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .bind(&approval.id)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    terminalize_failed_approval_step(tx, approval, descriptor, "approval_expired").await
+}
+
+async fn terminalize_failed_approval_step(
+    tx: &mut Transaction<'_, Sqlite>,
+    approval: &StoredApproval,
+    descriptor: &ToolDescriptor,
+    result: &str,
+) -> Result<(), AgentError> {
+    let step_updated = sqlx::query(
+        "UPDATE agent_steps SET status='failed',policy_json=?,error='approval_invalid',completed_at=datetime('now','localtime') WHERE id=? AND status='waiting_approval'",
+    )
+    .bind(policy_receipt(descriptor, "failed", ToolOwnership::RustOwned).to_string())
+    .bind(&approval.step_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    let run_updated = sqlx::query(
+        "UPDATE agent_runs SET status='failed',error_code='approval_invalid',completed_at=datetime('now','localtime') WHERE id=? AND status IN ('waiting_approval','running')",
+    )
+    .bind(&approval.run_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    if step_updated.rows_affected() != 1 || run_updated.rows_affected() != 1 {
+        return Err(AgentError::Conflict);
+    }
+    insert_tool_event(
+        tx,
+        &approval.run_id,
+        &approval.step_id,
+        "tool.failed",
+        descriptor,
+        result,
+        Some("approval_invalid"),
+    )
+    .await
+}
+
 async fn read_bool_setting(
     tx: &mut Transaction<'_, Sqlite>,
     key: &str,
@@ -1478,7 +1706,6 @@ async fn read_bool_setting(
     Ok(matches!(value.as_deref(), Some("true" | "1")))
 }
 
-#[cfg(test)]
 async fn set_step_running(
     tx: &mut Transaction<'_, Sqlite>,
     step_id: &str,
@@ -1496,27 +1723,6 @@ async fn set_step_running(
     Ok(())
 }
 
-#[cfg(test)]
-async fn synthetic_precondition_hash(
-    tx: &mut Transaction<'_, Sqlite>,
-    input: &Value,
-) -> Result<String, AgentError> {
-    let source_id = input["source_id"]
-        .as_str()
-        .ok_or(AgentError::ToolSchemaInvalid)?;
-    let source_value: String = sqlx::query_scalar("SELECT value FROM synthetic_sources WHERE id=?")
-        .bind(source_id)
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(map_sqlx)?
-        .ok_or_else(|| AgentError::NotFound(source_id.to_owned()))?;
-    let canonical = canonical_json(json!({"id":source_id,"value":source_value})).to_string();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    canonical.hash(&mut hasher);
-    Ok(format!("{:016x}", hasher.finish()))
-}
-
-#[cfg(test)]
 async fn load_approval_for_step(
     tx: &mut Transaction<'_, Sqlite>,
     step_id: &str,
@@ -1529,13 +1735,13 @@ async fn load_approval_for_step(
     load_approval(tx, &approval_id).await
 }
 
-#[cfg(test)]
 async fn create_pending_approval(
     tx: &mut Transaction<'_, Sqlite>,
     request: &ToolCallRequest,
     descriptor: &ToolDescriptor,
     step_id: &str,
     precondition_hash: &str,
+    ownership: ToolOwnership,
 ) -> Result<StoredApproval, AgentError> {
     let approval_id = Uuid::new_v4().to_string();
     let expires_at = (Utc::now() + ChronoDuration::minutes(10)).to_rfc3339();
@@ -1557,7 +1763,7 @@ async fn create_pending_approval(
     .await
     .map_err(map_sqlx)?;
     sqlx::query("UPDATE agent_steps SET status='waiting_approval', policy_json=? WHERE id=? AND status='running'")
-        .bind(json!({"risk":descriptor.risk,"decision":"waiting_approval"}).to_string())
+        .bind(policy_receipt(descriptor, "waiting_approval", ownership).to_string())
         .bind(step_id)
         .execute(&mut **tx)
         .await
@@ -1585,7 +1791,6 @@ async fn create_pending_approval(
     load_approval(tx, &approval_id).await
 }
 
-#[cfg(test)]
 fn waiting_response(approval: &StoredApproval) -> Result<ToolCallResponse, AgentError> {
     let preview = approval
         .preview_json
@@ -1646,7 +1851,11 @@ mod policy_executor_tests {
         }
     }
 
-    async fn setup(risk: RiskLevel) -> (AgentExecutor, sqlx::SqlitePool, Arc<AtomicUsize>, String) {
+    async fn setup_with(
+        risk: RiskLevel,
+        invalid_output: bool,
+        ownership_flip: Option<&str>,
+    ) -> (AgentExecutor, sqlx::SqlitePool, Arc<AtomicUsize>, String) {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -1683,9 +1892,17 @@ mod policy_executor_tests {
         let executor = AgentExecutor::for_test(
             pool.clone(),
             ToolRegistry::for_test(vec![descriptor(name, risk)]),
-            counter.clone(),
+            TestDispatcherConfig {
+                dispatch_count: counter.clone(),
+                invalid_output,
+                ownership_flip: ownership_flip.map(str::to_owned),
+            },
         );
         (executor, pool, counter, name.to_owned())
+    }
+
+    async fn setup(risk: RiskLevel) -> (AgentExecutor, sqlx::SqlitePool, Arc<AtomicUsize>, String) {
+        setup_with(risk, false, None).await
     }
 
     fn request(name: &str, approval_id: Option<String>) -> ToolCallRequest {
@@ -1766,6 +1983,15 @@ mod policy_executor_tests {
                 .unwrap(),
             "waiting_approval"
         );
+        let policy_json: String =
+            sqlx::query_scalar("SELECT policy_json FROM agent_steps WHERE id=?")
+                .bind(&step_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let policy: Value = serde_json::from_str(&policy_json).unwrap();
+        assert_eq!(policy["decision"], "waiting_approval");
+        assert_eq!(policy["delivery"], "rust");
 
         let approved = executor.decide_approval(&approval_id, true).await.unwrap();
         assert_eq!(approved.status, "approved");
@@ -1780,7 +2006,7 @@ mod policy_executor_tests {
 
     #[tokio::test]
     async fn expired_stale_and_rejected_r3_approvals_never_dispatch() {
-        for case in ["expired", "stale", "rejected"] {
+        for case in ["expired", "expired_no_id", "stale", "rejected"] {
             let (executor, pool, counter, name) = setup(RiskLevel::R3).await;
             let ToolCallResponse::WaitingApproval { approval_id, .. } =
                 executor.execute(request(&name, None)).await.unwrap()
@@ -1789,7 +2015,7 @@ mod policy_executor_tests {
             };
 
             match case {
-                "expired" => {
+                "expired" | "expired_no_id" => {
                     sqlx::query(
                         "UPDATE agent_approvals SET expires_at='2000-01-01T00:00:00Z' WHERE id=?",
                     )
@@ -1811,12 +2037,105 @@ mod policy_executor_tests {
                 _ => unreachable!(),
             }
             let error = executor
-                .execute(request(&name, Some(approval_id)))
+                .execute(request(
+                    &name,
+                    (case != "expired_no_id").then_some(approval_id),
+                ))
                 .await
                 .unwrap_err();
             assert_eq!(error.code(), "approval_invalid", "case={case}");
             assert_eq!(counter.load(Ordering::SeqCst), 0, "case={case}");
+            let expected = if case.starts_with("expired") {
+                ("expired", "failed", "failed")
+            } else if case == "rejected" {
+                ("rejected", "cancelled", "cancelled")
+            } else {
+                ("approved", "failed", "failed")
+            };
+            let actual: (String, String, String) = sqlx::query_as(
+                r#"
+                SELECT a.status, s.status, r.status
+                FROM agent_approvals a
+                JOIN agent_steps s ON s.id=a.step_id
+                JOIN agent_runs r ON r.id=a.run_id
+                "#,
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                (actual.0.as_str(), actual.1.as_str(), actual.2.as_str()),
+                expected,
+                "case={case}"
+            );
+            let policy_json: String = sqlx::query_scalar("SELECT policy_json FROM agent_steps")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let policy: Value = serde_json::from_str(&policy_json).unwrap();
+            assert_eq!(
+                policy["decision"],
+                if case == "rejected" {
+                    "rejected"
+                } else {
+                    "failed"
+                },
+                "case={case}"
+            );
+            assert_eq!(policy["delivery"], "rust", "case={case}");
         }
+    }
+
+    #[tokio::test]
+    async fn ownership_flip_before_reservation_fails_closed_in_the_same_core() {
+        let (executor, pool, counter, name) =
+            setup_with(RiskLevel::R2, false, Some("typescript")).await;
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_r2_auto_execute','true')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let error = executor.execute(request(&name, None)).await.unwrap_err();
+
+        assert_eq!(error.code(), "ownership_not_rust");
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_steps")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn output_schema_failure_rolls_back_business_and_never_completes_step() {
+        let (executor, pool, counter, name) = setup_with(RiskLevel::R2, true, None).await;
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_r2_auto_execute','true')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let error = executor.execute(request(&name, None)).await.unwrap_err();
+
+        assert_eq!(error.code(), "tool_schema_invalid");
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM synthetic_business")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM agent_events WHERE event_type='tool.completed'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -1864,13 +2183,17 @@ mod policy_executor_tests {
                 .unwrap(),
             0
         );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_steps")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            0
-        );
+        let (status, failed_events): (String, i64) = sqlx::query_as(
+            r#"
+            SELECT s.status,
+                   (SELECT COUNT(*) FROM agent_events WHERE event_type='tool.failed')
+            FROM agent_steps s
+            "#,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((status.as_str(), failed_events), ("failed", 1));
     }
 
     #[tokio::test]
@@ -1903,6 +2226,46 @@ mod policy_executor_tests {
                 "tool.waiting_approval",
                 "approval.approved"
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn deciding_an_expired_approval_terminalizes_step_and_run() {
+        let (executor, pool, counter, name) = setup(RiskLevel::R3).await;
+        let ToolCallResponse::WaitingApproval { approval_id, .. } =
+            executor.execute(request(&name, None)).await.unwrap()
+        else {
+            panic!("R3 must wait")
+        };
+        sqlx::query("UPDATE agent_approvals SET expires_at='2000-01-01T00:00:00Z' WHERE id=?")
+            .bind(&approval_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let error = executor
+            .decide_approval(&approval_id, true)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "approval_invalid");
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+        let states: (String, String, String) = sqlx::query_as(
+            r#"
+            SELECT a.status,s.status,r.status
+            FROM agent_approvals a
+            JOIN agent_steps s ON s.id=a.step_id
+            JOIN agent_runs r ON r.id=a.run_id
+            WHERE a.id=?
+            "#,
+        )
+        .bind(&approval_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (states.0.as_str(), states.1.as_str(), states.2.as_str()),
+            ("expired", "failed", "failed")
         );
     }
 }

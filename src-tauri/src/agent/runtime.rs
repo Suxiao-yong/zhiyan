@@ -268,6 +268,12 @@ mod tests {
                 .code(),
             "not_found"
         );
+        sqlx::query(
+            "UPDATE settings SET value='rust-owned' WHERE key='agent_tool_owner.record.checkin_plan'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         assert_eq!(
             runtime.undo_tool("missing-step").await.unwrap_err().code(),
             "not_found"

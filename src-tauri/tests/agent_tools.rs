@@ -142,6 +142,8 @@ async fn seed_agent_run(pool: &SqlitePool) {
         VALUES ('session-checkin', 'exam-1', 'Check-in session');
         INSERT INTO agent_runs (id, session_id, goal, status, trigger_source)
         VALUES ('run-checkin', 'session-checkin', 'Check in', 'running', 'user');
+        UPDATE settings SET value='rust-owned'
+        WHERE key='agent_tool_owner.record.checkin_plan';
         "#,
     )
     .execute(pool)
@@ -1837,8 +1839,8 @@ fn executor_completion_event_failure_rolls_back_generic_business_and_step() {
                 .unwrap(),
             1
         );
-        let (status, error_code): (String, String) =
-            sqlx::query_as("SELECT status, error FROM agent_steps")
+        let (status, error_code, policy_json): (String, String, String) =
+            sqlx::query_as("SELECT status, error, policy_json FROM agent_steps")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -1846,6 +1848,9 @@ fn executor_completion_event_failure_rolls_back_generic_business_and_step() {
             (status.as_str(), error_code.as_str()),
             ("failed", "persistence_error")
         );
+        let policy: Value = serde_json::from_str(&policy_json).unwrap();
+        assert_eq!(policy["decision"], "failed");
+        assert_eq!(policy["delivery"], "rust");
         let events: Vec<(String, String)> =
             sqlx::query_as("SELECT event_type, payload_json FROM agent_events ORDER BY id")
                 .fetch_all(&pool)
@@ -1863,5 +1868,195 @@ fn executor_completion_event_failure_rolls_back_generic_business_and_step() {
             "persistence_error"
         );
         assert!(!events[1].1.contains("generic audit failure"));
+    });
+}
+
+#[test]
+fn executor_run_gate_blocks_non_running_or_wrong_current_step_before_business() {
+    block_on(async {
+        for (status, current_step) in [
+            ("queued", 0_i64),
+            ("cancelled", 0),
+            ("interrupted", 0),
+            ("running", 1),
+        ] {
+            let pool = migrated_pool().await;
+            let fixture = seed_checkin_fixture(&pool).await;
+            seed_agent_run(&pool).await;
+            sqlx::query(
+                "UPDATE settings SET value='rust-owned' WHERE key='agent_tool_owner.record.checkin_plan'",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query("UPDATE agent_runs SET status=?, current_step=? WHERE id='run-checkin'")
+                .bind(status)
+                .bind(current_step)
+                .execute(&pool)
+                .await
+                .unwrap();
+            let records_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+            let error = AgentExecutor::new(pool.clone())
+                .execute(ToolCallRequest {
+                    run_id: "run-checkin".to_owned(),
+                    step_index: 0,
+                    tool_name: "record.checkin_plan".to_owned(),
+                    tool_version: "1".to_owned(),
+                    input: fixture["input"].clone(),
+                    idempotency_key: Some(format!("run-gate/{status}/{current_step}")),
+                    approval_id: None,
+                })
+                .await
+                .unwrap_err();
+
+            assert_eq!(error.code(), "conflict");
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                records_before
+            );
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_steps")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+    });
+}
+
+#[test]
+fn executor_completion_advances_run_once_and_replay_does_not_advance_again() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        sqlx::query(
+            "UPDATE settings SET value='rust-owned' WHERE key='agent_tool_owner.record.checkin_plan'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let request = ToolCallRequest {
+            run_id: "run-checkin".to_owned(),
+            step_index: 0,
+            tool_name: "record.checkin_plan".to_owned(),
+            tool_version: "1".to_owned(),
+            input: fixture["input"].clone(),
+            idempotency_key: Some("run-advance/once".to_owned()),
+            approval_id: None,
+        };
+        let executor = AgentExecutor::new(pool.clone());
+
+        executor.execute(request.clone()).await.unwrap();
+        executor.execute(request).await.unwrap();
+
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT current_step FROM agent_runs WHERE id='run-checkin'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1
+        );
+    });
+}
+
+#[test]
+fn executor_undo_rechecks_write_ownership_inside_compensation_transaction() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        sqlx::query(
+            "UPDATE settings SET value='rust-owned' WHERE key='agent_tool_owner.record.checkin_plan'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let ToolCallResponse::Completed { step_id, .. } = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "record.checkin_plan".to_owned(),
+                tool_version: "1".to_owned(),
+                input: fixture["input"].clone(),
+                idempotency_key: Some("undo/owner-gate".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("check-in must complete")
+        };
+        sqlx::query(
+            "UPDATE settings SET value='typescript' WHERE key='agent_tool_owner.record.checkin_plan'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let records_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let error = AgentExecutor::new(pool.clone())
+            .undo(&step_id)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "ownership_not_rust");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            records_before
+        );
+    });
+}
+
+#[test]
+fn legacy_specialized_write_api_cannot_bypass_ownership() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        sqlx::query(
+            "UPDATE settings SET value='typescript' WHERE key='agent_tool_owner.record.checkin_plan'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let records_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let error = AgentExecutor::new(pool.clone())
+            .execute_record_checkin_plan(execution_request(
+                fixture_checkin_input(&fixture),
+                "legacy/ownership/gate",
+                0,
+            ))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "ownership_not_rust");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            records_before
+        );
     });
 }
