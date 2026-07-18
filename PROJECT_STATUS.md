@@ -6,7 +6,7 @@
 
 ## 当前结论
 
-第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 7 已完成并通过规格与质量双审查；下一项为 Task 8。当前没有代码实现阻塞。
+第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 8 已完成并通过规格与质量双审查；下一项为 Task 9。当前没有代码实现阻塞。
 
 ## 已完成的修改
 
@@ -108,19 +108,32 @@
 - 最终默认与串行 Rust tests：各 93/93；Clippy、fmt、diff-check 通过。
 - 规格与质量复审通过，Critical/Important 均为 None；非阻塞项是真实 R3 工具上线前将 test-stage precondition hash 升级为带版本 SHA-256。
 
+### Task 8：类型化 Tauri 命令与隐藏调试页
+
+提交：`a9ec318`、`a403af5`、`09a7c61`  
+主提交信息：`feat: expose first agent tool vertical slice`
+
+- 新增 list/execute/decide/undo 四个类型化 Tauri 命令及精确 camelCase invoke 边界。
+- TypeScript DTO 镜像 Rust snake_case/tagged union；descriptor 静态 metadata 与动态 ownership 分离。
+- 隐藏 `/agent-debug` 支持 shadow plan read、rust-owned check-in receipt/undo，以及 list persistence error fail-closed。
+- 生产 check-in flow、router、sidebar、`PlanCheckinBoard.vue` 和 `record-service.ts` 均未改动。
+- 修复同一 Run 读→写 current_step 同步、queued/cancelled running gate、整数 duration 与 outbound JsonValue。
+- Completed fresh/replay 使用 `max(local, submittedStep + 1)` 单调对账，既恢复丢失响应后的滞后，也不重复推进或回退。
+- 最终 frontend focused：19/19；全 Vitest：55/55；typecheck/build、Rust commands/full suite、Clippy、fmt、diff-check 通过。
+- 最终规格与质量复审通过，Critical/Important 均为 None。
+
 ## 正在处理的问题
 
-### 当前待处理：Task 8 类型化 Tauri 命令与隐藏调试页
+### 当前待处理：Task 9 并发、隐私、升级恢复与回滚
 
-- 增加四个类型化 Tauri 命令、精确 TypeScript DTO/client，并只扩展隐藏 `/agent-debug` 页面。
-- 生产 `PlanCheckinBoard.vue` 与 `record-service.ts` 保持不变；非 rust-owned check-in 按 gate 禁用。
+- 增加 WAL 双连接同 key 并发 race、三次 bounded replay read、稳定 idempotency_conflict。
+- 加固事件/命令隐私、v1–v4 升级与 restore、ownership cutover/rollback 文档。
 
 ## 下一步计划
 
-1. 执行 Task 8：增加类型化 Tauri 命令和隐藏 `/agent-debug` 调试切片。
-2. 执行 Task 9：并发幂等、隐私稳定错误、迁移升级/恢复测试及所有权切换/回滚文档。
-3. 执行 Task 10：跑完整 Vitest、typecheck、build、Rust test/fmt/clippy/diff 门禁；无法在当前环境完成的打包手测项将保持未勾选并如实记录。
-4. 最终使用 `finishing-a-development-branch` 进行新鲜验证，并保留分支供用户选择后续合并、PR 或继续保留。
+1. 执行 Task 9：并发幂等、隐私稳定错误、迁移升级/恢复测试及所有权切换/回滚文档。
+2. 执行 Task 10：跑完整 Vitest、typecheck、build、Rust test/fmt/clippy/diff 门禁；无法在当前环境完成的打包手测项将保持未勾选并如实记录。
+3. 最终使用 `finishing-a-development-branch` 进行新鲜验证，并保留分支供用户选择后续合并、PR 或继续保留。
 
 ## 额度监控
 
