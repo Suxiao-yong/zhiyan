@@ -6,7 +6,7 @@
 
 ## 当前结论
 
-第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1 已完成并提交；Task 2 正在由独立实现代理按 TDD 实施。当前没有已知阻塞。
+第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1、Task 2 已完成并通过规格与质量双审查；Task 3 即将开始。当前没有已知阻塞。
 
 ## 已完成的修改
 
@@ -30,14 +30,24 @@
 - 未修改生产 TypeScript service。
 - 规格审查通过；代码质量审查无 Critical/Important 问题，仅提出非阻塞的 fixture 驱动和类型收紧建议。
 
-## 正在处理的问题
-
 ### Task 2：迁移 v5、工具收据字段与所有权设置
 
-- 实现代理正在 `src-tauri/src/db.rs` 中先写迁移测试并观察 RED，再追加 migration v5。
-- 目标是增加 `agent_steps.policy_json`、`receipt_json`、`undo_json`、`undone_at`，工具状态索引，以及两个 `agent_tool_owner.*` 默认设置。
-- 必须验证 v4 升级和全量初始化都保留既有业务行与 Agent 行；不得新增 receipt 表。
-- 代理尚未提交 Task 2；因此本状态文件不将其标记为完成。
+提交：`e26f75a`、`254ccef`  
+提交信息：`feat: add agent tool receipt migration`、`test: verify agent tool status index`
+
+- `agent_steps` 新增 `policy_json`、`receipt_json`、`undo_json`、`undone_at` 四个 nullable 收据字段。
+- 新增 `idx_agent_steps_tool_status(tool_name, status)`，并用真实 SQLite 检查索引存在及列顺序。
+- 写入 `plan.get_today=shadow`、`record.checkin_plan=typescript` 两个默认所有权设置。
+- 未新增第二张收据表。
+- 迁移测试覆盖 v4→v5 升级和全量初始化，并确认既有 `study_plans` 与 v4 Agent 行保留。
+- focused db tests：8/8 通过；`cargo fmt -- --check`、`git diff --check` 通过。
+
+## 正在处理的问题
+
+### Task 3：稳定工具协议、注册表与 JSON Schema
+
+- 下一项工作将先写协议/注册表 RED 测试，再实现 `jsonschema` 校验、两个内置工具 descriptor/DTO 及稳定错误码。
+- 重点约束：`additionalProperties: false` 拒绝 caller 覆盖锁定字段；descriptor 元数据不可由请求输入覆盖；不向模型暴露 repository/SQL。
 
 ## 下一步计划
 
@@ -51,4 +61,3 @@
 ## 额度监控
 
 当前线程没有设置可查询的 token 预算（`remainingTokens: null`）。我会在每个任务提交和验证节点更新状态；若上下文或执行额度接近上限，将优先保存本文件、记录实际测试证据和未完成任务，再停止扩展工作。
-
