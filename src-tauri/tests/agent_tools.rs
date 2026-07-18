@@ -5,11 +5,38 @@ use serde_json::Value;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use zhiyan_lib::{
     agent::tools::plan::{self, PlanGetTodayInput},
+    agent::{
+        executor::{AgentExecutor, RecordCheckinExecutionRequest},
+        tools::record::{self, RecordCheckinPlanInput},
+    },
     db,
 };
 
 const EXAM_ID: &str = "exam-1";
 const BUSINESS_DATE: &str = "2026-07-17";
+type StoredRecordMetrics = (
+    String,
+    String,
+    Option<String>,
+    i64,
+    Option<String>,
+    i64,
+    i64,
+    Option<i64>,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+);
+type StoredWrongQuestion = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
 
 fn block_on(future: impl Future<Output = ()>) {
     tokio::runtime::Builder::new_current_thread()
@@ -54,6 +81,506 @@ async fn seed_exam_tree(pool: &SqlitePool) {
     .execute(pool)
     .await
     .unwrap();
+}
+
+async fn seed_checkin_fixture(pool: &SqlitePool) -> Value {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/agent-tools/record-checkin-plan.json"
+    ))
+    .unwrap();
+    seed_exam_tree(pool).await;
+    let plan = &fixture["plan"];
+    sqlx::query(
+        r#"
+        INSERT INTO study_plans (
+            id, exam_id, subject_id, knowledge_point_id, date, planned_tasks,
+            planned_duration, status, generated_by, sort_order, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'local', 0,
+                  '2026-07-16 09:00:00', '2026-07-16 09:00:00')
+        "#,
+    )
+    .bind(plan["id"].as_str().unwrap())
+    .bind(plan["exam_id"].as_str().unwrap())
+    .bind(plan["subject_id"].as_str().unwrap())
+    .bind(plan["knowledge_point_id"].as_str().unwrap())
+    .bind(plan["date"].as_str().unwrap())
+    .bind(plan["planned_tasks"].as_str().unwrap())
+    .bind(plan["planned_duration"].as_i64().unwrap())
+    .bind(plan["status"].as_str().unwrap())
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let old = &fixture["existing_records"][0];
+    sqlx::query(
+        r#"
+        INSERT INTO study_records (
+            id, plan_id, date, subject_id, knowledge_point_id, duration_min,
+            content, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?,
+                  '2026-07-17 09:00:00', '2026-07-17 09:00:00')
+        "#,
+    )
+    .bind(old["id"].as_str().unwrap())
+    .bind(plan["id"].as_str().unwrap())
+    .bind(plan["date"].as_str().unwrap())
+    .bind(plan["subject_id"].as_str().unwrap())
+    .bind(plan["knowledge_point_id"].as_str().unwrap())
+    .bind(old["duration_min"].as_i64().unwrap())
+    .bind(old["content"].as_str().unwrap())
+    .execute(pool)
+    .await
+    .unwrap();
+    fixture
+}
+
+async fn seed_agent_run(pool: &SqlitePool) {
+    sqlx::raw_sql(
+        r#"
+        INSERT INTO agent_sessions (id, exam_id, title)
+        VALUES ('session-checkin', 'exam-1', 'Check-in session');
+        INSERT INTO agent_runs (id, session_id, goal, status, trigger_source)
+        VALUES ('run-checkin', 'session-checkin', 'Check in', 'running', 'user');
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn fixture_checkin_input(fixture: &Value) -> RecordCheckinPlanInput {
+    serde_json::from_value(fixture["input"].clone()).unwrap()
+}
+
+fn execution_request(
+    input: RecordCheckinPlanInput,
+    key: &str,
+    step_index: i64,
+) -> RecordCheckinExecutionRequest {
+    RecordCheckinExecutionRequest {
+        run_id: "run-checkin".to_owned(),
+        step_index,
+        input,
+        business_date: BUSINESS_DATE.to_owned(),
+        idempotency_key: Some(key.to_owned()),
+    }
+}
+
+#[test]
+fn record_checkin_plan_matches_the_shared_fixture_and_copies_locked_fields() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        let input = fixture_checkin_input(&fixture);
+        let expected = &fixture["expected"];
+        let mut tx = pool.begin().await.unwrap();
+
+        let output = record::checkin_plan(&mut tx, input, BUSINESS_DATE, "record-new")
+            .await
+            .unwrap();
+
+        assert_eq!(output.record_id, "record-new");
+        assert_eq!(output.plan_id, fixture["plan"]["id"]);
+        assert_eq!(output.date, expected["date"]);
+        assert_eq!(output.subject_id, expected["subject_id"]);
+        assert_eq!(
+            output.knowledge_point_id.as_deref(),
+            expected["knowledge_point_id"].as_str()
+        );
+        assert_eq!(output.actual_duration, expected["actual_duration"]);
+        assert_eq!(
+            output.actual_tasks.as_deref(),
+            expected["actual_tasks"].as_str()
+        );
+        assert_eq!(output.status, expected["status"]);
+        assert_eq!(output.wrong_question_ids.len(), 1);
+
+        let record_row: StoredRecordMetrics = sqlx::query_as(
+            r#"
+            SELECT date, subject_id, knowledge_point_id, duration_min, content,
+                   questions_count, correct_count, mastery_rating, difficulty_notes,
+                   mood, session_time
+            FROM study_records WHERE id = 'record-new'
+            "#,
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(record_row.0, expected["date"]);
+        assert_eq!(record_row.1, expected["subject_id"]);
+        assert_eq!(
+            record_row.2.as_deref(),
+            expected["knowledge_point_id"].as_str()
+        );
+        assert_eq!(record_row.3, fixture["input"]["duration_min"]);
+        assert_eq!(
+            record_row.4.as_deref(),
+            fixture["input"]["content"].as_str()
+        );
+        assert_eq!(record_row.5, expected["questions_count"]);
+        assert_eq!(record_row.6, expected["correct_count"]);
+        assert_eq!(record_row.7, expected["mastery_rating"].as_i64());
+        assert_eq!(
+            record_row.8.as_deref(),
+            fixture["input"]["difficulty_notes"].as_str()
+        );
+        assert_eq!(record_row.9, fixture["input"]["mood"].as_i64());
+        assert_eq!(
+            record_row.10.as_deref(),
+            fixture["input"]["session_time"].as_str()
+        );
+
+        let wrong_row: StoredWrongQuestion = sqlx::query_as(
+            r#"
+                SELECT subject_id, knowledge_point_id, question_source, question_desc,
+                       correct_answer, my_answer, error_type, error_reason
+                FROM wrong_questions WHERE record_id = 'record-new'
+                "#,
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(wrong_row.0, expected["subject_id"]);
+        assert_eq!(
+            wrong_row.1.as_deref(),
+            expected["knowledge_point_id"].as_str()
+        );
+        for (actual, field) in [
+            (wrong_row.2.as_deref(), "question_source"),
+            (wrong_row.3.as_deref(), "question_desc"),
+            (wrong_row.4.as_deref(), "correct_answer"),
+            (wrong_row.5.as_deref(), "my_answer"),
+            (wrong_row.6.as_deref(), "error_type"),
+            (wrong_row.7.as_deref(), "error_reason"),
+        ] {
+            assert_eq!(
+                actual,
+                fixture["input"]["wrong_questions"][0][field].as_str()
+            );
+        }
+        tx.rollback().await.unwrap();
+    });
+}
+
+#[test]
+fn record_checkin_plan_rejects_invalid_inputs_without_changing_business_rows() {
+    block_on(async {
+        for case in [
+            "missing_plan",
+            "skipped_plan",
+            "future_plan",
+            "zero_duration",
+            "negative_duration",
+            "negative_questions",
+            "negative_correct",
+            "correct_above_questions",
+            "low_mastery",
+            "high_mastery",
+            "low_mood",
+            "high_mood",
+            "invalid_session",
+        ] {
+            let pool = migrated_pool().await;
+            let fixture = seed_checkin_fixture(&pool).await;
+            let mut input = fixture_checkin_input(&fixture);
+            match case {
+                "missing_plan" => input.plan_id = "missing".to_owned(),
+                "skipped_plan" => {
+                    sqlx::query("UPDATE study_plans SET status = 'skipped' WHERE id = 'plan-1'")
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                }
+                "future_plan" => {
+                    sqlx::query("UPDATE study_plans SET date = '2026-07-18' WHERE id = 'plan-1'")
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                }
+                "zero_duration" => input.duration_min = 0,
+                "negative_duration" => input.duration_min = -1,
+                "negative_questions" => input.questions_count = -1,
+                "negative_correct" => input.correct_count = -1,
+                "correct_above_questions" => input.correct_count = input.questions_count + 1,
+                "low_mastery" => input.mastery_rating = Some(0),
+                "high_mastery" => input.mastery_rating = Some(6),
+                "low_mood" => input.mood = Some(0),
+                "high_mood" => input.mood = Some(6),
+                "invalid_session" => input.session_time = Some("night".to_owned()),
+                _ => unreachable!(),
+            }
+            let before_plan: (Option<i64>, Option<String>, String, String) = sqlx::query_as(
+                "SELECT actual_duration, actual_tasks, status, date FROM study_plans WHERE id='plan-1'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let before_records: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let mut tx = pool.begin().await.unwrap();
+            let result =
+                record::checkin_plan(&mut tx, input, BUSINESS_DATE, "record-rejected").await;
+            assert!(result.is_err(), "case {case} must fail");
+            tx.rollback().await.unwrap();
+
+            let after_plan: (Option<i64>, Option<String>, String, String) = sqlx::query_as(
+                "SELECT actual_duration, actual_tasks, status, date FROM study_plans WHERE id='plan-1'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let after_records: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            let wrong_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM wrong_questions")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(after_plan, before_plan, "case {case} changed plan");
+            assert_eq!(after_records, before_records, "case {case} inserted record");
+            assert_eq!(wrong_count, 0, "case {case} inserted wrong question");
+        }
+    });
+}
+
+#[test]
+fn checkin_idempotency_replays_one_atomic_receipt_and_conflicts_on_other_input() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let request = execution_request(fixture_checkin_input(&fixture), "checkin/device-a/42", 0);
+
+        let first = executor
+            .execute_record_checkin_plan(request.clone())
+            .await
+            .unwrap();
+        let second = executor.execute_record_checkin_plan(request).await.unwrap();
+        assert_eq!(first.output, second.output);
+        assert!(!first.replayed);
+        assert!(second.replayed);
+        assert_eq!(first.step_id, second.step_id);
+
+        let record_id = first.output.record_id.clone();
+        let record_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM study_records WHERE id = ?")
+                .bind(&record_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let wrong_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM wrong_questions WHERE record_id = ?")
+                .bind(&record_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let step_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_steps WHERE idempotency_key='checkin/device-a/42'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_events WHERE step_id = ? AND event_type='tool.completed'",
+        )
+        .bind(&first.step_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (record_count, wrong_count, step_count, event_count),
+            (1, 1, 1, 1)
+        );
+
+        let mut conflicting = fixture_checkin_input(&fixture);
+        conflicting.duration_min += 1;
+        let error = executor
+            .execute_record_checkin_plan(execution_request(conflicting, "checkin/device-a/42", 1))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "idempotency_conflict");
+        let records_after_conflict: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(records_after_conflict, 2);
+    });
+}
+
+#[test]
+fn checkin_idempotency_requires_a_non_empty_key_before_writing() {
+    block_on(async {
+        for key in [None, Some(""), Some("   ")] {
+            let pool = migrated_pool().await;
+            let fixture = seed_checkin_fixture(&pool).await;
+            seed_agent_run(&pool).await;
+            let executor = AgentExecutor::new(pool.clone());
+            let mut request = execution_request(fixture_checkin_input(&fixture), "unused", 0);
+            request.idempotency_key = key.map(str::to_owned);
+
+            let error = executor
+                .execute_record_checkin_plan(request)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "idempotency_required");
+            let steps: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_steps")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(steps, 0);
+        }
+    });
+}
+
+#[test]
+fn checkin_crash_window_rolls_back_business_aggregate_step_and_event() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        sqlx::raw_sql(
+            r#"
+            CREATE TRIGGER reject_tool_complete BEFORE INSERT ON agent_events
+            WHEN NEW.event_type='tool.completed'
+            BEGIN SELECT RAISE(ABORT,'crash window'); END;
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let executor = AgentExecutor::new(pool.clone());
+
+        let error = executor
+            .execute_record_checkin_plan(execution_request(
+                fixture_checkin_input(&fixture),
+                "checkin/device-a/43",
+                0,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "persistence_error");
+        assert_eq!(
+            error.to_string(),
+            "agent persistence failed: tool transaction failed"
+        );
+        assert!(!error.to_string().contains("crash window"));
+        assert!(!error.to_string().contains("CREATE TRIGGER"));
+        assert!(!error
+            .to_string()
+            .contains(fixture["input"]["content"].as_str().unwrap()));
+
+        let record_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let plan: (Option<i64>, Option<String>, String) = sqlx::query_as(
+            "SELECT actual_duration, actual_tasks, status FROM study_plans WHERE id='plan-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let step_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_steps")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let event_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_events")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(record_count, 1);
+        assert_eq!(plan, (None, None, "pending".to_owned()));
+        assert_eq!((step_count, event_count), (0, 0));
+    });
+}
+
+#[test]
+fn checkin_undo_is_exactly_once_and_restores_aggregate_from_remaining_records() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let completed = executor
+            .execute_record_checkin_plan(execution_request(
+                fixture_checkin_input(&fixture),
+                "checkin/device-a/44",
+                0,
+            ))
+            .await
+            .unwrap();
+
+        let first = executor.undo(&completed.step_id).await.unwrap();
+        let second = executor.undo(&completed.step_id).await.unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.output.actual_duration, 20);
+        assert_eq!(first.output.actual_tasks.as_deref(), Some("热身"));
+        assert_eq!(first.output.status, "in_progress");
+
+        let new_record_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM study_records WHERE id = ?")
+                .bind(&completed.output.record_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let wrong_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM wrong_questions WHERE record_id = ?")
+                .bind(&completed.output.record_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let aggregate: (Option<i64>, Option<String>, String) = sqlx::query_as(
+            "SELECT actual_duration, actual_tasks, status FROM study_plans WHERE id='plan-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let undo_events: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_events WHERE step_id=? AND event_type='tool.undone'",
+        )
+        .bind(&completed.step_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((new_record_count, wrong_count, undo_events), (0, 0, 1));
+        assert_eq!(
+            aggregate,
+            (Some(20), Some("热身".to_owned()), "in_progress".to_owned())
+        );
+    });
+}
+
+#[test]
+fn checkin_undo_without_remaining_records_restores_planned_pending_aggregate() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        sqlx::query("DELETE FROM study_records WHERE id='record-old'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let completed = executor
+            .execute_record_checkin_plan(execution_request(
+                fixture_checkin_input(&fixture),
+                "checkin/device-a/45",
+                0,
+            ))
+            .await
+            .unwrap();
+
+        let undone = executor.undo(&completed.step_id).await.unwrap();
+        assert_eq!(undone.output.actual_duration, 0);
+        assert_eq!(
+            undone.output.actual_tasks.as_deref(),
+            fixture["plan"]["planned_tasks"].as_str()
+        );
+        assert_eq!(undone.output.status, "pending");
+    });
 }
 
 #[test]
