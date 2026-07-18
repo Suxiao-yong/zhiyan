@@ -642,6 +642,39 @@ fn checkin_undo_without_remaining_records_restores_planned_pending_aggregate() {
 }
 
 #[test]
+fn checkin_undo_payload_keeps_exact_v1_keys_and_provenance_in_receipt_metadata() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let mut input = fixture_checkin_input(&fixture);
+        input.finish = true;
+        let completed = executor
+            .execute_record_checkin_plan(execution_request(input, "checkin/payload/exact-v1", 0))
+            .await
+            .unwrap();
+        let (undo_json, receipt_json): (String, String) =
+            sqlx::query_as("SELECT undo_json, receipt_json FROM agent_steps WHERE id = ?")
+                .bind(&completed.step_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let undo: Value = serde_json::from_str(&undo_json).unwrap();
+        let keys = undo.as_object().unwrap().keys().collect::<Vec<_>>();
+
+        assert_eq!(keys.len(), 4);
+        for required in ["kind", "record_id", "plan_id", "wrong_question_ids"] {
+            assert!(undo.get(required).is_some(), "missing undo key {required}");
+        }
+        let receipt: Value = serde_json::from_str(&receipt_json).unwrap();
+        assert_eq!(receipt["compensation"]["finish"], true);
+        assert_eq!(receipt["compensation"]["baseline_completed"], false);
+        assert!(receipt.get("undo_result").is_some());
+    });
+}
+
+#[test]
 fn checkin_undo_removes_receipted_orphans_after_external_record_deletion() {
     block_on(async {
         let pool = migrated_pool().await;
@@ -814,6 +847,155 @@ fn checkin_undo_preserves_other_finish_receipts_and_recalculates_after_they_are_
         assert_eq!(undo_b.output.actual_duration, 20);
         assert_eq!(undo_b.output.actual_tasks.as_deref(), Some("热身"));
         assert_eq!(undo_b.output.status, "in_progress");
+    });
+}
+
+#[test]
+fn checkin_undo_does_not_promote_a_prior_agent_finish_to_legacy_completed_baseline() {
+    block_on(async {
+        for keep_old_record in [true, false] {
+            let pool = migrated_pool().await;
+            let fixture = seed_checkin_fixture(&pool).await;
+            if !keep_old_record {
+                sqlx::query("DELETE FROM study_records WHERE id='record-old'")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            seed_agent_run(&pool).await;
+            let executor = AgentExecutor::new(pool.clone());
+            let mut input_a = fixture_checkin_input(&fixture);
+            input_a.content = Some("finish A".to_owned());
+            input_a.finish = true;
+            let a = executor
+                .execute_record_checkin_plan(execution_request(
+                    input_a,
+                    &format!("checkin/baseline/a/{keep_old_record}"),
+                    0,
+                ))
+                .await
+                .unwrap();
+            let mut input_b = fixture_checkin_input(&fixture);
+            input_b.content = Some("non-finish B".to_owned());
+            input_b.finish = false;
+            let b = executor
+                .execute_record_checkin_plan(execution_request(
+                    input_b,
+                    &format!("checkin/baseline/b/{keep_old_record}"),
+                    1,
+                ))
+                .await
+                .unwrap();
+            let b_receipt: String =
+                sqlx::query_scalar("SELECT receipt_json FROM agent_steps WHERE id = ?")
+                    .bind(&b.step_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let b_receipt: Value = serde_json::from_str(&b_receipt).unwrap();
+            assert_eq!(
+                b_receipt["compensation"]["baseline_completed"], false,
+                "keep_old_record={keep_old_record}"
+            );
+
+            let undo_a = executor.undo(&a.step_id).await.unwrap();
+            assert_eq!(undo_a.output.status, "in_progress");
+
+            let undo_b = executor.undo(&b.step_id).await.unwrap();
+            assert_eq!(
+                undo_b.output.status,
+                if keep_old_record {
+                    "in_progress"
+                } else {
+                    "pending"
+                }
+            );
+        }
+    });
+}
+
+#[test]
+fn checkin_undo_ignores_stale_finish_receipts_whose_record_no_longer_exists() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let mut input_a = fixture_checkin_input(&fixture);
+        input_a.content = Some("stale finish A".to_owned());
+        input_a.finish = true;
+        let a = executor
+            .execute_record_checkin_plan(execution_request(input_a, "checkin/stale-finish/a", 0))
+            .await
+            .unwrap();
+        let mut input_b = fixture_checkin_input(&fixture);
+        input_b.content = Some("non-finish B".to_owned());
+        input_b.finish = false;
+        let b = executor
+            .execute_record_checkin_plan(execution_request(input_b, "checkin/stale-finish/b", 1))
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM study_records WHERE id = ?")
+            .bind(&a.output.record_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let undone_b = executor.undo(&b.step_id).await.unwrap();
+
+        assert_eq!(undone_b.output.actual_duration, 20);
+        assert_eq!(undone_b.output.actual_tasks.as_deref(), Some("热身"));
+        assert_eq!(undone_b.output.status, "in_progress");
+    });
+}
+
+#[test]
+fn checkin_undo_treats_missing_receipt_metadata_as_false_and_still_replays_result() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let completed = executor
+            .execute_record_checkin_plan(execution_request(
+                fixture_checkin_input(&fixture),
+                "checkin/legacy-receipt",
+                0,
+            ))
+            .await
+            .unwrap();
+        let undo_json: String =
+            sqlx::query_scalar("SELECT undo_json FROM agent_steps WHERE id = ?")
+                .bind(&completed.step_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let mut legacy_undo: Value = serde_json::from_str(&undo_json).unwrap();
+        legacy_undo["finish"] = Value::Bool(true);
+        legacy_undo["plan_was_completed"] = Value::Bool(true);
+        sqlx::query(
+            "UPDATE agent_steps SET undo_json=?, receipt_json='{\"undo_result\":null}' WHERE id=?",
+        )
+        .bind(legacy_undo.to_string())
+        .bind(&completed.step_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let first = executor.undo(&completed.step_id).await.unwrap();
+        let replay = executor.undo(&completed.step_id).await.unwrap();
+
+        assert_eq!(first, replay);
+        assert_eq!(first.output.status, "in_progress");
+        let receipt_json: String =
+            sqlx::query_scalar("SELECT receipt_json FROM agent_steps WHERE id = ?")
+                .bind(&completed.step_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let receipt: Value = serde_json::from_str(&receipt_json).unwrap();
+        assert!(receipt.get("compensation").is_none());
+        assert!(receipt["undo_result"].is_object());
     });
 }
 

@@ -74,10 +74,6 @@ struct RecordCheckinUndoReceipt {
     record_id: String,
     plan_id: String,
     wrong_question_ids: Vec<String>,
-    #[serde(default)]
-    finish: bool,
-    #[serde(default)]
-    plan_was_completed: bool,
 }
 
 #[derive(Clone)]
@@ -175,13 +171,36 @@ async fn execute_checkin_in_transaction(
     .await
     .map_err(map_reservation_error)?;
 
-    let plan_was_completed: bool =
-        sqlx::query_scalar("SELECT status = 'completed' FROM study_plans WHERE id = ?")
-            .bind(&request.input.plan_id)
-            .fetch_optional(&mut **tx)
-            .await
-            .map_err(map_sqlx)?
-            .unwrap_or(false);
+    let baseline_completed: bool = sqlx::query_scalar(
+        r#"
+        SELECT p.status = 'completed' AND NOT EXISTS(
+            SELECT 1
+            FROM agent_steps AS prior
+            JOIN study_records AS prior_record
+              ON prior_record.id = json_extract(prior.undo_json, '$.record_id')
+             AND prior_record.plan_id = p.id
+            WHERE prior.id <> ?
+              AND prior.tool_name = ?
+              AND prior.tool_version = ?
+              AND prior.status = 'completed'
+              AND prior.undone_at IS NULL
+              AND json_extract(prior.undo_json, '$.kind') = ?
+              AND json_extract(prior.undo_json, '$.plan_id') = p.id
+              AND json_extract(prior.receipt_json, '$.compensation.finish') = 1
+        )
+        FROM study_plans AS p
+        WHERE p.id = ?
+        "#,
+    )
+    .bind(&step_id)
+    .bind(RECORD_CHECKIN_TOOL)
+    .bind(RECORD_CHECKIN_VERSION)
+    .bind(RECORD_CHECKIN_UNDO_KIND)
+    .bind(&request.input.plan_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(map_sqlx)?
+    .unwrap_or(false);
     let record_id = Uuid::new_v4().to_string();
     let finish = request.input.finish;
     let output =
@@ -192,12 +211,17 @@ async fn execute_checkin_in_transaction(
         record_id: output.record_id.clone(),
         plan_id: output.plan_id.clone(),
         wrong_question_ids: output.wrong_question_ids.clone(),
-        finish,
-        plan_was_completed,
     };
     let undo_json = serde_json::to_string(&undo).map_err(|_| AgentError::ToolSchemaInvalid)?;
     let policy_json = json!({"risk":"R1","confirmation":"automatic"}).to_string();
-    let receipt_json = json!({"undo_result": null}).to_string();
+    let receipt_json = json!({
+        "compensation": {
+            "finish": finish,
+            "baseline_completed": baseline_completed
+        },
+        "undo_result": null
+    })
+    .to_string();
     let updated = sqlx::query(
         r#"
         UPDATE agent_steps
@@ -284,6 +308,17 @@ async fn undo_in_transaction(
     if undo.kind != RECORD_CHECKIN_UNDO_KIND {
         return Err(AgentError::ToolSchemaInvalid);
     }
+    let mut receipt: Value = step
+        .receipt_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|_| AgentError::ToolSchemaInvalid)?
+        .unwrap_or_else(|| json!({}));
+    let baseline_completed = receipt
+        .pointer("/compensation/baseline_completed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let target_plan_id: Option<Option<String>> =
         sqlx::query_scalar("SELECT plan_id FROM study_records WHERE id = ?")
@@ -339,15 +374,19 @@ async fn undo_in_transaction(
     let other_finish: bool = sqlx::query_scalar(
         r#"
         SELECT EXISTS(
-            SELECT 1 FROM agent_steps
-            WHERE id <> ?
-              AND tool_name = ?
-              AND tool_version = ?
-              AND status = 'completed'
-              AND undone_at IS NULL
-              AND json_extract(undo_json, '$.kind') = ?
-              AND json_extract(undo_json, '$.plan_id') = ?
-              AND json_extract(undo_json, '$.finish') = 1
+            SELECT 1
+            FROM agent_steps AS finish_step
+            JOIN study_records AS finish_record
+              ON finish_record.id = json_extract(finish_step.undo_json, '$.record_id')
+             AND finish_record.plan_id = json_extract(finish_step.undo_json, '$.plan_id')
+            WHERE finish_step.id <> ?
+              AND finish_step.tool_name = ?
+              AND finish_step.tool_version = ?
+              AND finish_step.status = 'completed'
+              AND finish_step.undone_at IS NULL
+              AND json_extract(finish_step.undo_json, '$.kind') = ?
+              AND json_extract(finish_step.undo_json, '$.plan_id') = ?
+              AND json_extract(finish_step.receipt_json, '$.compensation.finish') = 1
         )
         "#,
     )
@@ -394,7 +433,7 @@ async fn undo_in_transaction(
             "#,
         )
         .bind(other_finish)
-        .bind(undo.plan_was_completed)
+        .bind(baseline_completed)
         .bind(&undo.plan_id)
         .execute(&mut **tx)
         .await
@@ -423,13 +462,6 @@ async fn undo_in_transaction(
         step_id: step.id.clone(),
         output,
     };
-    let mut receipt: Value = step
-        .receipt_json
-        .as_deref()
-        .map(serde_json::from_str)
-        .transpose()
-        .map_err(|_| AgentError::ToolSchemaInvalid)?
-        .unwrap_or_else(|| json!({}));
     receipt["undo_result"] =
         serde_json::to_value(&response).map_err(|_| AgentError::ToolSchemaInvalid)?;
 
