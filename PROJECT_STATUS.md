@@ -6,7 +6,7 @@
 
 ## 当前结论
 
-第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 4 已完成并通过规格与质量双审查；Task 5 即将开始。当前没有代码实现阻塞。
+第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 5 已完成并通过规格与质量双审查；Task 6 即将开始。当前没有代码实现阻塞。
 
 ## 已完成的修改
 
@@ -67,12 +67,24 @@
 - `cargo fmt --check`、Clippy `-D warnings`、`git diff --check` 通过。
 - 规格审查与恢复后的独立代码质量审查均通过；质量审查 Critical/Important/Minor 均为 None。
 
+### Task 5：`plan.get_today` Rust 只读工具
+
+提交：`dbbdf85`、`666e74d`  
+提交信息：`feat: add today plan Rust tool`、`test: harden today plan Rust tool`
+
+- 实现本地 04:00 业务日边界和真实 SQLite `plan.get_today` 查询。
+- 输出与共享 TypeScript fixture 精确一致，同时保持 Rust R0 查询只读，不回写 `study_plans`。
+- 覆盖多记录 SUM、最新非空内容、空内容 fallback、无记录、completed/skipped、三键排序和同时间戳无 ID 次级规则。
+- 测试从 fixture 的时间、业务日期和 exam 输入驱动；执行全部当前迁移并用 `PRAGMA query_only=ON` 强制只读。
+- Rust focused tests：6/6；TypeScript parity/plan tests：5/5；Clippy、fmt、diff-check 通过。
+- 规格与质量复审通过，Critical/Important 均为 None。
+
 ## 正在处理的问题
 
-### 当前待处理：Task 5 `plan.get_today`
+### 当前待处理：Task 6 exactly-once check-in 与 undo
 
-- 将先写真实 SQLite parity 与 04:00 业务日边界 RED 测试，再实现只读 Rust 查询。
-- 查询必须与 TypeScript 展示值一致，但不能像旧服务那样在读取时回写 `study_plans`。
+- 将先写成功、验证、幂等、审计失败回滚和重复 undo 的真实 SQLite RED 测试。
+- 业务写入、Step receipt 与 Event 必须共享同一事务；同一 idempotency key 只能产生一次业务效果。
 
 ## 下一步计划
 
