@@ -6,7 +6,7 @@
 
 ## 当前结论
 
-第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 6 已完成并通过规格与质量双审查；下一项为 Task 7。当前没有代码实现阻塞。
+第二阶段（Agent tools/policy vertical slice）已开始执行。里程碑 1 基线已验证通过；Task 1–Task 7 已完成并通过规格与质量双审查；下一项为 Task 8。当前没有代码实现阻塞。
 
 ## 已完成的修改
 
@@ -94,21 +94,33 @@
 - 最终 agent_tools：24/24；Rust 全量：72/72；TypeScript parity/record：12/12；Clippy、fmt、diff-check 通过。
 - 最终规格与质量复审通过，Critical/Important 均为 None。
 
+### Task 7：Runtime / Executor / policy / approval / ownership
+
+提交：`cfec345`、`20d1e44`  
+提交信息：`feat: connect agent policy executor runtime`、`fix: harden agent executor orchestration`
+
+- 增加精确 ToolCall DTO 与单一 production/test orchestration core，R0–R4 共用 registry、schema、ownership、policy、approval、timeout、output schema 和 audit 顺序。
+- ownership 在业务/补偿事务内重读并 fail closed；legacy R1 API 与 undo 也不能绕过所有权。
+- 增加 Run status/current_step gate 与完成 CAS；终态、错误 step、取消/中断 Run 均不能产生业务写入。
+- R3 approval 支持 UTC 10 分钟到期、决定条件更新、resume 前置条件重检，以及 rejected/expired/stale 的 Step/Run 原子终态。
+- Runtime 暴露 list/execute/decide/undo 四个工具方法；lib 使用同一 canonical pool 构造 repository 与 executor。
+- failure audit 仅记录安全 code/IDs；output schema 在 completed Step/Event 前校验。
+- 最终默认与串行 Rust tests：各 93/93；Clippy、fmt、diff-check 通过。
+- 规格与质量复审通过，Critical/Important 均为 None；非阻塞项是真实 R3 工具上线前将 test-stage precondition hash 升级为带版本 SHA-256。
+
 ## 正在处理的问题
 
-### 当前待处理：Task 7 Runtime / Executor / policy / approval / ownership
+### 当前待处理：Task 8 类型化 Tauri 命令与隐藏调试页
 
-- 将把 Task 6 的专用 R1 executor 收敛到通用 `ToolCallRequest`/`ToolCallResponse`，保持 R1 事务核心不变。
-- 下一步重点：动态 ownership fail-closed、R2 summary、R3 持久审批/过期/前置条件重检、R4 navigation，以及 Runtime 作为唯一模型边界。
-- Task 9 明确负责 WAL 双连接并发 idempotency race 算法；Task 7 不应把唯一约束详情泄露到命令边界。
+- 增加四个类型化 Tauri 命令、精确 TypeScript DTO/client，并只扩展隐藏 `/agent-debug` 页面。
+- 生产 `PlanCheckinBoard.vue` 与 `record-service.ts` 保持不变；非 rust-owned check-in 按 gate 禁用。
 
 ## 下一步计划
 
-1. 执行 Task 7：连接通用 executor/runtime/policy/approval/ownership，并保持已验证的 R1 事务核心。
-2. 执行 Task 8：增加类型化 Tauri 命令和隐藏 `/agent-debug` 调试切片。
-3. 执行 Task 9：并发幂等、隐私稳定错误、迁移升级/恢复测试及所有权切换/回滚文档。
-4. 执行 Task 10：跑完整 Vitest、typecheck、build、Rust test/fmt/clippy/diff 门禁；无法在当前环境完成的打包手测项将保持未勾选并如实记录。
-5. 最终使用 `finishing-a-development-branch` 进行新鲜验证，并保留分支供用户选择后续合并、PR 或继续保留。
+1. 执行 Task 8：增加类型化 Tauri 命令和隐藏 `/agent-debug` 调试切片。
+2. 执行 Task 9：并发幂等、隐私稳定错误、迁移升级/恢复测试及所有权切换/回滚文档。
+3. 执行 Task 10：跑完整 Vitest、typecheck、build、Rust test/fmt/clippy/diff 门禁；无法在当前环境完成的打包手测项将保持未勾选并如实记录。
+4. 最终使用 `finishing-a-development-branch` 进行新鲜验证，并保留分支供用户选择后续合并、PR 或继续保留。
 
 ## 额度监控
 
