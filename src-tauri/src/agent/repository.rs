@@ -189,6 +189,15 @@ impl AgentRepository {
         Ok(())
     }
 
+    pub async fn prepare_database_restore(&self) -> Result<(), AgentError> {
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx)?;
+        self.pool.close().await;
+        Ok(())
+    }
+
     pub async fn interrupt_active_runs(&self) -> Result<u64, AgentError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
         let ids: Vec<String> = sqlx::query_scalar(

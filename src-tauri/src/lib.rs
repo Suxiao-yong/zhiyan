@@ -1,9 +1,20 @@
-// 智研（ZhiYan）Tauri 后端入口。
-// Phase 4：注册 notification 插件 + credentials 命令（keyring 加密存 apiKey）。
+//! ZhiYan Tauri backend entry point.
 
 pub mod agent;
 mod credentials;
 pub mod db;
+
+use agent::repository::AgentRepository;
+use agent::runtime::AgentRuntime;
+use tauri::Manager;
+
+fn agent_database_path(config_dir: &std::path::Path) -> std::path::PathBuf {
+    config_dir.join("zhiyan.db")
+}
+
+fn setup_error(stage: &str, error: &dyn std::fmt::Display) -> std::io::Error {
+    std::io::Error::other(format!("agent {stage}: {error}"))
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -23,12 +34,71 @@ pub fn run() {
             credentials::store_api_key,
             credentials::load_api_key,
             credentials::delete_api_key,
+            agent::commands::agent_health,
+            agent::commands::agent_prepare_database_restore,
+            agent::commands::agent_create_session,
+            agent::commands::agent_create_run,
+            agent::commands::agent_start_run,
+            agent::commands::agent_cancel_run,
         ])
         .setup(|app| {
-            // 确保应用数据目录存在，SQLite 数据库文件将落在此目录。
             db::init_db(app.handle())?;
+            let config_dir = app.path().app_config_dir()?;
+            std::fs::create_dir_all(&config_dir)?;
+            let database_path = agent_database_path(&config_dir);
+            let pool = tauri::async_runtime::block_on(db::runtime::connect(&database_path))
+                .map_err(|error| setup_error("database", &error))?;
+            let runtime = AgentRuntime::new(AgentRepository::new(pool));
+            tauri::async_runtime::block_on(runtime.recover_interrupted())
+                .map_err(|error| setup_error("recovery", &error))?;
+            app.manage(runtime);
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running zhiyan application");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{agent_database_path, setup_error};
+
+    #[test]
+    fn database_setup_errors_include_stage_context() {
+        let error = setup_error("database", &"sqlite unavailable");
+
+        assert_eq!(error.to_string(), "agent database: sqlite unavailable");
+    }
+
+    #[test]
+    fn recovery_setup_errors_include_stage_context() {
+        let error = setup_error("recovery", &"interrupted recovery failed");
+
+        assert_eq!(
+            error.to_string(),
+            "agent recovery: interrupted recovery failed"
+        );
+    }
+
+    #[test]
+    fn agent_database_path_is_canonicalized_under_config_dir() {
+        let config_dir = Path::new(r"C:\app\config");
+
+        assert_eq!(
+            agent_database_path(config_dir),
+            config_dir.join("zhiyan.db")
+        );
+    }
+
+    #[test]
+    fn sql_plugin_preloads_agent_database_before_setup() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let preload = config["plugins"]["sql"]["preload"]
+            .as_array()
+            .expect("sql preload must be configured");
+
+        assert!(preload.iter().any(|value| value == "sqlite:zhiyan.db"));
+    }
 }

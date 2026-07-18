@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))
+
 vi.mock('./db', () => ({
   closeDb: vi.fn(),
   execute: vi.fn(),
@@ -14,10 +16,14 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn(), save: vi.fn() }))
 vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: vi.fn() }))
-vi.mock('@tauri-apps/api/path', () => ({ appDataDir: vi.fn() }))
+vi.mock('@tauri-apps/api/core', () => ({ invoke }))
+vi.mock('@tauri-apps/api/path', () => ({ appConfigDir: vi.fn(), appDataDir: vi.fn() }))
 
 import * as db from './db'
-import { importData, validateBundle } from './export'
+import * as fs from '@tauri-apps/plugin-fs'
+import * as pathApi from '@tauri-apps/api/path'
+import * as processApi from '@tauri-apps/plugin-process'
+import { importData, restoreDatabase, validateBundle } from './export'
 
 describe('导入数据兼容性', () => {
   beforeEach(() => {
@@ -71,5 +77,37 @@ describe('导入数据兼容性', () => {
 
     const tables = vi.mocked(db.insert).mock.calls.map(([table]) => table)
     expect(tables.indexOf('study_plans')).toBeLessThan(tables.indexOf('study_records'))
+  })
+
+  it('restores into the canonical config database after both pools close', async () => {
+    const order: string[] = []
+    vi.mocked(db.closeDb).mockImplementation(async () => {
+      order.push('closeDb')
+    })
+    vi.mocked(pathApi.appDataDir).mockResolvedValue('/legacy-data')
+    vi.mocked(pathApi.appConfigDir).mockResolvedValue('/canonical-config')
+    vi.mocked(fs.readFile).mockResolvedValue(new Uint8Array([1, 2, 3]))
+    vi.mocked(fs.writeFile).mockImplementation(async () => {
+      order.push('writeFile')
+    })
+    vi.mocked(processApi.relaunch).mockImplementation(async () => {
+      order.push('relaunch')
+    })
+    invoke.mockImplementation(async (command: string) => {
+      order.push(command)
+    })
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    vi.mocked(open).mockResolvedValue('/backup.db')
+
+    await restoreDatabase()
+
+    expect(invoke).toHaveBeenCalledWith('agent_prepare_database_restore')
+    expect(fs.writeFile).toHaveBeenCalledWith(
+      '/canonical-config/zhiyan.db',
+      expect.any(Uint8Array),
+    )
+    expect(order.indexOf('closeDb')).toBeLessThan(order.indexOf('agent_prepare_database_restore'))
+    expect(order.indexOf('agent_prepare_database_restore')).toBeLessThan(order.indexOf('writeFile'))
+    expect(order.indexOf('writeFile')).toBeLessThan(order.indexOf('relaunch'))
   })
 })

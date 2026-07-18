@@ -60,13 +60,9 @@ impl FileDatabase {
             PathBuf::from(format!("{}-wal", self.path.display())),
             PathBuf::from(format!("{}-shm", self.path.display())),
         ] {
-            if path.exists() {
-                std::fs::remove_file(path).unwrap();
-            }
+            remove_file_with_retry(&path).unwrap();
         }
-        if self.directory.exists() {
-            std::fs::remove_dir(&self.directory).unwrap();
-        }
+        remove_dir_with_retry(&self.directory).unwrap();
     }
 }
 
@@ -77,9 +73,9 @@ impl Drop for FileDatabase {
             PathBuf::from(format!("{}-wal", self.path.display())),
             PathBuf::from(format!("{}-shm", self.path.display())),
         ] {
-            let _ = std::fs::remove_file(path);
+            let _ = remove_file_with_retry(&path);
         }
-        let _ = std::fs::remove_dir(&self.directory);
+        let _ = remove_dir_with_retry(&self.directory);
     }
 }
 
@@ -109,6 +105,41 @@ async fn wal_test_pool(database: &FileDatabase) -> SqlitePool {
         .unwrap();
     assert_eq!(journal_mode, "wal");
     pool
+}
+
+fn retry_io<F>(mut operation: F) -> std::io::Result<()>
+where
+    F: FnMut() -> std::io::Result<()>,
+{
+    let mut last_error = None;
+    for attempt in 0..10 {
+        match operation() {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error)
+                if (error.kind() == std::io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(32))
+                    && attempt < 9 =>
+            {
+                last_error = Some(error);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.expect("retry loop must capture a permission error"))
+}
+
+fn remove_file_with_retry(path: &std::path::Path) -> std::io::Result<()> {
+    retry_io(|| std::fs::remove_file(path))
+}
+
+fn remove_dir_with_retry(path: &std::path::Path) -> std::io::Result<()> {
+    retry_io(|| std::fs::remove_dir(path))
+}
+
+fn remove_wal_with_retry(path: &std::path::Path) -> std::io::Result<()> {
+    remove_file_with_retry(path)
 }
 
 #[tokio::test]
@@ -431,7 +462,9 @@ async fn recovery_waits_for_wal_writer_and_uses_the_latest_status() {
     );
     assert_eq!(event_count(&pool, &run.id, "run.interrupted").await, 0);
 
+    drop(repo);
     pool.close().await;
+    drop(pool);
     database.cleanup();
 }
 
@@ -474,6 +507,34 @@ async fn persistence_errors_do_not_disclose_bound_values() {
         panic!("invalid trigger source should be a persistence error");
     };
     assert!(!message.contains(secret_value));
+}
+
+#[tokio::test]
+async fn prepare_database_restore_checkpoints_wal_and_closes_pool() {
+    let database = FileDatabase::new();
+    let pool = wal_test_pool(&database).await;
+    sqlx::query("PRAGMA wal_autocheckpoint = 0")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let repo = AgentRepository::new(pool.clone());
+    let session = repo.create_session(None, "Restore").await.unwrap();
+    repo.create_run(&session.id, "Restore me", "user")
+        .await
+        .unwrap();
+
+    let wal_path = PathBuf::from(format!("{}-wal", database.path.display()));
+    assert!(wal_path.exists(), "writes should produce a WAL file");
+
+    repo.prepare_database_restore().await.unwrap();
+
+    assert!(repo.health().await.is_err(), "pool must be closed");
+    drop(repo);
+    drop(pool);
+    std::fs::write(&database.path, b"replacement database")
+        .expect("closed pool must release the database file");
+    remove_wal_with_retry(&wal_path).expect("checkpointed WAL must be removable");
+    database.cleanup();
 }
 
 #[tokio::test]

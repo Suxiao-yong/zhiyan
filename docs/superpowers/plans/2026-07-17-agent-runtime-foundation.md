@@ -930,8 +930,12 @@ git commit -m "feat: persist agent sessions and runs"
 
 - Create: `src-tauri/src/agent/runtime.rs`
 - Create: `src-tauri/src/agent/commands.rs`
+- Modify: `src-tauri/src/agent/repository.rs` (WAL checkpoint and Agent pool close before restore)
+- Modify: `src-tauri/tests/agent_repository.rs` (real-file WAL restore regression)
 - Modify: `src-tauri/src/agent/mod.rs`
 - Modify: `src-tauri/src/lib.rs`
+- Modify: `src-tauri/tauri.conf.json` (SQL preload for setup-time migrations)
+- Modify: `src/services/export.ts` and `src/services/export.test.ts` (canonical restore path and close ordering)
 
 - [ ] **Step 1: Write Runtime tests and implementation**
 
@@ -1162,6 +1166,7 @@ pub fn run() {
             credentials::load_api_key,
             credentials::delete_api_key,
             agent::commands::agent_health,
+            agent::commands::agent_prepare_database_restore,
             agent::commands::agent_create_session,
             agent::commands::agent_create_run,
             agent::commands::agent_start_run,
@@ -1169,7 +1174,9 @@ pub fn run() {
         ])
         .setup(|app| {
             db::init_db(app.handle())?;
-            let db_path = app.path().app_data_dir()?.join("zhiyan.db");
+            let config_dir = app.path().app_config_dir()?;
+            std::fs::create_dir_all(&config_dir)?;
+            let db_path = config_dir.join("zhiyan.db");
             let pool = tauri::async_runtime::block_on(db::runtime::connect(&db_path))
                 .map_err(|error| std::io::Error::other(format!("agent database: {error}")))?;
             let runtime = AgentRuntime::new(AgentRepository::new(pool));
@@ -1184,6 +1191,7 @@ pub fn run() {
 ```
 
 Startup recovery errors abort setup; the application must not continue with inconsistent Run state.
+The SQL plugin config must preload `sqlite:zhiyan.db` so its migrations run before setup. The Rust Agent pool uses the same canonical `app_config_dir()/zhiyan.db`. Before frontend restore overwrites that file, `agent_prepare_database_restore` checkpoints and closes the Agent pool and closes/removes the plugin SQL pool entry; `export.ts` must call `closeDb()` then that command before writing the backup and relaunching.
 
 - [ ] **Step 6: Run Rust verification**
 

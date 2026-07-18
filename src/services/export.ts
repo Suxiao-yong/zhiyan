@@ -8,7 +8,8 @@ import { closeDb } from './db'
 import { readFile, writeFile, writeTextFile } from '@tauri-apps/plugin-fs'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { relaunch } from '@tauri-apps/plugin-process'
-import { appDataDir } from '@tauri-apps/api/path'
+import { invoke } from '@tauri-apps/api/core'
+import { appConfigDir } from '@tauri-apps/api/path'
 
 const CHUNK = 500
 const IMPORT_CHUNK = 100
@@ -269,9 +270,10 @@ export async function restoreDatabase(): Promise<void> {
   const path = typeof sel === 'string' ? sel : null
   if (!path) return
   const bytes = await readFile(path)
-  const dir = await appDataDir()
+  const dir = await appConfigDir()
   const dbPath = `${dir}/zhiyan.db`
   await closeDb()
+  await invoke('agent_prepare_database_restore')
   await writeFile(dbPath, bytes)
   await relaunch()
 }
