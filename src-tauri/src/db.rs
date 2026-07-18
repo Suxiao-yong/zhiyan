@@ -44,6 +44,21 @@ pub fn migrations() -> Vec<Migration> {
             sql: AGENT_SCHEMA_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 5,
+            description: "add agent tool policy receipts and ownership flags",
+            sql: r#"
+                ALTER TABLE agent_steps ADD COLUMN policy_json TEXT;
+                ALTER TABLE agent_steps ADD COLUMN receipt_json TEXT;
+                ALTER TABLE agent_steps ADD COLUMN undo_json TEXT;
+                ALTER TABLE agent_steps ADD COLUMN undone_at TEXT;
+                CREATE INDEX IF NOT EXISTS idx_agent_steps_tool_status ON agent_steps(tool_name, status);
+                INSERT OR IGNORE INTO settings (key, value, description) VALUES
+                    ('agent_tool_owner.plan.get_today','shadow','typescript|shadow|rust-owned; controls plan.get_today delivery'),
+                    ('agent_tool_owner.record.checkin_plan','typescript','typescript|shadow|rust-owned; controls record.checkin_plan writes');
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -353,7 +368,182 @@ mod tests {
             .collect();
 
         assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(versions.last(), Some(&4));
+        assert_eq!(versions.last(), Some(&5));
+    }
+
+    #[test]
+    fn migration_v5_adds_tool_receipts_and_ownership_flags() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                let migration_list = migrations();
+
+                sqlx::raw_sql(SCHEMA_SQL).execute(&pool).await.unwrap();
+                for migration in migration_list.iter().skip(1) {
+                    sqlx::raw_sql(migration.sql)
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                }
+
+                let columns: Vec<String> = sqlx::query_scalar(
+                    "SELECT name FROM pragma_table_info('agent_steps') ORDER BY cid",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+                for receipt_column in ["policy_json", "receipt_json", "undo_json", "undone_at"] {
+                    assert!(
+                        columns.iter().any(|column| column == receipt_column),
+                        "agent_steps.{receipt_column} must exist"
+                    );
+                }
+
+                let owners: Vec<(String, String)> = sqlx::query_as(
+                    "SELECT key, value FROM settings WHERE key LIKE 'agent_tool_owner.%' ORDER BY key",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+                assert_eq!(
+                    owners,
+                    vec![
+                        (
+                            "agent_tool_owner.plan.get_today".to_owned(),
+                            "shadow".to_owned(),
+                        ),
+                        (
+                            "agent_tool_owner.record.checkin_plan".to_owned(),
+                            "typescript".to_owned(),
+                        ),
+                    ]
+                );
+                assert_eq!(
+                    migration_list.last().map(|migration| migration.version),
+                    Some(5)
+                );
+            });
+    }
+
+    async fn seed_v4_rows(pool: &sqlx::SqlitePool) {
+        sqlx::raw_sql(
+            r#"
+                INSERT INTO exams (id, name, exam_date) VALUES ('exam-seeded', 'Seeded', '2030-01-01');
+                INSERT INTO subjects (id, exam_id, name) VALUES ('subject-seeded', 'exam-seeded', 'Seeded');
+                INSERT INTO study_plans (
+                    id, exam_id, subject_id, date, planned_tasks
+                ) VALUES (
+                    'plan-seeded', 'exam-seeded', 'subject-seeded', '2030-01-01', 'Keep me'
+                );
+                INSERT INTO agent_sessions (id, title) VALUES ('session-seeded', 'Seeded');
+                INSERT INTO agent_runs (id, session_id, goal) VALUES (
+                    'run-seeded', 'session-seeded', 'Keep agent rows'
+                );
+                INSERT INTO agent_steps (
+                    id, run_id, step_index, tool_name, tool_version, input_json, output_json,
+                    idempotency_key
+                ) VALUES (
+                    'step-seeded', 'run-seeded', 0, 'plan.get_today', '1', '{"date":"2030-01-01"}',
+                    '{"plans":[]}', 'seeded-key'
+                );
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn assert_v4_rows_preserved(pool: &sqlx::SqlitePool) {
+        let plan_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM study_plans WHERE id = 'plan-seeded'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let agent_rows: (String, String, String) = sqlx::query_as(
+            r#"
+                SELECT agent_sessions.id, agent_runs.id, agent_steps.id
+                FROM agent_sessions
+                JOIN agent_runs ON agent_runs.session_id = agent_sessions.id
+                JOIN agent_steps ON agent_steps.run_id = agent_runs.id
+                WHERE agent_steps.id = 'step-seeded'
+            "#,
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+
+        assert_eq!(plan_count, 1);
+        assert_eq!(
+            agent_rows,
+            (
+                "session-seeded".to_owned(),
+                "run-seeded".to_owned(),
+                "step-seeded".to_owned(),
+            )
+        );
+    }
+
+    #[test]
+    fn migration_v5_preserves_v4_rows_on_upgrade_and_full_initialization() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let migration_list = migrations();
+                let migration_v5 = migration_list
+                    .iter()
+                    .find(|migration| migration.version == 5)
+                    .expect("migration v5 must exist");
+
+                let upgrade_pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                sqlx::raw_sql(SCHEMA_SQL)
+                    .execute(&upgrade_pool)
+                    .await
+                    .unwrap();
+                for migration in migration_list
+                    .iter()
+                    .filter(|migration| (2..=4).contains(&migration.version))
+                {
+                    sqlx::raw_sql(migration.sql)
+                        .execute(&upgrade_pool)
+                        .await
+                        .unwrap();
+                }
+                seed_v4_rows(&upgrade_pool).await;
+                sqlx::raw_sql(migration_v5.sql)
+                    .execute(&upgrade_pool)
+                    .await
+                    .unwrap();
+                assert_v4_rows_preserved(&upgrade_pool).await;
+
+                let full_migration_pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                for migration in &migration_list {
+                    sqlx::raw_sql(migration.sql)
+                        .execute(&full_migration_pool)
+                        .await
+                        .unwrap();
+                    if migration.version == 4 {
+                        seed_v4_rows(&full_migration_pool).await;
+                    }
+                }
+                assert_v4_rows_preserved(&full_migration_pool).await;
+            });
     }
 
     #[test]
