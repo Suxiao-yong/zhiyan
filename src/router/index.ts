@@ -33,6 +33,11 @@ const routes = [
     component: () => import('@/pages/Visualization.vue'),
   },
   { path: '/settings', name: 'settings', component: () => import('@/pages/Settings.vue') },
+  {
+    path: '/agent-debug',
+    name: 'agent-debug',
+    component: () => import('@/pages/AgentDebug.vue'),
+  },
   { path: '/', redirect: '/dashboard' },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
 ]
