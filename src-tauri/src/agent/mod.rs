@@ -3,6 +3,7 @@ pub mod error;
 pub mod executor;
 pub mod llm;
 pub mod model;
+pub mod planner;
 pub mod policy;
 pub mod repository;
 pub mod runtime;
