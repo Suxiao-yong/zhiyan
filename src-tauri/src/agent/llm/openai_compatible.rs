@@ -1,10 +1,10 @@
 use serde_json::{json, Value};
 use std::time::Duration;
 
-use super::{ProviderMessage, ProviderResponse, ProviderToolCall, ProviderUsage};
+use super::{ProviderFunction, ProviderMessage, ProviderResponse, ProviderToolCall, ProviderUsage};
 use crate::agent::error::AgentError;
 
-/// Chat completions endpoint timeout mirrors llm-adapter.ts (60s for tool calls).
+/// Chat completions timeout mirrors llm-adapter.ts (60s for tool calls).
 const TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 /// Retry budget and backoff mirror llm-adapter.ts::callWithRetry (3 tries, 1s/2s).
 const MAX_ATTEMPTS: u32 = 3;
@@ -35,26 +35,31 @@ impl OpenAiCompatibleProvider {
         }
     }
 
-    /// OpenAI-compatible chat/completions with tools. Mirrors
-    /// llm-adapter.ts::callLLMWithTools: 401/403 are terminal, everything else
-    /// (network, 429, 5xx, parse) retries up to MAX_ATTEMPTS with 1s/2s backoff.
-    pub async fn chat(
+    /// Streaming chat/completions. The request sets `stream:true` and
+    /// `stream_options.include_usage` so usage arrives in the final chunk.
+    /// Each content delta is forwarded to `on_chunk`; tool_calls are reassembled
+    /// across deltas by `index`. 401/403 are terminal; pre-2xx failures (network,
+    /// 429, 5xx) retry up to MAX_ATTEMPTS with 1s/2s backoff; once streaming
+    /// starts, a mid-stream error is terminal (chunks may already be emitted).
+    pub async fn chat_stream(
         &self,
         messages: &[ProviderMessage],
         tools: &[Value],
+        on_chunk: &mut (dyn FnMut(&str) + Send),
     ) -> Result<ProviderResponse, AgentError> {
         let body = json!({
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
-            "stream": false,
+            "stream": true,
+            "stream_options": { "include_usage": true },
             "tools": tools,
         });
         let url = format!("{}/chat/completions", self.base_url);
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match self.call_once(&url, &body).await {
+            match self.call_stream_once(&url, &body, on_chunk).await {
                 Ok(response) => return Ok(response),
                 Err(outcome) => {
                     if !outcome.retryable || attempt >= MAX_ATTEMPTS {
@@ -66,8 +71,13 @@ impl OpenAiCompatibleProvider {
         }
     }
 
-    async fn call_once(&self, url: &str, body: &Value) -> Result<ProviderResponse, CallOutcome> {
-        let response = self
+    async fn call_stream_once(
+        &self,
+        url: &str,
+        body: &Value,
+        on_chunk: &mut (dyn FnMut(&str) + Send),
+    ) -> Result<ProviderResponse, CallOutcome> {
+        let mut response = self
             .client
             .post(url)
             .bearer_auth(&self.api_key)
@@ -76,19 +86,16 @@ impl OpenAiCompatibleProvider {
             .await
             .map_err(|_| CallOutcome::retryable(AgentError::ProviderRequestFailed))?;
         let status = response.status().as_u16();
-        // 401/403 = bad key/permission: terminal, do not retry (parity with TS).
         if status == 401 || status == 403 {
             return Err(CallOutcome::terminal(AgentError::ProviderRequestFailed));
         }
         if !response.status().is_success() {
-            // 429 / 5xx / other 4xx: retryable (parity with TS callWithRetry).
             return Err(CallOutcome::retryable(AgentError::ProviderRequestFailed));
         }
-        let data: Value = response
-            .json()
+        // From here chunks may have been emitted; a failure is terminal, not retried.
+        parse_sse(&mut response, on_chunk)
             .await
-            .map_err(|_| CallOutcome::retryable(AgentError::ProviderRequestFailed))?;
-        Ok(parse_response(&data))
+            .map_err(|_| CallOutcome::terminal(AgentError::ProviderRequestFailed))
     }
 
     /// Test-only: shrink backoff so retry tests don't sleep for real seconds.
@@ -119,56 +126,100 @@ impl CallOutcome {
     }
 }
 
-fn parse_response(data: &Value) -> ProviderResponse {
-    let message = data.pointer("/choices/0/message").unwrap_or(&Value::Null);
-    let content = message
-        .get("content")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let tool_calls = message
-        .get("tool_calls")
-        .and_then(Value::as_array)
-        .map(|array| array.iter().filter_map(parse_tool_call).collect())
-        .unwrap_or_default();
-    let usage = data
-        .get("usage")
-        .map(|usage| ProviderUsage {
-            prompt_tokens: usage
-                .get("prompt_tokens")
-                .and_then(Value::as_i64)
-                .unwrap_or(0),
-            completion_tokens: usage
-                .get("completion_tokens")
-                .and_then(Value::as_i64)
-                .unwrap_or(0),
-        })
-        .unwrap_or_default();
-    ProviderResponse {
-        content,
+/// Parse the Server-Sent Events body: accumulate `delta.content` (forwarding
+/// each to `on_chunk`), reassemble `delta.tool_calls` by `index`, and capture
+/// the final `usage` chunk. Lines are buffered by byte so a chunk boundary
+/// never splits a line or a multi-byte UTF-8 character mid-line.
+async fn parse_sse(
+    response: &mut reqwest::Response,
+    on_chunk: &mut (dyn FnMut(&str) + Send),
+) -> Result<ProviderResponse, AgentError> {
+    let mut content = String::new();
+    let mut tool_calls: Vec<ProviderToolCall> = Vec::new();
+    let mut usage = ProviderUsage::default();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| AgentError::ProviderRequestFailed)?
+    {
+        buf.extend_from_slice(&chunk);
+        while let Some(pos) = buf.iter().position(|byte| *byte == b'\n') {
+            let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
+            let line = std::str::from_utf8(&line_bytes)
+                .unwrap_or("")
+                .trim_end_matches('\r');
+            let Some(data) = line.strip_prefix("data: ") else {
+                continue;
+            };
+            if data.trim() == "[DONE]" {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(data) else {
+                continue;
+            };
+            if let Some(usage_value) = value.get("usage") {
+                usage = parse_usage(usage_value);
+            }
+            let Some(delta) = value.pointer("/choices/0/delta") else {
+                continue;
+            };
+            if let Some(text) = delta.get("content").and_then(Value::as_str) {
+                content.push_str(text);
+                on_chunk(text);
+            }
+            if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
+                for call in calls {
+                    let index = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    while tool_calls.len() <= index {
+                        tool_calls.push(ProviderToolCall {
+                            id: String::new(),
+                            kind: "function".to_owned(),
+                            function: ProviderFunction {
+                                name: String::new(),
+                                arguments: String::new(),
+                            },
+                        });
+                    }
+                    let slot = &mut tool_calls[index];
+                    if let Some(id) = call.get("id").and_then(Value::as_str) {
+                        slot.id = id.to_owned();
+                    }
+                    if let Some(function) = call.get("function") {
+                        if let Some(name) = function.get("name").and_then(Value::as_str) {
+                            slot.function.name = name.to_owned();
+                        }
+                        if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {
+                            slot.function.arguments.push_str(arguments);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(ProviderResponse {
+        content: (!content.is_empty()).then_some(content),
         tool_calls,
         usage,
-    }
+    })
 }
 
-fn parse_tool_call(value: &Value) -> Option<ProviderToolCall> {
-    let id = value.get("id")?.as_str()?.to_owned();
-    let function = value.get("function")?;
-    let name = function.get("name")?.as_str()?.to_owned();
-    let arguments = function
-        .get("arguments")
-        .and_then(Value::as_str)
-        .unwrap_or("{}")
-        .to_owned();
-    Some(ProviderToolCall {
-        id,
-        kind: "function".to_owned(),
-        function: super::ProviderFunction { name, arguments },
-    })
+fn parse_usage(value: &Value) -> ProviderUsage {
+    ProviderUsage {
+        prompt_tokens: value
+            .get("prompt_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        completion_tokens: value
+            .get("completion_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_response, OpenAiCompatibleProvider};
+    use super::OpenAiCompatibleProvider;
     use crate::agent::llm::ProviderMessage;
     use httpmock::{Method, MockServer};
     use std::time::Duration;
@@ -192,63 +243,42 @@ mod tests {
         }
     }
 
-    #[test]
-    fn parse_reads_content_tool_calls_and_usage() {
-        let data = serde_json::json!({
-            "choices": [{ "message": {
-                "content": "hi",
-                "tool_calls": [{ "id": "c1", "type": "function",
-                    "function": { "name": "plan.get_today", "arguments": "{\"exam_id\":\"e1\"}" } }]
-            }}],
-            "usage": { "prompt_tokens": 10, "completion_tokens": 2 }
-        });
-        let resp = parse_response(&data);
-        assert_eq!(resp.content.as_deref(), Some("hi"));
-        assert_eq!(resp.tool_calls[0].id, "c1");
-        assert_eq!(resp.tool_calls[0].function.name, "plan.get_today");
-        assert_eq!(
-            resp.tool_calls[0].function.arguments,
-            "{\"exam_id\":\"e1\"}"
-        );
-        assert_eq!(resp.usage.prompt_tokens, 10);
-        assert_eq!(resp.usage.completion_tokens, 2);
-    }
-
-    #[test]
-    fn parse_defaults_missing_fields_to_empty_zero() {
-        let data = serde_json::json!({ "choices": [{ "message": {} }], "usage": {} });
-        let resp = parse_response(&data);
-        assert!(resp.content.is_none());
-        assert!(resp.tool_calls.is_empty());
-        assert_eq!(resp.usage.prompt_tokens, 0);
-        assert_eq!(resp.usage.completion_tokens, 0);
-    }
-
     #[tokio::test]
-    async fn parses_content_tool_calls_and_usage_from_chat_completions() {
+    async fn streams_content_tool_calls_and_usage_from_sse() {
         let server = MockServer::start();
         let mock = server.mock(|when, then| {
             when.method(Method::POST).path("/chat/completions");
-            then.status(200).json_body(serde_json::json!({
-                "choices": [{ "message": {
-                    "content": "今日计划如下",
-                    "tool_calls": [{ "id": "call_1", "type": "function",
-                        "function": { "name": "plan.get_today", "arguments": "{\"exam_id\":\"e1\"}" } }]
-                }}],
-                "usage": { "prompt_tokens": 120, "completion_tokens": 8 }
-            }));
+            then.status(200).body(
+                concat!(
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"今日计划如下\"}}]}\n\n",
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"plan.get_today\",\"arguments\":\"\"}}]}}]}\n\n",
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"exam_id\\\":\\\"e1\\\"}\"}}]}}]}\n\n",
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+                    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":120,\"completion_tokens\":8}}\n\n",
+                    "data: [DONE]\n\n",
+                ),
+            );
         });
 
+        let mut chunks = Vec::new();
         let resp = provider(&server)
-            .chat(&[user_message("看今天")], &[])
+            .chat_stream(&[user_message("看今天")], &[], &mut |c| {
+                chunks.push(c.to_owned())
+            })
             .await
             .unwrap();
 
         assert_eq!(resp.content.as_deref(), Some("今日计划如下"));
         assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].id, "call_1");
         assert_eq!(resp.tool_calls[0].function.name, "plan.get_today");
+        assert_eq!(
+            resp.tool_calls[0].function.arguments,
+            "{\"exam_id\":\"e1\"}"
+        );
         assert_eq!(resp.usage.prompt_tokens, 120);
         assert_eq!(resp.usage.completion_tokens, 8);
+        assert_eq!(chunks, vec!["今日计划如下".to_owned()]);
         assert_eq!(mock.hits(), 1);
     }
 
@@ -261,7 +291,7 @@ mod tests {
         });
 
         let error = provider(&server)
-            .chat(&[user_message("看今天")], &[])
+            .chat_stream(&[user_message("看今天")], &[], &mut |_| {})
             .await
             .unwrap_err();
 
@@ -280,7 +310,7 @@ mod tests {
         });
 
         let error = provider(&server)
-            .chat(&[user_message("看今天")], &[])
+            .chat_stream(&[user_message("看今天")], &[], &mut |_| {})
             .await
             .unwrap_err();
 
@@ -297,7 +327,7 @@ mod tests {
         });
 
         let error = provider(&server)
-            .chat(&[user_message("看今天")], &[])
+            .chat_stream(&[user_message("看今天")], &[], &mut |_| {})
             .await
             .unwrap_err();
 
@@ -305,5 +335,28 @@ mod tests {
         assert!(!error.to_string().contains(&server.base_url()));
         assert!(!error.to_string().contains("sk-test"));
         assert_eq!(mock.hits(), 3);
+    }
+
+    #[tokio::test]
+    async fn empty_stream_defaults_to_no_content_and_zero_usage() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(Method::POST).path("/chat/completions");
+            then.status(200).body("data: [DONE]\n\n");
+        });
+
+        let mut chunks = Vec::new();
+        let resp = provider(&server)
+            .chat_stream(&[user_message("看今天")], &[], &mut |c| {
+                chunks.push(c.to_owned())
+            })
+            .await
+            .unwrap();
+
+        assert!(resp.content.is_none());
+        assert!(resp.tool_calls.is_empty());
+        assert_eq!(resp.usage.prompt_tokens, 0);
+        assert_eq!(resp.usage.completion_tokens, 0);
+        assert!(chunks.is_empty());
     }
 }

@@ -74,15 +74,27 @@ pub(crate) enum LlmProvider {
 }
 
 impl LlmProvider {
-    pub async fn chat(
+    /// Stream a model turn. Each content delta is forwarded to `on_chunk`;
+    /// tool_calls are reassembled across deltas; the returned `ProviderResponse`
+    /// carries the full content, tool calls, and usage once the stream ends.
+    pub async fn chat_stream(
         &self,
         messages: &[ProviderMessage],
         tools: &[Value],
+        on_chunk: &mut (dyn FnMut(&str) + Send),
     ) -> Result<ProviderResponse, crate::agent::error::AgentError> {
         match self {
-            Self::OpenAiCompatible(provider) => provider.chat(messages, tools).await,
+            Self::OpenAiCompatible(provider) => {
+                provider.chat_stream(messages, tools, on_chunk).await
+            }
             #[cfg(test)]
-            Self::Synthetic(provider) => Ok(provider.next_response()),
+            Self::Synthetic(provider) => {
+                let response = provider.next_response();
+                if let Some(content) = &response.content {
+                    on_chunk(content);
+                }
+                Ok(response)
+            }
         }
     }
 }

@@ -165,8 +165,9 @@ pub async fn agent_run_planner(
     let run_id = trimmed_required(run_id, "run_id")?;
     let goal = trimmed_required(goal, "goal")?;
     let provider = planner.build_provider().await.map_err(CommandError::from)?;
+    let mut noop = |_: &str| {};
     planner
-        .run(provider.as_ref(), &run_id, &goal)
+        .run(provider.as_ref(), &run_id, &goal, &mut noop)
         .await
         .map_err(Into::into)
 }

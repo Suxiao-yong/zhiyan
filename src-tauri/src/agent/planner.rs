@@ -141,6 +141,7 @@ impl Planner {
         provider: Option<&LlmProvider>,
         run_id: &str,
         goal: &str,
+        on_chunk: &mut (dyn FnMut(&str) + Send),
     ) -> Result<PlannerTurn, AgentError> {
         let Some(provider) = provider else {
             return self
@@ -194,7 +195,7 @@ impl Planner {
             if budget > 0 && acc.prompt_tokens + acc.completion_tokens >= budget {
                 return self.local_turn(run_id, "token budget exhausted", acc).await;
             }
-            let response = match provider.chat(&messages, &tools).await {
+            let response = match provider.chat_stream(&messages, &tools, on_chunk).await {
                 Ok(response) => response,
                 Err(AgentError::ProviderRequestFailed | AgentError::ProviderUnavailable) => {
                     return self
@@ -573,12 +574,21 @@ mod tests {
             },
         ]));
 
+        let mut chunks: Vec<String> = Vec::new();
         let turn = planner
-            .run(Some(&provider), &run_id, "看今天的计划")
+            .run(
+                Some(&provider),
+                &run_id,
+                "看今天的计划",
+                &mut |chunk| chunks.push(chunk.to_owned()),
+            )
             .await
             .unwrap();
 
         assert_eq!(turn.mode, "model");
+        // Streaming: both assistant turns' content were forwarded as chunks.
+        assert!(chunks.iter().any(|c| c.contains("我先查一下今日计划。")));
+        assert!(chunks.iter().any(|c| c.contains("今日有一项复习任务。")));
         assert_eq!(turn.final_text, "今日有一项复习任务。");
         assert_eq!(turn.iterations, 1);
         assert_eq!(turn.model_calls, 2);
@@ -643,7 +653,7 @@ mod tests {
         ]));
 
         let error = planner
-            .run(Some(&provider), &run_id, "不停查")
+            .run(Some(&provider), &run_id, "不停查", &mut |_| {})
             .await
             .unwrap_err();
         assert_eq!(error.code(), "max_iterations");
@@ -654,7 +664,10 @@ mod tests {
         let (planner, pool) = planner().await;
         let run_id = started_run(&pool, &planner).await;
 
-        let turn = planner.run(None, &run_id, "看今天的计划").await.unwrap();
+        let turn = planner
+            .run(None, &run_id, "看今天的计划", &mut |_| {})
+            .await
+            .unwrap();
 
         assert_eq!(turn.mode, "local");
         assert_eq!(turn.model_calls, 0);
@@ -698,7 +711,7 @@ mod tests {
         );
 
         let turn = planner
-            .run(Some(&provider), &run_id, "看今天的计划")
+            .run(Some(&provider), &run_id, "看今天的计划", &mut |_| {})
             .await
             .unwrap();
 
@@ -740,7 +753,7 @@ mod tests {
             }]));
 
         let turn = planner
-            .run(Some(&provider), &run_id, "看今天的计划")
+            .run(Some(&provider), &run_id, "看今天的计划", &mut |_| {})
             .await
             .unwrap();
 
