@@ -102,3 +102,10 @@ The following checks remain manual pending and are not claimed as passed: packag
 - If startup migration or canonical-path validation fails, stop the upgrade, preserve the original database and its `-wal`/`-shm` companions, and restore the timestamped pre-upgrade backup.
 - Remove Rust Agent state registration and commands only in the rollback code branch; retain TypeScript ownership of every business write.
 - Relaunch the rollback build and verify dashboard, plan check-in, records, analysis, settings, backup, and restore before declaring rollback complete.
+
+## M3 Part 1 (model adapter + tool loop + local fallback)
+
+- Adds **no migration**. Model usage audit lives in the existing `agent_events` table as `model.invoked` events (payload: `local`, `prompt_tokens`, `completion_tokens`, `tools_offered`, `data_permissions`); no prompt text is stored. A dedicated `agent_context_audit` table is deferred to a later M3 part.
+- The `Planner` is constructed from the same Rust pool as `AgentRuntime` and managed as `tauri::State`; it reads `llm_provider`/`llm_base_url`/`llm_model`/`llm_temperature` from settings and the API key from the OS keyring via the re-exported `credentials::api_key_for`. When no key is configured, the provider is Ollama, or the provider fails terminally, the Planner returns a deterministic local-mode turn that performs no successful model call and is marked `local` (never claims model output).
+- Provider errors (`provider_unavailable`, `provider_request_failed`, `budget_exhausted`, `max_iterations`) are redacted at the command boundary; the message never contains the base URL, API key, request body, or response body.
+- Rollback: remove the `agent_run_planner` command registration and the `Planner` state from `lib.rs`. The existing application is unchanged — production Vue flows, tool ownership, and the TypeScript write path are untouched. No database rollback is needed.
