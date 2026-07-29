@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import type {
+  AgentPlannerTurn,
   AgentRun,
   AgentSession,
   AgentToolCallResponse,
@@ -15,6 +16,7 @@ import {
   createAgentSession,
   executeAgentTool,
   listAgentTools,
+  runAgentPlanner,
   startAgentRun,
   undoAgentTool,
 } from '@/services/agent-client'
@@ -26,6 +28,7 @@ const tools = ref<ListedAgentTool[]>([])
 const planOutput = ref<unknown>(null)
 const checkinReceipt = ref<Extract<AgentToolCallResponse, { state: 'completed' }> | null>(null)
 const undoOutput = ref<AgentToolUndoResponse | null>(null)
+const plannerTurn = ref<AgentPlannerTurn | null>(null)
 const state = reactive({
   healthy: false,
   session: null as AgentSession | null,
@@ -68,6 +71,11 @@ const checkinExecutable = computed(
 )
 const planOutputJson = computed(() => JSON.stringify(planOutput.value, null, 2))
 const undoOutputJson = computed(() => JSON.stringify(undoOutput.value, null, 2))
+const plannerOutputJson = computed(() => JSON.stringify(plannerTurn.value, null, 2))
+const plannerExecutable = computed(
+  () =>
+    state.run?.status === 'running' && !!state.goal.trim() && !toolListFailed.value,
+)
 
 function toolSlug(name: string): string {
   return name === 'plan.get_today' ? 'plan' : 'checkin'
@@ -172,6 +180,13 @@ async function undoCheckin(): Promise<void> {
   await perform(async () => {
     undoOutput.value = await undoAgentTool(checkinReceipt.value!.step_id)
     checkinReceipt.value = { ...checkinReceipt.value!, undo_available: false }
+  })
+}
+
+async function runPlanner(): Promise<void> {
+  if (!state.run || !plannerExecutable.value) return
+  await perform(async () => {
+    plannerTurn.value = await runAgentPlanner(state.run!.id, state.goal)
   })
 }
 
@@ -295,6 +310,19 @@ onMounted(() => {
         Undo check-in
       </button>
       <pre v-if="undoOutput" data-test="tool-checkin-undo-output">{{ undoOutputJson }}</pre>
+    </section>
+
+    <section class="tool-control">
+      <h2>planner loop</h2>
+      <button
+        data-test="planner-run"
+        type="button"
+        :disabled="busy || !plannerExecutable"
+        @click="runPlanner"
+      >
+        Run planner turn
+      </button>
+      <pre v-if="plannerTurn" data-test="planner-output">{{ plannerOutputJson }}</pre>
     </section>
 
     <p v-if="state.error" role="alert">{{ state.error }}</p>

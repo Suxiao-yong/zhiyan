@@ -20,6 +20,7 @@ const client = vi.hoisted(() => ({
   listAgentTools: vi.fn(),
   executeAgentTool: vi.fn(),
   undoAgentTool: vi.fn(),
+  runAgentPlanner: vi.fn(),
 }))
 
 vi.mock('@/services/agent-client', () => client)
@@ -103,6 +104,15 @@ describe('AgentDebug', () => {
     client.listAgentTools.mockResolvedValue(defaultTools)
     client.executeAgentTool.mockResolvedValue(undefined)
     client.undoAgentTool.mockResolvedValue(undefined)
+    client.runAgentPlanner.mockResolvedValue({
+      mode: 'local',
+      final_text: '（本地模式）no llm provider configured，跳过模型推理。',
+      iterations: 0,
+      model_calls: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      trace: [{ kind: 'local_fallback', reason: 'no llm provider configured' }],
+    })
   })
 
   it('shows health and creates then starts a runtime run', async () => {
@@ -466,10 +476,30 @@ describe('AgentDebug', () => {
       '[data-test=tool-plan-execute]',
       '[data-test=tool-checkin-execute]',
       '[data-test=tool-checkin-undo]',
+      '[data-test=planner-run]',
     ]) {
       expect(wrapper.get(selector).attributes('disabled')).toBeDefined()
     }
     expect(client.executeAgentTool).not.toHaveBeenCalled()
     expect(client.undoAgentTool).not.toHaveBeenCalled()
+  })
+
+  it('runs a planner turn and renders the trace when a run is active', async () => {
+    const wrapper = mountPage()
+    await flushPromises()
+
+    // Disabled until a run is running.
+    expect(wrapper.get('[data-test=planner-run]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-test=create-session]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=start-run]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=planner-run]').trigger('click')
+    await flushPromises()
+
+    expect(client.runAgentPlanner).toHaveBeenCalledWith('run-1', 'Inspect today plan')
+    expect(wrapper.get('[data-test=planner-output]').text()).toContain('local')
+    expect(wrapper.get('[data-test=planner-output]').text()).toContain('local_fallback')
   })
 })

@@ -12,6 +12,7 @@ import {
   decideAgentApproval,
   executeAgentTool,
   listAgentTools,
+  runAgentPlanner,
   startAgentRun,
   undoAgentTool,
 } from './agent-client'
@@ -90,5 +91,16 @@ describe('agent runtime client', () => {
     })
     await undoAgentTool('step-1')
     expect(invoke).toHaveBeenLastCalledWith('agent_undo_tool', { stepId: 'step-1' })
+  })
+
+  it('invokes the hidden planner command with camelCase arguments', async () => {
+    const turn = { mode: 'local', final_text: 'ok', iterations: 0, model_calls: 0, prompt_tokens: 0, completion_tokens: 0, trace: [] }
+    vi.mocked(invoke).mockResolvedValue(turn)
+
+    await expect(runAgentPlanner('run-1', '看今天的计划')).resolves.toBe(turn)
+    expect(invoke).toHaveBeenLastCalledWith('agent_run_planner', {
+      runId: 'run-1',
+      goal: '看今天的计划',
+    })
   })
 })

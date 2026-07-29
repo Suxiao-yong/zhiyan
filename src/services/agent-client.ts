@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   AgentApproval,
+  AgentPlannerTurn,
   AgentRun,
   AgentSession,
   AgentToolCallRequest,
@@ -43,4 +44,9 @@ export function decideAgentApproval(approvalId: string, approve: boolean): Promi
 
 export function undoAgentTool(stepId: string): Promise<AgentToolUndoResponse> {
   return invoke<AgentToolUndoResponse>('agent_undo_tool', { stepId })
+}
+
+/** Hidden planner entry point (M3 Part 1): run one model -> tool loop. */
+export function runAgentPlanner(runId: string, goal: string): Promise<AgentPlannerTurn> {
+  return invoke<AgentPlannerTurn>('agent_run_planner', { runId, goal })
 }

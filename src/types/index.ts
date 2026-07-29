@@ -268,3 +268,21 @@ export interface AgentToolUndoResponse {
     status: string
   }
 }
+
+export type AgentPlannerTraceEntry =
+  | { kind: 'tool_called'; name: string; step_id: string; replayed: boolean }
+  | { kind: 'tool_waiting_approval'; name: string; approval_id: string }
+  | { kind: 'tool_navigation_required'; name: string; route: string }
+  | { kind: 'tool_summary_required'; name: string }
+  | { kind: 'max_iterations' }
+  | { kind: 'local_fallback'; reason: string }
+
+export interface AgentPlannerTurn {
+  mode: 'model' | 'local'
+  final_text: string
+  iterations: number
+  model_calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  trace: AgentPlannerTraceEntry[]
+}
