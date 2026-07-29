@@ -161,6 +161,7 @@ fn parse_tool_call(value: &Value) -> Option<ProviderToolCall> {
         .to_owned();
     Some(ProviderToolCall {
         id,
+        kind: "function".to_owned(),
         function: super::ProviderFunction { name, arguments },
     })
 }

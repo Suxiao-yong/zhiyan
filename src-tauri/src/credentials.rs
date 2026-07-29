@@ -10,9 +10,6 @@ fn entry_for(provider: &str) -> Result<Entry, keyring::Error> {
 
 /// Rust-callable API key lookup reused by the LLM provider. Returns `None` on
 /// `NoEntry` so callers can degrade to local mode; surfaces other keyring errors.
-// ponytail: consumed by agent::llm::openai_compatible in the next task; remove
-// this allow once the provider lands.
-#[allow(dead_code)]
 pub fn api_key_for(provider: &str) -> Result<Option<String>, keyring::Error> {
     let entry = entry_for(provider)?;
     match entry.get_password() {

@@ -5,9 +5,13 @@ mod credentials;
 pub mod db;
 
 use agent::executor::AgentExecutor;
+use agent::planner::Planner;
 use agent::repository::AgentRepository;
 use agent::runtime::AgentRuntime;
 use tauri::Manager;
+
+/// Re-exported so the agent planner can read the LLM API key from keyring.
+pub(crate) use credentials::api_key_for;
 
 fn agent_database_path(config_dir: &std::path::Path) -> std::path::PathBuf {
     config_dir.join("zhiyan.db")
@@ -45,6 +49,7 @@ pub fn run() {
             agent::commands::agent_execute_tool,
             agent::commands::agent_decide_approval,
             agent::commands::agent_undo_tool,
+            agent::commands::agent_run_planner,
         ])
         .setup(|app| {
             db::init_db(app.handle())?;
@@ -53,11 +58,15 @@ pub fn run() {
             let database_path = agent_database_path(&config_dir);
             let pool = tauri::async_runtime::block_on(db::runtime::connect(&database_path))
                 .map_err(|error| setup_error("database", &error))?;
-            let runtime =
-                AgentRuntime::new(AgentRepository::new(pool.clone()), AgentExecutor::new(pool));
+            let runtime = AgentRuntime::new(
+                AgentRepository::new(pool.clone()),
+                AgentExecutor::new(pool.clone()),
+            );
+            let planner = Planner::new(pool, runtime.clone());
             tauri::async_runtime::block_on(runtime.recover_interrupted())
                 .map_err(|error| setup_error("recovery", &error))?;
             app.manage(runtime);
+            app.manage(planner);
             Ok(())
         })
         .run(tauri::generate_context!())

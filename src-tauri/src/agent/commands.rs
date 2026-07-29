@@ -6,6 +6,7 @@ use super::executor::ToolUndoResponse;
 use super::model::{
     AgentRun, AgentSession, ApprovalRecord, RunEvent, ToolCallRequest, ToolCallResponse,
 };
+use super::planner::{Planner, PlannerTurn};
 use super::runtime::AgentRuntime;
 use super::tools::ListedTool;
 
@@ -151,11 +152,30 @@ pub async fn agent_undo_tool(
     runtime.undo_tool(&step_id).await.map_err(Into::into)
 }
 
+/// Hidden planner entry point (M3 Part 1): build the provider from settings +
+/// keyring, run one model -> tool loop over the existing AgentRuntime, and
+/// return the trace + usage. Degrades to a local-mode turn when no LLM is
+/// configured. Reachable only via the hidden /agent-debug contract.
+#[tauri::command]
+pub async fn agent_run_planner(
+    planner: State<'_, Planner>,
+    run_id: String,
+    goal: String,
+) -> Result<PlannerTurn, CommandError> {
+    let run_id = trimmed_required(run_id, "run_id")?;
+    let goal = trimmed_required(goal, "goal")?;
+    let provider = planner.build_provider().await.map_err(CommandError::from)?;
+    planner
+        .run(provider.as_ref(), &run_id, &goal)
+        .await
+        .map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_decide_approval, agent_execute_tool, agent_list_tools, agent_undo_tool,
-        trimmed_required, CommandError,
+        agent_decide_approval, agent_execute_tool, agent_list_tools, agent_run_planner,
+        agent_undo_tool, trimmed_required, CommandError,
     };
     use crate::agent::error::AgentError;
 
@@ -191,6 +211,7 @@ mod tests {
         let _ = agent_execute_tool;
         let _ = agent_decide_approval;
         let _ = agent_undo_tool;
+        let _ = agent_run_planner;
     }
 
     #[test]

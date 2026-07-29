@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[cfg(test)]
+use std::sync::Mutex;
 
 pub mod openai_compatible;
 
@@ -21,7 +23,16 @@ pub struct ProviderMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderToolCall {
     pub id: String,
+    /// OpenAI requires `type:"function"` on each tool_call when the assistant
+    /// message is echoed back; the field is parsed from the response and
+    /// defaults to "function" so echo messages stay well-formed.
+    #[serde(rename = "type", default = "default_function_type")]
+    pub kind: String,
     pub function: ProviderFunction,
+}
+
+fn default_function_type() -> String {
+    "function".to_owned()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +64,56 @@ pub fn tool_object(name: &str, description: &str, parameters: &Value) -> Value {
     })
 }
 
+/// The model-facing boundary, mirroring executor::ToolDispatcher: a real
+/// OpenAI-compatible variant plus a `#[cfg(test)]` scripted variant so the
+/// Planner loop can be exercised without a network. No trait, no extra crate.
+pub(crate) enum LlmProvider {
+    OpenAiCompatible(openai_compatible::OpenAiCompatibleProvider),
+    #[cfg(test)]
+    Synthetic(SyntheticProvider),
+}
+
+impl LlmProvider {
+    pub async fn chat(
+        &self,
+        messages: &[ProviderMessage],
+        tools: &[Value],
+    ) -> Result<ProviderResponse, crate::agent::error::AgentError> {
+        match self {
+            Self::OpenAiCompatible(provider) => provider.chat(messages, tools).await,
+            #[cfg(test)]
+            Self::Synthetic(provider) => Ok(provider.next_response()),
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct SyntheticProvider {
+    responses: Mutex<Vec<ProviderResponse>>,
+}
+
+#[cfg(test)]
+impl SyntheticProvider {
+    pub(crate) fn scripted(responses: Vec<ProviderResponse>) -> Self {
+        Self {
+            responses: Mutex::new(responses),
+        }
+    }
+
+    fn next_response(&self) -> ProviderResponse {
+        let mut guard = self.responses.lock().expect("synthetic responses lock");
+        if guard.is_empty() {
+            ProviderResponse {
+                content: Some("(scripted exhausted)".to_owned()),
+                tool_calls: Vec::new(),
+                usage: ProviderUsage::default(),
+            }
+        } else {
+            guard.remove(0)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,5 +125,24 @@ mod tests {
         assert_eq!(value["type"], "function");
         assert_eq!(value["function"]["name"], "plan.get_today");
         assert_eq!(value["function"]["parameters"]["type"], "object");
+    }
+
+    #[test]
+    fn assistant_tool_call_echo_serializes_function_type() {
+        let message = ProviderMessage {
+            role: "assistant".into(),
+            content: None,
+            tool_calls: Some(vec![ProviderToolCall {
+                id: "c1".into(),
+                kind: "function".into(),
+                function: ProviderFunction {
+                    name: "plan.get_today".into(),
+                    arguments: "{\"exam_id\":\"e1\"}".into(),
+                },
+            }]),
+            tool_call_id: None,
+        };
+        let serialized = serde_json::to_value(&message).unwrap();
+        assert_eq!(serialized["tool_calls"][0]["type"], "function");
     }
 }
