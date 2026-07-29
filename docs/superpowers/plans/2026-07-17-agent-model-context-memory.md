@@ -504,7 +504,7 @@ git status --short
 
 ## Deferred to M3 parts 2–N (not in this plan)
 
-- Streaming text (`llm/stream.rs`) and the streaming tool loop.
+- ~~Streaming text (`llm/stream.rs`) and the streaming tool loop.~~ **Shipped as M3 Part 2**: `OpenAiCompatibleProvider::chat_stream` parses SSE, forwards content deltas via an `on_chunk` callback, reassembles tool_calls by index, captures the final `usage` chunk; `Planner::run` streams each turn; `agent_run_planner` emits `agent-planner-chunk` events rendered live on `/agent-debug`.
 - The dedicated `agent_context_audit` table (§7.3) and the Context Inspector UI (§10.2), replacing the `model.invoked` event with structured per-call data categories and single-use authorization for sensitive fields.
 - Structured long-term memory: `agent_memories`, the seven memory types, candidate→confirmed flow, and the memory management UI (§11).
 - The full Fallback Engine: overdue detection, daily/weekly stats, rule-based weakness identification, reminders, and workbench navigation (§12) — beyond the no-LLM local turn shipped here.
