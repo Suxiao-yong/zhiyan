@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { listen } from '@tauri-apps/api/event'
 import type {
   AgentPlannerTurn,
   AgentRun,
@@ -29,6 +30,8 @@ const planOutput = ref<unknown>(null)
 const checkinReceipt = ref<Extract<AgentToolCallResponse, { state: 'completed' }> | null>(null)
 const undoOutput = ref<AgentToolUndoResponse | null>(null)
 const plannerTurn = ref<AgentPlannerTurn | null>(null)
+const plannerStream = ref('')
+let unlistenPlanner: (() => void) | undefined
 const state = reactive({
   healthy: false,
   session: null as AgentSession | null,
@@ -186,7 +189,10 @@ async function undoCheckin(): Promise<void> {
 async function runPlanner(): Promise<void> {
   if (!state.run || !plannerExecutable.value) return
   await perform(async () => {
+    plannerStream.value = ''
     plannerTurn.value = await runAgentPlanner(state.run!.id, state.goal)
+    // Authoritative final text (event stream may have missed tail fragments).
+    plannerStream.value = plannerTurn.value.final_text
   })
 }
 
@@ -200,7 +206,19 @@ onMounted(() => {
       toolListFailed.value = true
       throw error
     }
+    unlistenPlanner = await listen<{ run_id: string; text: string }>(
+      'agent-planner-chunk',
+      (event) => {
+        if (state.run?.id === event.payload.run_id) {
+          plannerStream.value += event.payload.text
+        }
+      },
+    )
   })
+})
+
+onUnmounted(() => {
+  unlistenPlanner?.()
 })
 </script>
 
@@ -322,6 +340,7 @@ onMounted(() => {
       >
         Run planner turn
       </button>
+      <pre v-if="plannerStream" data-test="planner-stream">{{ plannerStream }}</pre>
       <pre v-if="plannerTurn" data-test="planner-output">{{ plannerOutputJson }}</pre>
     </section>
 

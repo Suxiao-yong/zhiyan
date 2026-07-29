@@ -25,6 +25,9 @@ const client = vi.hoisted(() => ({
 
 vi.mock('@/services/agent-client', () => client)
 
+const eventApi = vi.hoisted(() => ({ listen: vi.fn().mockResolvedValue(() => {}) }))
+vi.mock('@tauri-apps/api/event', () => eventApi)
+
 import AgentDebug from './AgentDebug.vue'
 
 const session: AgentSession = {
@@ -501,5 +504,8 @@ describe('AgentDebug', () => {
     expect(client.runAgentPlanner).toHaveBeenCalledWith('run-1', 'Inspect today plan')
     expect(wrapper.get('[data-test=planner-output]').text()).toContain('local')
     expect(wrapper.get('[data-test=planner-output]').text()).toContain('local_fallback')
+    // The final streamed text is rendered live.
+    expect(wrapper.get('[data-test=planner-stream]').text()).toContain('本地模式')
+    expect(eventApi.listen).toHaveBeenCalledWith('agent-planner-chunk', expect.any(Function))
   })
 })

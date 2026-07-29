@@ -1,5 +1,6 @@
 use serde::Serialize;
-use tauri::State;
+use serde_json::json;
+use tauri::{Emitter, State};
 
 use super::error::AgentError;
 use super::executor::ToolUndoResponse;
@@ -152,22 +153,29 @@ pub async fn agent_undo_tool(
     runtime.undo_tool(&step_id).await.map_err(Into::into)
 }
 
-/// Hidden planner entry point (M3 Part 1): build the provider from settings +
-/// keyring, run one model -> tool loop over the existing AgentRuntime, and
-/// return the trace + usage. Degrades to a local-mode turn when no LLM is
-/// configured. Reachable only via the hidden /agent-debug contract.
+/// Hidden planner entry point (M3 Part 1/2): build the provider from settings +
+/// keyring, stream the model -> tool loop over the existing AgentRuntime, emit
+/// one `agent-planner-chunk` event per content delta, and return the final
+/// trace + usage. Degrades to a local-mode turn when no LLM is configured.
+/// Reachable only via the hidden /agent-debug contract.
 #[tauri::command]
 pub async fn agent_run_planner(
     planner: State<'_, Planner>,
+    app: tauri::AppHandle,
     run_id: String,
     goal: String,
 ) -> Result<PlannerTurn, CommandError> {
     let run_id = trimmed_required(run_id, "run_id")?;
     let goal = trimmed_required(goal, "goal")?;
     let provider = planner.build_provider().await.map_err(CommandError::from)?;
-    let mut noop = |_: &str| {};
+    let mut on_chunk = |chunk: &str| {
+        let _ = app.emit(
+            "agent-planner-chunk",
+            json!({ "run_id": run_id, "text": chunk }),
+        );
+    };
     planner
-        .run(provider.as_ref(), &run_id, &goal, &mut noop)
+        .run(provider.as_ref(), &run_id, &goal, &mut on_chunk)
         .await
         .map_err(Into::into)
 }
