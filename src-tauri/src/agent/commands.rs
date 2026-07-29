@@ -228,4 +228,38 @@ mod tests {
         );
         assert!(!error.message.contains("constraint"));
     }
+
+    #[test]
+    fn provider_errors_are_redacted_and_safe() {
+        let cases = [
+            (
+                AgentError::ProviderUnavailable,
+                "provider_unavailable",
+                "llm provider is unavailable",
+            ),
+            (
+                AgentError::ProviderRequestFailed,
+                "provider_request_failed",
+                "llm provider request failed",
+            ),
+            (
+                AgentError::BudgetExhausted,
+                "budget_exhausted",
+                "llm token budget exhausted",
+            ),
+            (
+                AgentError::MaxIterations,
+                "max_iterations",
+                "planner reached the maximum tool iterations",
+            ),
+        ];
+        for (error, code, message) in cases {
+            let cmd = CommandError::from(error);
+            assert_eq!(cmd.code, code);
+            assert_eq!(cmd.message, message);
+            // No provider secret, URL, key, or response body leaks.
+            assert!(!cmd.message.contains("http"));
+            assert!(!cmd.message.contains("sk-"));
+        }
+    }
 }

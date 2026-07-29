@@ -8,6 +8,32 @@ fn entry_for(provider: &str) -> Result<Entry, keyring::Error> {
     Entry::new("zhiyan", provider)
 }
 
+/// Rust-callable API key lookup reused by the LLM provider. Returns `None` on
+/// `NoEntry` so callers can degrade to local mode; surfaces other keyring errors.
+// ponytail: consumed by agent::llm::openai_compatible in the next task; remove
+// this allow once the provider lands.
+#[allow(dead_code)]
+pub fn api_key_for(provider: &str) -> Result<Option<String>, keyring::Error> {
+    let entry = entry_for(provider)?;
+    match entry.get_password() {
+        Ok(password) => Ok(Some(password)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::api_key_for;
+
+    #[test]
+    fn missing_api_key_resolves_to_none_without_panicking() {
+        // A provider name unique to this process never has a stored entry.
+        let provider = format!("test-missing-{}", uuid::Uuid::new_v4());
+        assert_eq!(api_key_for(&provider).unwrap(), None);
+    }
+}
+
 #[tauri::command]
 pub fn store_api_key(provider: String, key: String) -> Result<(), String> {
     let entry = entry_for(&provider).map_err(|e| e.to_string())?;

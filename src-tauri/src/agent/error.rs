@@ -30,6 +30,14 @@ pub enum AgentError {
     IdempotencyConflict,
     #[error("tool ownership is unavailable")]
     OwnershipUnavailable,
+    #[error("llm provider is unavailable")]
+    ProviderUnavailable,
+    #[error("llm provider request failed")]
+    ProviderRequestFailed,
+    #[error("llm token budget exhausted")]
+    BudgetExhausted,
+    #[error("planner reached the maximum tool iterations")]
+    MaxIterations,
 }
 
 impl AgentError {
@@ -49,6 +57,10 @@ impl AgentError {
             Self::IdempotencyRequired => "idempotency_required",
             Self::IdempotencyConflict => "idempotency_conflict",
             Self::OwnershipUnavailable => "ownership_unavailable",
+            Self::ProviderUnavailable => "provider_unavailable",
+            Self::ProviderRequestFailed => "provider_request_failed",
+            Self::BudgetExhausted => "budget_exhausted",
+            Self::MaxIterations => "max_iterations",
         }
     }
 }
