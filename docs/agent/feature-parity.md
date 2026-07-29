@@ -18,6 +18,6 @@ Notes:
 
 - `plan.get_today` may be promoted `shadow -> rust-owned` after packaged read parity sign-off (read-only; no write-owner conflict).
 - `record.checkin_plan` stays `typescript` until the packaged manual vertical slice in `MANUAL_TEST.md` is signed off.
-- The model adapter and tool loop (M3 Part 1) is Rust-owned runtime code reachable only through the hidden `agent_run_planner` command. It does not yet replace the TypeScript planner (`plan-chat-agent.ts`) or the TypeScript LLM adapter; that cutover is M6. Deferred M3 parts: streaming, Ollama tool support, the dedicated `agent_context_audit` table + Context Inspector UI, structured long-term memory, and the full Fallback Engine.
+- The model adapter and tool loop (M3 Part 1) is Rust-owned runtime code reachable only through the hidden `agent_run_planner` command. It does not yet replace the TypeScript planner (`plan-chat-agent.ts`) or the TypeScript LLM adapter; that cutover is M6. Deferred M3 parts: streaming, the dedicated `agent_context_audit` table + Context Inspector UI, structured long-term memory, and the full Fallback Engine. **Ollama tool support is excluded by product decision (cloud LLMs only for the agent loop)**; Ollama stays on the TypeScript plain-chat path and degrades to local mode in the Rust planner.
 
 States: `legacy`, `shadow`, `rust-owned`, `retired`.

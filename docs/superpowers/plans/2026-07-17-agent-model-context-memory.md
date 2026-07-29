@@ -4,7 +4,7 @@
 
 **Goal:** Let the Rust runtime drive the model → tool loop over the two existing M2 tools (`plan.get_today`, `record.checkin_plan`), record per-call usage audit, and degrade to a local-mode turn when no LLM is configured — reachable only through the existing hidden `/agent-debug` contract. No production UI change, no ownership cutover, no new business write path.
 
-**Why a slice, not the whole milestone:** The roadmap lists M3 as one milestone (model adapters, streaming tool loop, context audit, structured memory, local fallback). Mirroring how M2 shipped only the first two tools and deferred the rest to M6, this is **M3 Part 1**: the non-streaming OpenAI-compatible provider, the tool-call loop, usage audit, and the fallback gate. Parts 2–N (streaming `stream.rs`, Ollama tool support, the dedicated `agent_context_audit` table + Context Inspector UI, structured memory with `agent_memories` and the seven memory types, and the full Fallback Engine for overdue/stats/weakness/notifications) follow as separate sub-plans.
+**Why a slice, not the whole milestone:** The roadmap lists M3 as one milestone (model adapters, streaming tool loop, context audit, structured memory, local fallback). Mirroring how M2 shipped only the first two tools and deferred the rest to M6, this is **M3 Part 1**: the non-streaming OpenAI-compatible provider, the tool-call loop, usage audit, and the fallback gate. Parts 2–N (streaming `stream.rs`, the dedicated `agent_context_audit` table + Context Inspector UI, structured memory with `agent_memories` and the seven memory types, and the full Fallback Engine for overdue/stats/weakness/notifications) follow as separate sub-plans. **Ollama tool support is excluded by product decision — the product ships cloud LLMs only for the agent loop**; Ollama stays on the plain-chat TypeScript path and degrades to local mode in the Rust planner.
 
 **Architecture:** A Rust `LlmProvider` trait abstracts the model call. `OpenAiCompatibleProvider` implements it with `reqwest`, mirroring the TypeScript `callLLMWithTools` request/response shape so existing user provider configs (DeepSeek/OpenAI/通义/Kimi/自定义) keep working without reconfiguration. A `Planner` owns the loop: it projects `ToolDescriptor`s into OpenAI tool schemas, calls the provider, routes each returned `tool_call` through `AgentRuntime::execute_tool` (the existing M2 boundary — the Planner never dispatches a tool itself), feeds each `ToolCallResponse` back as a `tool`-role message, and repeats until the model stops calling tools or a hard iteration cap is hit. Each provider call appends one `model.invoked` audit event to the existing `agent_events` table with token usage and the data-permission categories of the tools offered; no new table is introduced in this part. When the keyring has no API key, the provider returns a terminal error, or the run's soft token budget is exhausted, the Planner returns a deterministic local-mode turn that performs no model call and is explicitly marked `local` — never disguised as model output.
 
@@ -45,7 +45,7 @@
 
 - The provider request to an OpenAI-compatible base URL is exactly `POST {baseUrl trim trailing slash}/chat/completions` with JSON body `{model, messages, temperature, stream:false, tools}` and header `Authorization: Bearer {apiKey}`. This matches `src/services/llm-adapter.ts::callLLMWithTools` so an existing user configuration works unchanged.
 - The provider parses `data.choices[0].message` into `{content: Option<String>, tool_calls: Vec<{id, function:{name, arguments}}>}` and `data.usage` into `{prompt_tokens, completion_tokens}`. Missing fields default to empty/zero, never panic.
-- Ollama (`provider == "ollama"`) is rejected with `ProviderUnavailable` for any call that supplies tools, mirroring the TypeScript layer's "Ollama 暂不支持工具调用" degradation. A non-tool call against Ollama is out of scope for this part and also returns `ProviderUnavailable`.
+- Ollama (`provider == "ollama"`) is rejected with `ProviderUnavailable` for any call that supplies tools. This is a permanent exclusion by product decision (cloud LLMs only for the agent loop), not a deferred task; Ollama stays on the TypeScript plain-chat path and degrades to local mode here.
 - HTTP 401/403 map to `ProviderRequestFailed` with a safe message ("API Key 无效或无权限") and are not retried. 429 and 5xx and network errors map to `ProviderRequestFailed` and retry up to 3 times with 1s/2s backoff. The command-boundary message never contains the base URL, API key, request body, or response body.
 - The Planner projects each `ToolDescriptor` into an OpenAI tool object `{type:"function", function:{name, description, parameters: input_schema}}`. It offers only tools whose ownership is `Shadow` or `RustOwned` (`Unavailable`/`Typescript` are hidden from the model). R1 tools are offered with an idempotency note in the description; the Planner synthesizes the idempotency key for every R1 call.
 - The Planner routes every model `tool_call` through `AgentRuntime::execute_tool(ToolCallRequest{run_id, step_index, tool_name, tool_version, input, idempotency_key, approval_id})`. It never imports or calls a tool function directly. `ToolCallResponse::Completed` is fed back as `{role:"tool", tool_call_id, content: serialized output}`. `WaitingApproval`, `SummaryRequired`, and `NavigationRequired` stop the loop and are surfaced in the turn trace; the model is told the tool is awaiting user action.
@@ -479,7 +479,7 @@ Required: zero Vitest failures, zero Rust failures in parallel and serial, no ty
 
 - [ ] **Step 2: Record honest ownership**
 
-In `feature-parity.md` add a `Model adapter and tool loop (Rust, non-streaming)` row marked `rust-owned` (the slice is Rust-owned runtime code reachable only via debug), and a note that streaming, Ollama tool support, the dedicated context-audit table + inspector, structured memory, and the full fallback engine remain M3 parts 2–N.
+In `feature-parity.md` add a `Model adapter and tool loop (Rust, non-streaming)` row marked `rust-owned` (the slice is Rust-owned runtime code reachable only via debug), and a note that streaming, the dedicated context-audit table + inspector, structured memory, and the full fallback engine remain M3 parts 2–N. Ollama tool support is excluded (cloud LLMs only).
 
 - [ ] **Step 3: Runbook note**
 
@@ -505,7 +505,10 @@ git status --short
 ## Deferred to M3 parts 2–N (not in this plan)
 
 - Streaming text (`llm/stream.rs`) and the streaming tool loop.
-- Ollama tool-calling support (currently `ProviderUnavailable` for tools).
 - The dedicated `agent_context_audit` table (§7.3) and the Context Inspector UI (§10.2), replacing the `model.invoked` event with structured per-call data categories and single-use authorization for sensitive fields.
 - Structured long-term memory: `agent_memories`, the seven memory types, candidate→confirmed flow, and the memory management UI (§11).
 - The full Fallback Engine: overdue detection, daily/weekly stats, rule-based weakness identification, reminders, and workbench navigation (§12) — beyond the no-LLM local turn shipped here.
+
+## Excluded by product decision (cloud LLMs only)
+
+- Ollama tool-calling support. The product ships cloud LLMs for the agent loop; Ollama stays on the TypeScript plain-chat path and degrades to local mode in the Rust planner (`provider == "ollama"` → `ProviderUnavailable` for tools). Revisit only if local models become a product requirement.
