@@ -69,9 +69,9 @@ pub fn run() {
                 AgentRepository::new(pool.clone()),
                 AgentExecutor::new(pool.clone()),
             );
-            let planner = Planner::new(pool.clone(), runtime.clone());
-            let context_audit = agent::context::ContextAudit::new(pool.clone());
-            let memory = agent::memory::MemoryRepository::new(pool);
+            let memory = agent::memory::MemoryRepository::new(pool.clone());
+            let planner = Planner::new(pool.clone(), runtime.clone(), memory.clone());
+            let context_audit = agent::context::ContextAudit::new(pool);
             tauri::async_runtime::block_on(runtime.recover_interrupted())
                 .map_err(|error| setup_error("recovery", &error))?;
             app.manage(runtime);

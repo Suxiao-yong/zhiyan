@@ -89,6 +89,10 @@ impl LlmProvider {
             }
             #[cfg(test)]
             Self::Synthetic(provider) => {
+                *provider
+                    .last_request
+                    .lock()
+                    .expect("synthetic last_request lock") = Some(messages.to_vec());
                 let response = provider.next_response();
                 if let Some(content) = &response.content {
                     on_chunk(content);
@@ -102,6 +106,7 @@ impl LlmProvider {
 #[cfg(test)]
 pub(crate) struct SyntheticProvider {
     responses: Mutex<Vec<ProviderResponse>>,
+    last_request: Mutex<Option<Vec<ProviderMessage>>>,
 }
 
 #[cfg(test)]
@@ -109,7 +114,17 @@ impl SyntheticProvider {
     pub(crate) fn scripted(responses: Vec<ProviderResponse>) -> Self {
         Self {
             responses: Mutex::new(responses),
+            last_request: Mutex::new(None),
         }
+    }
+
+    /// The most recent request this provider received, so tests can assert
+    /// what the Planner actually sent (system prompt contents, tools, etc.).
+    pub(crate) fn last_request(&self) -> Option<Vec<ProviderMessage>> {
+        self.last_request
+            .lock()
+            .expect("synthetic last_request lock")
+            .clone()
     }
 
     fn next_response(&self) -> ProviderResponse {

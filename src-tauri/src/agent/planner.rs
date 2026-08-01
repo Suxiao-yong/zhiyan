@@ -14,12 +14,16 @@ use crate::agent::context::{ContextAudit, ContextScope};
 use crate::agent::error::AgentError;
 use crate::agent::llm::tool_object;
 use crate::agent::llm::{LlmProvider, ProviderMessage, ProviderResponse, ProviderUsage};
+use crate::agent::memory::MemoryRepository;
 use crate::agent::model::{ToolCallRequest, ToolCallResponse};
 use crate::agent::runtime::AgentRuntime;
 use crate::agent::tools::{Idempotency, ListedTool, RiskLevel, ToolOwnership};
 
 const DEFAULT_MAX_ITERATIONS: i64 = 6;
 const DEFAULT_TOKEN_BUDGET: i64 = 20000;
+/// How many confirmed memories the Planner offers per run (spec §10.2:
+/// "Runtime 按考试、类型、状态和最近使用时间选择少量相关记录").
+const DEFAULT_MEMORY_LIMIT: i64 = 5;
 const SYSTEM_PROMPT: &str = "你是智研的学习顾问助手。利用提供的工具回答用户目标；获取到信息后给出不含 tool_calls 的最终答复，使用中文。";
 
 #[derive(Clone)]
@@ -27,6 +31,7 @@ pub struct Planner {
     pool: SqlitePool,
     runtime: AgentRuntime,
     context: ContextAudit,
+    memory: MemoryRepository,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,12 +97,13 @@ impl LoopAccumulator {
 }
 
 impl Planner {
-    pub fn new(pool: SqlitePool, runtime: AgentRuntime) -> Self {
+    pub fn new(pool: SqlitePool, runtime: AgentRuntime, memory: MemoryRepository) -> Self {
         let context = ContextAudit::new(pool.clone());
         Self {
             pool,
             runtime,
             context,
+            memory,
         }
     }
 
@@ -169,12 +175,35 @@ impl Planner {
             tools.push(project_tool(tool));
             tools_offered.push(tool.descriptor.name);
         }
-        let scope = self.context.gather(run_id).await?;
+        let mut scope = self.context.gather(run_id).await?;
+
+        // Confirmed long-term memories (spec §10.2) become part of the system
+        // context; exam-scoped memories first, then global ones, ordered by
+        // last use. Only confirmed memories are offered; candidates and
+        // inactive ones stay out until the user confirms or reactivates them.
+        let memories = self
+            .memory
+            .relevant(scope.exam_id.as_deref(), DEFAULT_MEMORY_LIMIT)
+            .await?;
+        scope.memory_ids = memories.iter().map(|entry| entry.id.clone()).collect();
+        let mut system_content = SYSTEM_PROMPT.to_owned();
+        if !memories.is_empty() {
+            let lines: Vec<String> = memories
+                .iter()
+                .map(|entry| format!("- [{}] {}", entry.memory_type.as_str(), entry.content))
+                .collect();
+            system_content
+                .push_str("\n\n用户已确认的长期记忆（仅作参考，冲突时以用户最新指令为准）：\n");
+            system_content.push_str(&lines.join("\n"));
+            for entry in &memories {
+                self.memory.touch(&entry.id).await?;
+            }
+        }
 
         let mut messages = vec![
             ProviderMessage {
                 role: "system".into(),
-                content: Some(SYSTEM_PROMPT.to_owned()),
+                content: Some(system_content),
                 tool_calls: None,
                 tool_call_id: None,
             },
@@ -444,6 +473,7 @@ mod tests {
     use super::*;
     use crate::agent::executor::AgentExecutor;
     use crate::agent::llm::{LlmProvider, ProviderResponse, ProviderUsage, SyntheticProvider};
+    use crate::agent::memory::{MemoryRepository, MemorySource, MemoryType};
     use crate::agent::model::RunEvent;
     use crate::agent::repository::AgentRepository;
     use crate::agent::runtime::AgentRuntime;
@@ -461,7 +491,8 @@ mod tests {
             AgentRepository::new(pool.clone()),
             AgentExecutor::new(pool.clone()),
         );
-        (Planner::new(pool.clone(), runtime), pool)
+        let memory = MemoryRepository::new(pool.clone());
+        (Planner::new(pool.clone(), runtime, memory), pool)
     }
 
     async fn started_run(pool: &SqlitePool, planner: &Planner) -> String {
@@ -771,5 +802,95 @@ mod tests {
         .unwrap();
         assert_eq!(non_local, 1);
         assert_eq!(local, 1);
+    }
+
+    #[tokio::test]
+    async fn confirmed_memories_are_offered_in_system_prompt_and_audited() {
+        let (planner, pool) = planner().await;
+        let run_id = started_run(&pool, &planner).await;
+
+        // One confirmed memory bound to the run's exam, one candidate, one inactive.
+        let memory = MemoryRepository::new(pool.clone());
+        let confirmed = memory
+            .create(
+                Some("exam-loop"),
+                MemoryType::DailyCapacity,
+                "每天最多学习两小时",
+                MemorySource::UserStatement,
+                1.0,
+            )
+            .await
+            .unwrap();
+        let candidate = memory
+            .create(
+                None,
+                MemoryType::SubjectPreference,
+                "晚上更常做数学",
+                MemorySource::BehaviorInferred,
+                0.6,
+            )
+            .await
+            .unwrap();
+        let inactive = memory
+            .create(
+                None,
+                MemoryType::ReminderPreference,
+                "旧的提醒偏好",
+                MemorySource::UserStatement,
+                1.0,
+            )
+            .await
+            .unwrap();
+        memory.deactivate(&inactive.id).await.unwrap();
+
+        let provider =
+            LlmProvider::Synthetic(SyntheticProvider::scripted(vec![ProviderResponse {
+                content: Some("好的，我了解了。".into()),
+                tool_calls: Vec::new(),
+                usage: ProviderUsage {
+                    prompt_tokens: 10,
+                    completion_tokens: 3,
+                },
+            }]));
+
+        let turn = planner
+            .run(Some(&provider), &run_id, "看今天的计划", &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(turn.mode, "model");
+
+        // The system prompt offers only the confirmed memory.
+        let request = match &provider {
+            LlmProvider::Synthetic(synthetic) => synthetic.last_request().unwrap(),
+            _ => unreachable!(),
+        };
+        let system = request[0].content.as_deref().unwrap();
+        assert!(system.contains("每天最多学习两小时"));
+        assert!(!system.contains("晚上更常做数学"));
+        assert!(!system.contains("旧的提醒偏好"));
+
+        // The offered memory was marked as used.
+        let last_used: Option<String> =
+            sqlx::query_scalar("SELECT last_used_at FROM agent_memories WHERE id=?")
+                .bind(&confirmed.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(last_used.is_some());
+
+        // The audit row records the memory category and id, never its content,
+        // and only for the confirmed memory actually offered.
+        let (categories, record_ids): (String, String) = sqlx::query_as(
+            "SELECT categories_json, record_ids_json FROM agent_context_audit \
+             WHERE run_id=? ORDER BY call_seq LIMIT 1",
+        )
+        .bind(&run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(categories.contains("memory"));
+        assert!(record_ids.contains(&confirmed.id));
+        assert!(!record_ids.contains(&candidate.id));
+        assert!(!record_ids.contains("每天最多学习两小时"));
     }
 }
