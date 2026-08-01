@@ -42,6 +42,8 @@ pub struct PlannerTurn {
     pub model_calls: i64,
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
+    /// USD estimate from the settings rates (defaults 0.002/0.006 per 1k).
+    pub estimated_cost_usd: f64,
     pub trace: Vec<TraceEntry>,
 }
 
@@ -83,7 +85,9 @@ struct LoopAccumulator {
 }
 
 impl LoopAccumulator {
-    fn into_turn(self, mode: &str, final_text: String) -> PlannerTurn {
+    fn into_turn(self, mode: &str, final_text: String, rates: (f64, f64)) -> PlannerTurn {
+        let estimated_cost_usd = self.prompt_tokens as f64 / 1000.0 * rates.0
+            + self.completion_tokens as f64 / 1000.0 * rates.1;
         PlannerTurn {
             mode: mode.to_owned(),
             final_text,
@@ -91,6 +95,7 @@ impl LoopAccumulator {
             model_calls: self.model_calls,
             prompt_tokens: self.prompt_tokens,
             completion_tokens: self.completion_tokens,
+            estimated_cost_usd,
             trace: self.trace,
         }
     }
@@ -217,6 +222,7 @@ impl Planner {
 
         let max_iterations = self.max_iterations().await?;
         let budget = self.token_budget().await?;
+        let rates = self.cost_rates().await?;
         let mut step_index = 0_i64;
         let mut acc = LoopAccumulator::default();
 
@@ -267,7 +273,7 @@ impl Planner {
             });
 
             if response.tool_calls.is_empty() {
-                return Ok(acc.into_turn("model", response.content.unwrap_or_default()));
+                return Ok(acc.into_turn("model", response.content.unwrap_or_default(), rates));
             }
             acc.iterations += 1;
 
@@ -320,20 +326,32 @@ impl Planner {
                             name: call.function.name.clone(),
                             approval_id,
                         });
-                        return Ok(acc.into_turn("model", response.content.unwrap_or_default()));
+                        return Ok(acc.into_turn(
+                            "model",
+                            response.content.unwrap_or_default(),
+                            rates,
+                        ));
                     }
                     ToolCallResponse::NavigationRequired { route, .. } => {
                         acc.trace.push(TraceEntry::ToolNavigationRequired {
                             name: call.function.name.clone(),
                             route,
                         });
-                        return Ok(acc.into_turn("model", response.content.unwrap_or_default()));
+                        return Ok(acc.into_turn(
+                            "model",
+                            response.content.unwrap_or_default(),
+                            rates,
+                        ));
                     }
                     ToolCallResponse::SummaryRequired { .. } => {
                         acc.trace.push(TraceEntry::ToolSummaryRequired {
                             name: call.function.name.clone(),
                         });
-                        return Ok(acc.into_turn("model", response.content.unwrap_or_default()));
+                        return Ok(acc.into_turn(
+                            "model",
+                            response.content.unwrap_or_default(),
+                            rates,
+                        ));
                     }
                 }
             }
@@ -352,6 +370,28 @@ impl Planner {
             .and_then(|raw| raw.parse().ok())
             .filter(|parsed: &i64| *parsed > 0)
             .unwrap_or(DEFAULT_TOKEN_BUDGET))
+    }
+
+    /// Per-1k-token USD rates used for `estimated_cost_usd`, from settings
+    /// (`agent_cost_per_1k_prompt_tokens`, `agent_cost_per_1k_completion_tokens`)
+    /// with conservative public-cloud defaults (0.002 / 0.006).
+    pub(crate) async fn cost_rates(&self) -> Result<(f64, f64), AgentError> {
+        async fn rate(pool: &SqlitePool, key: &str, default: f64) -> Result<f64, AgentError> {
+            let value: Option<String> =
+                sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+                    .bind(key)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(map_sqlx)?;
+            Ok(value
+                .and_then(|raw| raw.parse::<f64>().ok())
+                .filter(|rate| *rate >= 0.0)
+                .unwrap_or(default))
+        }
+        Ok((
+            rate(&self.pool, "agent_cost_per_1k_prompt_tokens", 0.002).await?,
+            rate(&self.pool, "agent_cost_per_1k_completion_tokens", 0.006).await?,
+        ))
     }
 
     /// Read the LLM config from settings + keyring. Returns None when no
@@ -429,6 +469,7 @@ impl Planner {
             tool_calls: Vec::new(),
             usage: ProviderUsage::default(),
         };
+        let rates = self.cost_rates().await?;
         acc.audit_seq += 1;
         self.context
             .record(
@@ -443,7 +484,7 @@ impl Planner {
         acc.trace.push(TraceEntry::LocalFallback {
             reason: reason.to_owned(),
         });
-        Ok(acc.into_turn("local", response.content.unwrap_or_default()))
+        Ok(acc.into_turn("local", response.content.unwrap_or_default(), rates))
     }
 }
 
@@ -628,6 +669,8 @@ mod tests {
         assert_eq!(turn.model_calls, 2);
         assert_eq!(turn.prompt_tokens, 300);
         assert_eq!(turn.completion_tokens, 15);
+        // Default rates 0.002/0.006 per 1k: 300/1000*0.002 + 15/1000*0.006.
+        assert!((turn.estimated_cost_usd - 0.00069).abs() < 1e-9);
         assert_eq!(turn.trace.len(), 1);
         assert!(
             matches!(turn.trace[0], TraceEntry::ToolCalled { ref name, .. } if name == "plan.get_today")

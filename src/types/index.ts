@@ -284,7 +284,54 @@ export interface AgentPlannerTurn {
   model_calls: number
   prompt_tokens: number
   completion_tokens: number
+  estimated_cost_usd: number
   trace: AgentPlannerTraceEntry[]
+}
+
+/** M4 background job types. */
+export type AgentJobType =
+  | 'daily_brief'
+  | 'task_reminder'
+  | 'overdue_check'
+  | 'weekly_report'
+  | 'retry_failed'
+  | 'cleanup_failed'
+
+/** One agent_jobs row from the hidden debug page. */
+export interface AgentJob {
+  id: string
+  job_type: AgentJobType
+  dedup_key: string
+  scheduled_at: string
+  status: string
+  last_result: unknown
+  retry_at: string | null
+  runs: number
+  last_run_at: string | null
+  created_at: string
+}
+
+/** The daily brief (local skeleton, optionally with an LLM explanation). */
+export interface AgentBrief {
+  date: string
+  mode: 'model' | 'local'
+  summary: string
+  explanation: string | null
+  today_planned: number
+  today_completed: number
+  today_duration_min: number
+  overdue_count: number
+  week_completion_rate: number
+  due_wrong_questions: number
+  weak_areas: {
+    subject_id: string
+    subject_name: string
+    knowledge_point_id: string | null
+    knowledge_point_name: string | null
+    total_questions: number
+    correct_questions: number
+    correctness: number
+  }[]
 }
 
 /** One model-call audit row from the Context Inspector (never raw content). */

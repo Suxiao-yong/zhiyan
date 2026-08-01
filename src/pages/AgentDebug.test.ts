@@ -28,6 +28,9 @@ const client = vi.hoisted(() => ({
   updateAgentMemory: vi.fn(),
   deactivateAgentMemory: vi.fn(),
   deleteAgentMemory: vi.fn(),
+  listAgentJobs: vi.fn(),
+  scheduleAgentJob: vi.fn(),
+  agentBriefPreview: vi.fn(),
 }))
 
 vi.mock('@/services/agent-client', () => client)
@@ -130,6 +133,21 @@ describe('AgentDebug', () => {
     client.updateAgentMemory.mockResolvedValue(undefined)
     client.deactivateAgentMemory.mockResolvedValue(undefined)
     client.deleteAgentMemory.mockResolvedValue(undefined)
+    client.listAgentJobs.mockResolvedValue([])
+    client.scheduleAgentJob.mockResolvedValue(null)
+    client.agentBriefPreview.mockResolvedValue({
+      date: '2026-07-18',
+      mode: 'local',
+      summary: '今日计划 2 项，已完成 1 项（完成率 50%）。',
+      explanation: null,
+      today_planned: 2,
+      today_completed: 1,
+      today_duration_min: 120,
+      overdue_count: 0,
+      week_completion_rate: 0.5,
+      due_wrong_questions: 0,
+      weak_areas: [],
+    })
   })
 
   it('shows health and creates then starts a runtime run', async () => {
@@ -748,5 +766,53 @@ describe('AgentDebug', () => {
     await flushPromises()
     expect(client.deleteAgentMemory).toHaveBeenCalledWith('memory-1')
     expect(wrapper.find('[data-test=memory-row-memory-1]').exists()).toBe(false)
+  })
+
+  it('loads background jobs on mount and schedules a new one', async () => {
+    client.listAgentJobs.mockResolvedValue([
+      {
+        id: 'job-1',
+        job_type: 'daily_brief',
+        dedup_key: 'daily_brief:2026-07-18',
+        scheduled_at: '2026-07-18 08:00:00',
+        status: 'completed',
+        last_result: { mode: 'local', overdue_count: 0 },
+        retry_at: null,
+        runs: 1,
+        last_run_at: '2026-07-18 08:00:00',
+        created_at: '2026-07-18 00:00:00',
+      },
+    ])
+    const wrapper = mountPage()
+    await flushPromises()
+
+    expect(client.listAgentJobs).toHaveBeenCalledWith(50)
+    expect(wrapper.get('[data-test=job-meta-job-1]').text()).toContain('daily_brief')
+    expect(wrapper.get('[data-test=job-meta-job-1]').text()).toContain('completed')
+    expect(wrapper.get('[data-test=job-result-job-1]').text()).toContain('overdue_count')
+
+    await wrapper.get('[data-test=job-create-key]').setValue('overdue_check:2026-07-19')
+    await wrapper.get('[data-test=job-create-at]').setValue('2026-07-19 09:00:00')
+    await wrapper.find('form.job-create').trigger('submit')
+    await flushPromises()
+
+    expect(client.scheduleAgentJob).toHaveBeenCalledWith(
+      'daily_brief',
+      'overdue_check:2026-07-19',
+      '2026-07-19 09:00:00',
+    )
+  })
+
+  it('previews the daily brief', async () => {
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-test=brief-preview]').trigger('click')
+    await flushPromises()
+
+    expect(client.agentBriefPreview).toHaveBeenCalledWith('exam-1')
+    expect(wrapper.get('[data-test=brief-mode]').text()).toContain('local')
+    expect(wrapper.get('[data-test=brief-summary]').text()).toContain('今日计划 2 项')
+    expect(wrapper.get('[data-test=brief-output]').text()).toContain('week_completion_rate')
   })
 })

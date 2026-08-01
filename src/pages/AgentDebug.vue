@@ -2,7 +2,10 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import type {
+  AgentBrief,
   AgentContextAuditRow,
+  AgentJob,
+  AgentJobType,
   AgentMemoryCreateInput,
   AgentMemoryRecord,
   AgentMemorySource,
@@ -16,6 +19,7 @@ import type {
 } from '@/types'
 import { useExamStore } from '@/stores/exam'
 import {
+  agentBriefPreview,
   agentHealth,
   cancelAgentRun,
   confirmAgentMemory,
@@ -26,9 +30,11 @@ import {
   deleteAgentMemory,
   executeAgentTool,
   listAgentContextAudit,
+  listAgentJobs,
   listAgentMemories,
   listAgentTools,
   runAgentPlanner,
+  scheduleAgentJob,
   startAgentRun,
   undoAgentTool,
   updateAgentMemory,
@@ -65,6 +71,21 @@ const memoryTypes: AgentMemoryType[] = [
   'confirmed_weakness',
 ]
 const memorySources: AgentMemorySource[] = ['user_statement', 'behavior_inferred', 'model_candidate']
+const jobs = ref<AgentJob[]>([])
+const jobForm = reactive({
+  job_type: 'daily_brief' as AgentJobType,
+  dedup_key: '',
+  scheduled_at: '',
+})
+const jobTypes: AgentJobType[] = [
+  'daily_brief',
+  'task_reminder',
+  'overdue_check',
+  'weekly_report',
+  'retry_failed',
+  'cleanup_failed',
+]
+const brief = ref<AgentBrief | null>(null)
 let unlistenPlanner: (() => void) | undefined
 const state = reactive({
   healthy: false,
@@ -326,6 +347,39 @@ async function removeMemory(memory: AgentMemoryRecord): Promise<void> {
   })
 }
 
+async function loadJobs(): Promise<void> {
+  try {
+    jobs.value = await listAgentJobs(50)
+  } catch (error) {
+    state.error = errorMessage(error)
+  }
+}
+
+async function scheduleJob(): Promise<void> {
+  const dedupKey = jobForm.dedup_key.trim()
+  const scheduledAt = jobForm.scheduled_at.trim()
+  if (!dedupKey || !scheduledAt) {
+    state.error = 'dedup_key 和 scheduled_at 不能为空'
+    return
+  }
+  await perform(async () => {
+    await scheduleAgentJob(jobForm.job_type, dedupKey, scheduledAt)
+    jobForm.dedup_key = ''
+    jobForm.scheduled_at = ''
+    await loadJobs()
+  })
+}
+
+async function loadBrief(): Promise<void> {
+  await perform(async () => {
+    brief.value = await agentBriefPreview(examStore.activeExamId)
+  })
+}
+
+function jobResultJson(job: AgentJob): string {
+  return JSON.stringify(job.last_result, null, 2)
+}
+
 onMounted(() => {
   void perform(async () => {
     await agentHealth()
@@ -345,6 +399,7 @@ onMounted(() => {
       },
     )
     await loadMemories()
+    await loadJobs()
   })
 })
 
@@ -505,6 +560,74 @@ onUnmounted(() => {
           tokens: {{ row.prompt_tokens }} + {{ row.completion_tokens }}
         </p>
         <pre :data-test="`context-audit-json-${row.call_seq}`">{{ auditRowJson(row) }}</pre>
+      </article>
+    </section>
+
+    <section class="tool-control" aria-label="Daily brief">
+      <h2>Daily Brief（每日简报）</h2>
+      <button
+        data-test="brief-preview"
+        type="button"
+        :disabled="busy || toolListFailed"
+        @click="loadBrief"
+      >
+        预览今日简报
+      </button>
+      <p v-if="brief" data-test="brief-mode">mode: {{ brief.mode }} · {{ brief.date }}</p>
+      <p v-if="brief" data-test="brief-summary">{{ brief.summary }}</p>
+      <p v-if="brief?.explanation" data-test="brief-explanation">{{ brief.explanation }}</p>
+      <pre v-if="brief" data-test="brief-output">{{ JSON.stringify(brief, null, 2) }}</pre>
+    </section>
+
+    <section class="tool-control" aria-label="Background jobs">
+      <h2>Background Jobs（后台任务）</h2>
+      <button
+        data-test="jobs-refresh"
+        type="button"
+        :disabled="busy || toolListFailed"
+        @click="loadJobs"
+      >
+        刷新任务
+      </button>
+
+      <form class="job-create" @submit.prevent="scheduleJob">
+        <label>
+          类型
+          <select v-model="jobForm.job_type" data-test="job-create-type">
+            <option v-for="type in jobTypes" :key="type" :value="type">{{ type }}</option>
+          </select>
+        </label>
+        <label>
+          dedup_key
+          <input v-model="jobForm.dedup_key" data-test="job-create-key" type="text" />
+        </label>
+        <label>
+          scheduled_at
+          <input v-model="jobForm.scheduled_at" data-test="job-create-at" type="text" />
+        </label>
+        <button
+          data-test="job-create-submit"
+          type="submit"
+          :disabled="busy || toolListFailed"
+        >
+          排程任务
+        </button>
+      </form>
+
+      <p v-if="jobs.length === 0" data-test="jobs-empty">暂无任务。</p>
+      <article
+        v-for="job in jobs"
+        :key="job.id"
+        class="job-row"
+        :data-test="`job-row-${job.id}`"
+      >
+        <p :data-test="`job-meta-${job.id}`">
+          {{ job.job_type }} · {{ job.status }} · {{ job.scheduled_at }} · runs {{ job.runs }}
+        </p>
+        <p :data-test="`job-key-${job.id}`">dedup: {{ job.dedup_key }}</p>
+        <pre v-if="job.last_result" :data-test="`job-result-${job.id}`">
+{{ jobResultJson(job) }}
+        </pre>
       </article>
     </section>
 

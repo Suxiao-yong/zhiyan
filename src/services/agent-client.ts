@@ -1,7 +1,10 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   AgentApproval,
+  AgentBrief,
   AgentContextAuditRow,
+  AgentJob,
+  AgentJobType,
   AgentMemoryCreateInput,
   AgentMemoryRecord,
   AgentPlannerTurn,
@@ -91,4 +94,26 @@ export function deactivateAgentMemory(id: string): Promise<AgentMemoryRecord> {
 
 export function deleteAgentMemory(id: string): Promise<void> {
   return invoke<void>('agent_memory_delete', { id })
+}
+
+/** Background jobs (M4). */
+export function listAgentJobs(limit?: number): Promise<AgentJob[]> {
+  return invoke<AgentJob[]>('agent_job_list', { limit: limit ?? null })
+}
+
+export function scheduleAgentJob(
+  jobType: AgentJobType,
+  dedupKey: string,
+  scheduledAt: string,
+): Promise<string | null> {
+  return invoke<string | null>('agent_job_schedule', {
+    jobType,
+    dedupKey,
+    scheduledAt,
+  })
+}
+
+/** Daily brief preview (M4). */
+export function agentBriefPreview(examId?: string | null): Promise<AgentBrief> {
+  return invoke<AgentBrief>('agent_brief_preview', { examId: examId ?? null })
 }
