@@ -297,7 +297,7 @@ zhiyan/
 ## 🧪 测试
 
 ```bash
-# 运行单元测试
+# 前端单元测试（12 个文件 / 55 个用例）
 npx vitest run
 
 # 运行测试（监听模式）
@@ -305,13 +305,25 @@ npx vitest
 
 # 类型检查
 npx vue-tsc --noEmit
+
+# Rust 后端测试（lib 单测 51 + agent_repository 12 + agent_tools 42 = 105 用例）
+cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 ```
 
-目前覆盖的测试：
+前端测试覆盖：
 - `prompts.test.ts` — LLM Prompt 模板注入与 schema 字段
 - `llm-adapter.test.ts` — JSON 响应解析容错
 - `analyzer.test.ts` — 本地降级分析与分数预测
 - `plan-generator.test.ts` — 计划生成算法
+- `plan-service.test.ts` / `record-service.test.ts` / `export.test.ts` — 计划、记录、导入导出服务
+- `agent-client.test.ts` / `agent-tool-parity.test.ts` — Agent 运行时客户端与工具对齐
+- `AgentDebug.test.ts` — 隐藏调试页交互
+- `checkin-ui.test.ts` / `PlanCheckinDialog.test.ts` — 打卡 UI 组件
+
+Rust 测试覆盖：
+- lib 单测（51）— Agent Runtime 状态机、策略引擎（R0–R4）、执行器编排
+- `agent_tools`（42）— `plan.get_today` / `record.checkin_plan` 工具、exactly-once 与 undo、并发与隐私
+- `agent_repository`（12）— 会话/Run 持久化、状态转换原子性、启动恢复
 
 手动测试清单见 [MANUAL_TEST.md](./MANUAL_TEST.md)。
 

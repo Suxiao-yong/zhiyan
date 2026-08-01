@@ -36,8 +36,11 @@ jobs:
       - name: Unit tests
         run: npx vitest run
 
+      - name: Frontend build
+        run: npm run build
+
   rust:
-    name: Rust (check + clippy)
+    name: Rust (check + clippy + test)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,3 +56,7 @@ jobs:
       - name: Cargo clippy
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
+
+      - name: Cargo test
+        working-directory: src-tauri
+        run: cargo test --all-targets
