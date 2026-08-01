@@ -1,26 +1,35 @@
 # 项目进度状态
 
-更新时间：2026-07-18（M3 Part 3 完成后更新）
+更新时间：2026-07-18（M4 完成后更新）
 工作区：`D:\智研\zhiyan`（main 分支）
 分支：`main`
 
 ## 当前结论
 
-纯 agent 改造的 M3（模型、上下文与记忆）三个 Part 全部完成并提交：
+纯 agent 改造的 M3（模型、上下文与记忆）与 M4（托盘、调度与简报）全部完成并提交：
 
 - **M3 Part 1**：OpenAI 兼容 Provider、模型↔工具循环、本地降级与软 token 预算（`4528a45` 记录里程碑）。
 - **M3 Part 2**：SSE 流式对话与工具循环，`agent-planner-chunk` 事件实时渲染（`323902f` 标记 shipped）。
-- **M3 Part 3**：Context Inspector（v6 `agent_context_audit` 表 + Context Builder + `agent_context_audit_list` 命令 + `/agent-debug` 视图）与结构化长期记忆（v7 `agent_memories` 表 + 7 种记忆类型 + candidate→confirmed 流程 + 记忆管理命令与 UI）。
+- **M3 Part 3**：Context Inspector（v6 `agent_context_audit` 表 + Context Builder + `agent_context_audit_list` 命令 + `/agent-debug` 视图）、结构化长期记忆（v7 `agent_memories` 表 + 7 种记忆类型 + candidate→confirmed 流程 + 记忆管理命令与 UI）、记忆接入 Context Builder（`e6c5550`）。
+- **M4**：托盘生命周期（关闭隐藏、暂停提醒、彻底退出）、`agent_jobs` v8 后台调度（去重/补跑/跨天自愈）、本地聚合（overdue/日周统计/薄弱点）、每日简报（本地骨架 + LLM 解释）、任务/逾期通知（仅计数与日期）、费用估算（`estimated_cost_usd`）。
 
-仍搁置：完整 Fallback Engine（overdue/stats/weakness/notifications）、M6 的 TypeScript planner/LLM adapter 切换。Ollama 工具支持按产品决策排除（Agent 循环仅云端 LLM）。
+仍搁置：完整 Fallback Engine 产品面与周报（M5）、Agent OS 界面（M5）、M6 的 TypeScript planner/LLM adapter 切换。Ollama 工具支持按产品决策排除（Agent 循环仅云端 LLM）。
 
-## M3 Part 3 提交记录
+## M4 提交记录
 
-提交：`bc6ccc8`（audit 数据层）、`22052cb`（Inspector 读取命令 + UI）、`6353bc0`（结构化记忆 + UI）、`eeed904`（CI 增强）
+提交：`ed89962`（计划）、`e48a0fe`（托盘）、`82f0133`（调度器 + v8）、`71d8315`（本地聚合）、`c74f65a`（每日简报）、`53a27ab`（通知出站）、`6e4c7d5`（费用 + 调试页 Jobs/Brief）
+
+- 托盘：主窗口关闭改为隐藏（`EXITING` 标志区分真实退出），托盘四菜单项，暂停状态持久化到 settings。
+- 调度：60s tick 循环 + `ensure_today_jobs` 每日排程（简报 08:00 / 逾期 09:00 / 提醒默认 19:00），全局去重键，失败重试 +5min。
+- 通知：经 tokio channel 出站，`Scheduler` 不持有 `AppHandle`（managed state 持有会产出损坏测试 exe，见提交说明），正文仅计数与日期。
+- 验证：Rust 全量 100 lib + 12 repository + 42 tools = 154 通过；前端 64 用例通过；typecheck、build、Clippy `-D warnings`、fmt、diff-check 全部通过。
+
+## 历史：M3 Part 3 提交记录
+
+提交：`bc6ccc8`（audit 数据层）、`22052cb`（Inspector 读取命令 + UI）、`6353bc0`（结构化记忆 + UI）、`eeed904`（CI 增强）、`e6c5550`（记忆接入 Context Builder）
 
 - v6 迁移新增 `agent_context_audit`，替换 `model.invoked` 事件：每次模型调用记录 tools_offered、数据类别、记录 ID、字段集合、token 与 local 标志，**不存任何原文**。
-- v7 迁移新增 `agent_memories`：7 种类型（schedule_preference / daily_capacity / subject_preference / learning_constraint / reminder_preference / strategy_preference / confirmed_weakness），source 决定自动确认（user_statement 直接 confirmed，其余 candidate 待确认），支持编辑/停用/删除，`relevant()` 供未来 Context Builder 按考试、最近使用取用。
-- 验证：Rust 全量 79 lib + 12 repository + 42 tools = 133 通过；前端 62 用例通过；typecheck、build、Clippy `-D warnings`、fmt、diff-check 全部通过。
+- v7 迁移新增 `agent_memories`：7 种类型（schedule_preference / daily_capacity / subject_preference / learning_constraint / reminder_preference / strategy_preference / confirmed_weakness），source 决定自动确认（user_statement 直接 confirmed，其余 candidate 待确认），支持编辑/停用/删除，`relevant()` 供 Context Builder 按考试、最近使用取用；Planner 每次 run 将确认记忆拼入 system prompt。
 
 ## 历史：第二阶段（Agent tools/policy vertical slice，Task 1–10）
 
