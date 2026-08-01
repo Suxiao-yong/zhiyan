@@ -1,6 +1,7 @@
 //! ZhiYan Tauri backend entry point.
 
 pub mod agent;
+pub mod analytics;
 mod credentials;
 pub mod db;
 pub mod scheduler;
