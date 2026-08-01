@@ -1,15 +1,16 @@
-// Rust Planner (M3 Part 1): drives the model -> tool loop over AgentRuntime.
+// Rust Planner (M3 Part 1/3): drives the model -> tool loop over AgentRuntime.
 // The Planner is the only component that calls the provider and routes each
 // returned tool_call through AgentRuntime::execute_tool. It never dispatches a
-// tool itself (the executor's locked invariant) and records one model.invoked
-// audit event per provider call.
+// tool itself (the executor's locked invariant) and records one
+// agent_context_audit row per model call via the Context Builder.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
 
+use crate::agent::context::{ContextAudit, ContextScope};
 use crate::agent::error::AgentError;
 use crate::agent::llm::tool_object;
 use crate::agent::llm::{LlmProvider, ProviderMessage, ProviderResponse, ProviderUsage};
@@ -25,6 +26,7 @@ const SYSTEM_PROMPT: &str = "你是智研的学习顾问助手。利用提供的
 pub struct Planner {
     pool: SqlitePool,
     runtime: AgentRuntime,
+    context: ContextAudit,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +71,7 @@ pub enum TraceEntry {
 struct LoopAccumulator {
     iterations: i64,
     model_calls: i64,
+    audit_seq: i64,
     prompt_tokens: i64,
     completion_tokens: i64,
     trace: Vec<TraceEntry>,
@@ -90,7 +93,12 @@ impl LoopAccumulator {
 
 impl Planner {
     pub fn new(pool: SqlitePool, runtime: AgentRuntime) -> Self {
-        Self { pool, runtime }
+        let context = ContextAudit::new(pool.clone());
+        Self {
+            pool,
+            runtime,
+            context,
+        }
     }
 
     /// Project the registry into OpenAI tool objects, offering only tools the
@@ -156,16 +164,12 @@ impl Planner {
         let mut by_name: BTreeMap<&'static str, &ListedTool> = BTreeMap::new();
         let mut tools: Vec<Value> = Vec::with_capacity(offered.len());
         let mut tools_offered: Vec<&'static str> = Vec::with_capacity(offered.len());
-        let mut data_permissions: BTreeSet<&'static str> = BTreeSet::new();
         for tool in &offered {
             by_name.insert(tool.descriptor.name, tool);
             tools.push(project_tool(tool));
             tools_offered.push(tool.descriptor.name);
-            for permission in &tool.descriptor.data_permissions {
-                data_permissions.insert(*permission);
-            }
         }
-        let data_permissions: Vec<&'static str> = data_permissions.into_iter().collect();
+        let scope = self.context.gather(run_id).await?;
 
         let mut messages = vec![
             ProviderMessage {
@@ -205,9 +209,18 @@ impl Planner {
                 Err(error) => return Err(error),
             };
             acc.model_calls += 1;
+            acc.audit_seq += 1;
             acc.prompt_tokens += response.usage.prompt_tokens;
             acc.completion_tokens += response.usage.completion_tokens;
-            self.emit_model_invoked(run_id, &response, &tools_offered, &data_permissions, false)
+            self.context
+                .record(
+                    run_id,
+                    acc.audit_seq,
+                    &scope,
+                    &response.usage,
+                    false,
+                    &tools_offered,
+                )
                 .await?;
 
             // Echo the assistant turn (with tool_calls) so the conversation stays
@@ -364,10 +377,10 @@ impl Planner {
         )))
     }
 
-    /// Produce a deterministic local-mode turn. Emits one `model.invoked` audit
-    /// event marked `local:true` (zero tokens in that event's payload); the turn
-    /// carries whatever successful calls already happened so callers see honest
-    /// usage. The text names the failure reason and never claims model output.
+    /// Produce a deterministic local-mode turn. Records one `agent_context_audit`
+    /// row marked `local:true` (zero tokens, no scope); the turn carries whatever
+    /// successful calls already happened so callers see honest usage. The text
+    /// names the failure reason and never claims model output.
     async fn local_turn(
         &self,
         run_id: &str,
@@ -379,39 +392,21 @@ impl Planner {
             tool_calls: Vec::new(),
             usage: ProviderUsage::default(),
         };
-        self.emit_model_invoked(run_id, &response, &[], &[], true)
+        acc.audit_seq += 1;
+        self.context
+            .record(
+                run_id,
+                acc.audit_seq,
+                &ContextScope::default(),
+                &response.usage,
+                true,
+                &[],
+            )
             .await?;
         acc.trace.push(TraceEntry::LocalFallback {
             reason: reason.to_owned(),
         });
         Ok(acc.into_turn("local", response.content.unwrap_or_default()))
-    }
-
-    async fn emit_model_invoked(
-        &self,
-        run_id: &str,
-        response: &ProviderResponse,
-        tools_offered: &[&'static str],
-        data_permissions: &[&'static str],
-        local: bool,
-    ) -> Result<(), AgentError> {
-        let payload = json!({
-            "local": local,
-            "prompt_tokens": response.usage.prompt_tokens,
-            "completion_tokens": response.usage.completion_tokens,
-            "tools_offered": tools_offered,
-            "data_permissions": data_permissions,
-        });
-        sqlx::query(
-            "INSERT INTO agent_events(run_id, step_id, event_type, payload_json) \
-             VALUES (?, NULL, 'model.invoked', ?)",
-        )
-        .bind(run_id)
-        .bind(payload.to_string())
-        .execute(&self.pool)
-        .await
-        .map_err(map_sqlx)?;
-        Ok(())
     }
 }
 
@@ -608,23 +603,22 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(completed_steps, 1);
-        // One model.invoked audit event per provider call (local:false).
-        let model_events: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM agent_events WHERE run_id=? AND event_type='model.invoked'",
+        // One agent_context_audit row per provider call (local:false).
+        let audit_rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM agent_context_audit WHERE run_id=?")
+                .bind(&run_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(audit_rows, 2);
+        let local_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_context_audit WHERE run_id=? AND local=1",
         )
         .bind(&run_id)
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(model_events, 2);
-        let local_flag: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM agent_events WHERE run_id=? AND event_type='model.invoked' AND json_extract(payload_json,'$.local')=1",
-        )
-        .bind(&run_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(local_flag, 0);
+        assert_eq!(local_rows, 0);
     }
 
     #[tokio::test]
@@ -677,9 +671,9 @@ mod tests {
             turn.trace.first(),
             Some(TraceEntry::LocalFallback { .. })
         ));
-        // One local model.invoked event, zero tokens.
+        // One local agent_context_audit row, zero tokens.
         let local_events: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM agent_events WHERE run_id=? AND event_type='model.invoked' AND json_extract(payload_json,'$.local')=1",
+            "SELECT COUNT(*) FROM agent_context_audit WHERE run_id=? AND local=1",
         )
         .bind(&run_id)
         .fetch_one(&pool)
@@ -719,7 +713,7 @@ mod tests {
         assert_eq!(turn.model_calls, 0);
         assert!(turn.final_text.contains("llm provider unavailable"));
         let local_events: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM agent_events WHERE run_id=? AND event_type='model.invoked' AND json_extract(payload_json,'$.local')=1",
+            "SELECT COUNT(*) FROM agent_context_audit WHERE run_id=? AND local=1",
         )
         .bind(&run_id)
         .fetch_one(&pool)
@@ -760,16 +754,16 @@ mod tests {
         assert_eq!(turn.mode, "local");
         assert_eq!(turn.model_calls, 1);
         assert!(turn.final_text.contains("token budget exhausted"));
-        // One non-local event (the call that ran) + one local event (the fallback).
+        // One non-local audit row (the call that ran) + one local row (the fallback).
         let non_local: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM agent_events WHERE run_id=? AND event_type='model.invoked' AND json_extract(payload_json,'$.local')=0",
+            "SELECT COUNT(*) FROM agent_context_audit WHERE run_id=? AND local=0",
         )
         .bind(&run_id)
         .fetch_one(&pool)
         .await
         .unwrap();
         let local: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM agent_events WHERE run_id=? AND event_type='model.invoked' AND json_extract(payload_json,'$.local')=1",
+            "SELECT COUNT(*) FROM agent_context_audit WHERE run_id=? AND local=1",
         )
         .bind(&run_id)
         .fetch_one(&pool)

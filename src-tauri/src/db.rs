@@ -59,6 +59,12 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 6,
+            description: "add agent context audit table (model-call data provenance)",
+            sql: AGENT_CONTEXT_AUDIT_SQL,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -314,12 +320,50 @@ CREATE INDEX IF NOT EXISTS idx_agent_steps_run_index ON agent_steps(run_id, step
 CREATE INDEX IF NOT EXISTS idx_agent_events_run_id ON agent_events(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_agent_approvals_status_expires ON agent_approvals(status, expires_at);
 
+CREATE TABLE IF NOT EXISTS agent_context_audit (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    call_seq INTEGER NOT NULL,
+    purpose TEXT NOT NULL,
+    local INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    tools_offered_json TEXT NOT NULL DEFAULT '[]',
+    categories_json TEXT NOT NULL DEFAULT '[]',
+    record_ids_json TEXT NOT NULL DEFAULT '{}',
+    field_sets_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_context_audit_run ON agent_context_audit(run_id, call_seq);
+
 CREATE TRIGGER IF NOT EXISTS trg_agent_sessions_updated AFTER UPDATE ON agent_sessions
     FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
     BEGIN UPDATE agent_sessions SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
 CREATE TRIGGER IF NOT EXISTS trg_agent_runs_updated AFTER UPDATE ON agent_runs
     FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
     BEGIN UPDATE agent_runs SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
+"#;
+
+/// Dedicated model-call data provenance table (M3 Part 3). Records, per model
+/// call, the tools offered, the in-scope business data categories + record IDs +
+/// field names, token usage, and local-mode flag. Stores NO raw content (no
+/// plan tasks, record text, or wrong-question text) per the §10.2 privacy rule.
+pub const AGENT_CONTEXT_AUDIT_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_context_audit (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    call_seq INTEGER NOT NULL,
+    purpose TEXT NOT NULL,
+    local INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    tools_offered_json TEXT NOT NULL DEFAULT '[]',
+    categories_json TEXT NOT NULL DEFAULT '[]',
+    record_ids_json TEXT NOT NULL DEFAULT '{}',
+    field_sets_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_context_audit_run ON agent_context_audit(run_id, call_seq);
 "#;
 
 /// 确保应用数据目录存在（SQLite 数据库文件将落在此目录）。
@@ -340,7 +384,7 @@ mod tests {
         Row,
     };
 
-    use super::{migrations, AGENT_SCHEMA_SQL, SCHEMA_SQL};
+    use super::{migrations, AGENT_CONTEXT_AUDIT_SQL, AGENT_SCHEMA_SQL, SCHEMA_SQL};
 
     #[test]
     fn agent_schema_contains_required_tables_and_constraints() {
@@ -350,6 +394,7 @@ mod tests {
             "agent_steps",
             "agent_events",
             "agent_approvals",
+            "agent_context_audit",
             "UNIQUE(idempotency_key)",
             "waiting_approval",
         ] {
@@ -368,7 +413,7 @@ mod tests {
             .collect();
 
         assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(versions.last(), Some(&5));
+        assert_eq!(versions.last(), Some(&6));
     }
 
     #[test]
@@ -443,8 +488,76 @@ mod tests {
                 );
                 assert_eq!(
                     migration_list.last().map(|migration| migration.version),
-                    Some(5)
+                    Some(6)
                 );
+            });
+    }
+
+    #[test]
+    fn migration_v6_adds_context_audit_table() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                for migration in &migrations() {
+                    sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+                }
+
+                let table_exists: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_context_audit'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(table_exists, 1);
+
+                let columns: Vec<String> =
+                    sqlx::query_scalar("SELECT name FROM pragma_table_info('agent_context_audit')")
+                        .fetch_all(&pool)
+                        .await
+                        .unwrap();
+                for column in [
+                    "id",
+                    "run_id",
+                    "call_seq",
+                    "purpose",
+                    "local",
+                    "prompt_tokens",
+                    "completion_tokens",
+                    "tools_offered_json",
+                    "categories_json",
+                    "record_ids_json",
+                    "field_sets_json",
+                    "created_at",
+                ] {
+                    assert!(
+                        columns.iter().any(|c| c == column),
+                        "agent_context_audit.{column} must exist"
+                    );
+                }
+
+                // v6 is additive CREATE TABLE; v4 rows survive a v6 upgrade.
+                sqlx::query("INSERT INTO agent_sessions (id, title) VALUES ('session-v6', 'V6')")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::query("INSERT INTO agent_runs (id, session_id, goal) VALUES ('run-v6', 'session-v6', 'survive')")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::raw_sql(AGENT_CONTEXT_AUDIT_SQL).execute(&pool).await.unwrap();
+                let survived: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM agent_runs WHERE id='run-v6'")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(survived, 1);
             });
     }
 
@@ -594,6 +707,7 @@ mod tests {
                     "agent_steps",
                     "agent_events",
                     "agent_approvals",
+                    "agent_context_audit",
                 ] {
                     assert!(tables.iter().any(|table| table == expected_table));
                 }
