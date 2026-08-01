@@ -2,6 +2,7 @@ use serde::Serialize;
 use serde_json::json;
 use tauri::{Emitter, State};
 
+use super::context::{ContextAudit, ContextAuditRow};
 use super::error::AgentError;
 use super::executor::ToolUndoResponse;
 use super::model::{
@@ -153,6 +154,18 @@ pub async fn agent_undo_tool(
     runtime.undo_tool(&step_id).await.map_err(Into::into)
 }
 
+/// Context Inspector read (M3 Part 3): every model-call audit row of a run —
+/// tools offered, in-scope data categories, record IDs, field sets, token
+/// usage, and the local-mode flag. Never contains raw business content.
+#[tauri::command]
+pub async fn agent_context_audit_list(
+    audit: State<'_, ContextAudit>,
+    run_id: String,
+) -> Result<Vec<ContextAuditRow>, CommandError> {
+    let run_id = trimmed_required(run_id, "run_id")?;
+    audit.list(&run_id).await.map_err(Into::into)
+}
+
 /// Hidden planner entry point (M3 Part 1/2): build the provider from settings +
 /// keyring, stream the model -> tool loop over the existing AgentRuntime, emit
 /// one `agent-planner-chunk` event per content delta, and return the final
@@ -183,8 +196,8 @@ pub async fn agent_run_planner(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_decide_approval, agent_execute_tool, agent_list_tools, agent_run_planner,
-        agent_undo_tool, trimmed_required, CommandError,
+        agent_context_audit_list, agent_decide_approval, agent_execute_tool, agent_list_tools,
+        agent_run_planner, agent_undo_tool, trimmed_required, CommandError,
     };
     use crate::agent::error::AgentError;
 
@@ -221,6 +234,7 @@ mod tests {
         let _ = agent_decide_approval;
         let _ = agent_undo_tool;
         let _ = agent_run_planner;
+        let _ = agent_context_audit_list;
     }
 
     #[test]

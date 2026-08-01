@@ -286,3 +286,18 @@ export interface AgentPlannerTurn {
   completion_tokens: number
   trace: AgentPlannerTraceEntry[]
 }
+
+/** One model-call audit row from the Context Inspector (never raw content). */
+export interface AgentContextAuditRow {
+  id: string
+  call_seq: number
+  purpose: string
+  local: boolean
+  prompt_tokens: number
+  completion_tokens: number
+  tools_offered: string[]
+  categories: string[]
+  record_ids: Record<string, string[]>
+  field_sets: Record<string, string[]>
+  created_at: string
+}

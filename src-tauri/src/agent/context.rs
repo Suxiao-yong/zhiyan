@@ -87,7 +87,9 @@ impl ContextScope {
 /// columns are parsed; no raw business content is ever present.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextAuditRow {
+    pub id: String,
     pub call_seq: i64,
+    pub purpose: String,
     pub local: bool,
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
@@ -178,10 +180,64 @@ impl ContextAudit {
         .map_err(map_sqlx)?;
         Ok(())
     }
+
+    /// Read every audit row of a run, oldest call first, for the hidden
+    /// Context Inspector. JSON columns are parsed back into structured values;
+    /// no raw business content is ever present.
+    pub async fn list(&self, run_id: &str) -> Result<Vec<ContextAuditRow>, AgentError> {
+        #[derive(sqlx::FromRow)]
+        struct Raw {
+            id: String,
+            call_seq: i64,
+            purpose: String,
+            local: i64,
+            prompt_tokens: i64,
+            completion_tokens: i64,
+            tools_offered_json: String,
+            categories_json: String,
+            record_ids_json: String,
+            field_sets_json: String,
+            created_at: String,
+        }
+        let rows = sqlx::query_as::<_, Raw>(
+            "SELECT id, call_seq, purpose, local, prompt_tokens, completion_tokens, \
+             tools_offered_json, categories_json, record_ids_json, field_sets_json, created_at \
+             FROM agent_context_audit WHERE run_id = ? ORDER BY call_seq",
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(ContextAuditRow {
+                    id: row.id,
+                    call_seq: row.call_seq,
+                    purpose: row.purpose,
+                    local: row.local != 0,
+                    prompt_tokens: row.prompt_tokens,
+                    completion_tokens: row.completion_tokens,
+                    tools_offered: json_or_persistence(serde_json::from_str(
+                        &row.tools_offered_json,
+                    ))?,
+                    categories: json_or_persistence(serde_json::from_str(&row.categories_json))?,
+                    record_ids: json_or_persistence(serde_json::from_str(&row.record_ids_json))?,
+                    field_sets: json_or_persistence(serde_json::from_str(&row.field_sets_json))?,
+                    created_at: row.created_at,
+                })
+            })
+            .collect()
+    }
 }
 
 fn map_sqlx(_error: sqlx::Error) -> AgentError {
     AgentError::Persistence("context audit failed".to_owned())
+}
+
+fn json_or_persistence<T: serde::de::DeserializeOwned>(
+    value: Result<T, serde_json::Error>,
+) -> Result<T, AgentError> {
+    value.map_err(|_| AgentError::Persistence("context audit failed".to_owned()))
 }
 
 #[cfg(test)]
@@ -294,5 +350,38 @@ mod tests {
         assert_eq!(row.4, "[]");
         assert_eq!(row.5, "{}");
         assert_eq!(row.6, "{}");
+    }
+
+    #[tokio::test]
+    async fn list_returns_rows_oldest_call_first_with_parsed_columns() {
+        let pool = audit_pool().await;
+        run_for(&pool, None).await;
+        let audit = ContextAudit::new(pool.clone());
+        let scope = audit.gather("run-a").await.unwrap();
+        let usage = ProviderUsage {
+            prompt_tokens: 10,
+            completion_tokens: 2,
+        };
+        audit
+            .record("run-a", 1, &scope, &usage, false, &["plan.get_today"])
+            .await
+            .unwrap();
+        audit
+            .record("run-a", 2, &scope, &usage, true, &[])
+            .await
+            .unwrap();
+
+        let rows = audit.list("run-a").await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].call_seq, 1);
+        assert!(!rows[0].local);
+        assert_eq!(rows[0].purpose, "planner_turn");
+        assert_eq!(rows[0].tools_offered, vec!["plan.get_today".to_owned()]);
+        assert_eq!(rows[0].record_ids, Value::Object(serde_json::Map::new()));
+        assert!(!rows[0].id.is_empty());
+        assert!(!rows[0].created_at.is_empty());
+        assert_eq!(rows[1].call_seq, 2);
+        assert!(rows[1].local);
+        assert!(rows[1].tools_offered.is_empty());
     }
 }

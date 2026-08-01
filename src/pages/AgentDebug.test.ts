@@ -21,6 +21,7 @@ const client = vi.hoisted(() => ({
   executeAgentTool: vi.fn(),
   undoAgentTool: vi.fn(),
   runAgentPlanner: vi.fn(),
+  listAgentContextAudit: vi.fn(),
 }))
 
 vi.mock('@/services/agent-client', () => client)
@@ -116,6 +117,7 @@ describe('AgentDebug', () => {
       completion_tokens: 0,
       trace: [{ kind: 'local_fallback', reason: 'no llm provider configured' }],
     })
+    client.listAgentContextAudit.mockResolvedValue([])
   })
 
   it('shows health and creates then starts a runtime run', async () => {
@@ -488,6 +490,21 @@ describe('AgentDebug', () => {
   })
 
   it('runs a planner turn and renders the trace when a run is active', async () => {
+    client.listAgentContextAudit.mockResolvedValue([
+      {
+        id: 'audit-1',
+        call_seq: 1,
+        purpose: 'planner_turn',
+        local: true,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        tools_offered: [],
+        categories: [],
+        record_ids: {},
+        field_sets: {},
+        created_at: '2026-07-18T00:00:00',
+      },
+    ])
     const wrapper = mountPage()
     await flushPromises()
 
@@ -507,5 +524,48 @@ describe('AgentDebug', () => {
     // The final streamed text is rendered live.
     expect(wrapper.get('[data-test=planner-stream]').text()).toContain('本地模式')
     expect(eventApi.listen).toHaveBeenCalledWith('agent-planner-chunk', expect.any(Function))
+    // A planner turn refreshes the Context Inspector rows.
+    expect(client.listAgentContextAudit).toHaveBeenCalledWith('run-1')
+    expect(wrapper.get('[data-test=context-audit-call-1]').text()).toContain('本地模式')
+    expect(wrapper.get('[data-test=context-audit-tokens-1]').text()).toContain('0 + 0')
+  })
+
+  it('renders Context Inspector rows with offered tools and data scope after a refresh', async () => {
+    client.listAgentContextAudit.mockResolvedValue([
+      {
+        id: 'audit-1',
+        call_seq: 1,
+        purpose: 'planner_turn',
+        local: false,
+        prompt_tokens: 120,
+        completion_tokens: 30,
+        tools_offered: ['plan.get_today'],
+        categories: ['exam', 'plan'],
+        record_ids: { exam: ['exam-1'], plan: ['plan-1'] },
+        field_sets: { plan: ['id', 'date', 'status'] },
+        created_at: '2026-07-18T00:00:00',
+      },
+    ])
+    const wrapper = mountPage()
+    await flushPromises()
+
+    expect(wrapper.get('[data-test=context-audit-empty]').text()).toContain('暂无模型调用记录')
+
+    await wrapper.get('[data-test=create-session]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=start-run]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-test=context-audit-refresh]').trigger('click')
+    await flushPromises()
+
+    expect(client.listAgentContextAudit).toHaveBeenCalledWith('run-1')
+    expect(wrapper.get('[data-test=context-audit-call-1]').text()).toContain('模型调用')
+    const json = wrapper.get('[data-test=context-audit-json-1]').text()
+    expect(json).toContain('plan.get_today')
+    expect(json).toContain('exam-1')
+    expect(json).toContain('plan-1')
+    expect(json).toContain('field_sets')
+    // No raw business content is shown.
+    expect(json).not.toContain('今天复习数学')
   })
 })

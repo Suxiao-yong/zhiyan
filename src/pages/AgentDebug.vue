@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import type {
+  AgentContextAuditRow,
   AgentPlannerTurn,
   AgentRun,
   AgentSession,
@@ -16,6 +17,7 @@ import {
   createAgentRun,
   createAgentSession,
   executeAgentTool,
+  listAgentContextAudit,
   listAgentTools,
   runAgentPlanner,
   startAgentRun,
@@ -31,6 +33,8 @@ const checkinReceipt = ref<Extract<AgentToolCallResponse, { state: 'completed' }
 const undoOutput = ref<AgentToolUndoResponse | null>(null)
 const plannerTurn = ref<AgentPlannerTurn | null>(null)
 const plannerStream = ref('')
+const contextAudit = ref<AgentContextAuditRow[]>([])
+const contextAuditFailed = ref(false)
 let unlistenPlanner: (() => void) | undefined
 const state = reactive({
   healthy: false,
@@ -193,7 +197,38 @@ async function runPlanner(): Promise<void> {
     plannerTurn.value = await runAgentPlanner(state.run!.id, state.goal)
     // Authoritative final text (event stream may have missed tail fragments).
     plannerStream.value = plannerTurn.value.final_text
+    await loadContextAudit()
   })
+}
+
+async function loadContextAudit(): Promise<void> {
+  if (!state.run) return
+  try {
+    contextAudit.value = await listAgentContextAudit(state.run.id)
+    contextAuditFailed.value = false
+  } catch (error) {
+    contextAuditFailed.value = true
+    state.error = errorMessage(error)
+  }
+}
+
+function auditRowJson(row: AgentContextAuditRow): string {
+  return JSON.stringify(
+    {
+      call_seq: row.call_seq,
+      purpose: row.purpose,
+      local: row.local,
+      prompt_tokens: row.prompt_tokens,
+      completion_tokens: row.completion_tokens,
+      tools_offered: row.tools_offered,
+      categories: row.categories,
+      record_ids: row.record_ids,
+      field_sets: row.field_sets,
+      created_at: row.created_at,
+    },
+    null,
+    2,
+  )
 }
 
 onMounted(() => {
@@ -342,6 +377,39 @@ onUnmounted(() => {
       </button>
       <pre v-if="plannerStream" data-test="planner-stream">{{ plannerStream }}</pre>
       <pre v-if="plannerTurn" data-test="planner-output">{{ plannerOutputJson }}</pre>
+    </section>
+
+    <section class="tool-control" aria-label="Context Inspector">
+      <h2>Context Inspector</h2>
+      <p v-if="contextAuditFailed" data-test="context-audit-failed">
+        读取审计记录失败
+      </p>
+      <button
+        data-test="context-audit-refresh"
+        type="button"
+        :disabled="busy || toolListFailed || !state.run"
+        @click="loadContextAudit"
+      >
+        刷新审计
+      </button>
+      <p v-if="contextAudit.length === 0 && !contextAuditFailed" data-test="context-audit-empty">
+        暂无模型调用记录。运行一次 planner turn 后出现。
+      </p>
+      <article
+        v-for="row in contextAudit"
+        :key="row.id"
+        class="audit-row"
+        :data-test="`context-audit-row-${row.call_seq}`"
+      >
+        <p :data-test="`context-audit-call-${row.call_seq}`">
+          #{{ row.call_seq }} · {{ row.purpose }} · {{ row.local ? '本地模式' : '模型调用' }} ·
+          {{ row.created_at }}
+        </p>
+        <p :data-test="`context-audit-tokens-${row.call_seq}`">
+          tokens: {{ row.prompt_tokens }} + {{ row.completion_tokens }}
+        </p>
+        <pre :data-test="`context-audit-json-${row.call_seq}`">{{ auditRowJson(row) }}</pre>
+      </article>
     </section>
 
     <p v-if="state.error" role="alert">{{ state.error }}</p>

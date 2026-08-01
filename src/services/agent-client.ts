@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   AgentApproval,
+  AgentContextAuditRow,
   AgentPlannerTurn,
   AgentRun,
   AgentSession,
@@ -49,4 +50,9 @@ export function undoAgentTool(stepId: string): Promise<AgentToolUndoResponse> {
 /** Hidden planner entry point (M3 Part 1): run one model -> tool loop. */
 export function runAgentPlanner(runId: string, goal: string): Promise<AgentPlannerTurn> {
   return invoke<AgentPlannerTurn>('agent_run_planner', { runId, goal })
+}
+
+/** Context Inspector (M3 Part 3): every model-call audit row of a run. */
+export function listAgentContextAudit(runId: string): Promise<AgentContextAuditRow[]> {
+  return invoke<AgentContextAuditRow[]>('agent_context_audit_list', { runId })
 }

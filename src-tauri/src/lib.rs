@@ -50,6 +50,7 @@ pub fn run() {
             agent::commands::agent_decide_approval,
             agent::commands::agent_undo_tool,
             agent::commands::agent_run_planner,
+            agent::commands::agent_context_audit_list,
         ])
         .setup(|app| {
             db::init_db(app.handle())?;
@@ -62,11 +63,13 @@ pub fn run() {
                 AgentRepository::new(pool.clone()),
                 AgentExecutor::new(pool.clone()),
             );
-            let planner = Planner::new(pool, runtime.clone());
+            let planner = Planner::new(pool.clone(), runtime.clone());
+            let context_audit = agent::context::ContextAudit::new(pool);
             tauri::async_runtime::block_on(runtime.recover_interrupted())
                 .map_err(|error| setup_error("recovery", &error))?;
             app.manage(runtime);
             app.manage(planner);
+            app.manage(context_audit);
             Ok(())
         })
         .run(tauri::generate_context!())
