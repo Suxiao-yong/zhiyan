@@ -5,6 +5,7 @@ use tauri::{Emitter, State};
 use super::context::{ContextAudit, ContextAuditRow};
 use super::error::AgentError;
 use super::executor::ToolUndoResponse;
+use super::memory::{MemoryRecord, MemoryRepository, MemorySource, MemoryType};
 use super::model::{
     AgentRun, AgentSession, ApprovalRecord, RunEvent, ToolCallRequest, ToolCallResponse,
 };
@@ -166,6 +167,108 @@ pub async fn agent_context_audit_list(
     audit.list(&run_id).await.map_err(Into::into)
 }
 
+/// Structured long-term memory management (M3 Part 3). Lists memories of an
+/// exam (or all exams), newest first; `include_inactive` surfaces deactivated
+/// memories. exam_id may be null; memories with exam_id IS NULL apply globally.
+#[tauri::command]
+pub async fn agent_memory_list(
+    memory: State<'_, MemoryRepository>,
+    exam_id: Option<String>,
+    include_inactive: bool,
+) -> Result<Vec<MemoryRecord>, CommandError> {
+    let exam_id = exam_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    memory
+        .list(exam_id, include_inactive)
+        .await
+        .map_err(Into::into)
+}
+
+/// Create a memory. Explicit user statements (source=user_statement) are
+/// confirmed automatically; behavior_inferred and model_candidate memories
+/// start as candidates awaiting user confirmation.
+#[tauri::command]
+pub async fn agent_memory_create(
+    memory: State<'_, MemoryRepository>,
+    exam_id: Option<String>,
+    memory_type: String,
+    content: String,
+    source: String,
+    confidence: f64,
+) -> Result<MemoryRecord, CommandError> {
+    let content = trimmed_required(content, "content")?;
+    let memory_type = MemoryType::parse(&memory_type).ok_or_else(|| CommandError {
+        code: "validation_error".to_owned(),
+        message: "memory_type must be one of schedule_preference, daily_capacity, subject_preference, learning_constraint, reminder_preference, strategy_preference, confirmed_weakness".to_owned(),
+    })?;
+    let source = MemorySource::parse(&source).ok_or_else(|| CommandError {
+        code: "validation_error".to_owned(),
+        message: "source must be one of user_statement, behavior_inferred, model_candidate"
+            .to_owned(),
+    })?;
+    if !(0.0..=1.0).contains(&confidence) {
+        return Err(CommandError {
+            code: "validation_error".to_owned(),
+            message: "confidence must be between 0 and 1".to_owned(),
+        });
+    }
+    let exam_id = exam_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    memory
+        .create(exam_id, memory_type, &content, source, confidence)
+        .await
+        .map_err(Into::into)
+}
+
+/// Confirm a candidate memory.
+#[tauri::command]
+pub async fn agent_memory_confirm(
+    memory: State<'_, MemoryRepository>,
+    id: String,
+) -> Result<MemoryRecord, CommandError> {
+    let id = trimmed_required(id, "id")?;
+    memory.confirm(&id).await.map_err(Into::into)
+}
+
+/// Edit a memory's content.
+#[tauri::command]
+pub async fn agent_memory_update(
+    memory: State<'_, MemoryRepository>,
+    id: String,
+    content: String,
+) -> Result<MemoryRecord, CommandError> {
+    let id = trimmed_required(id, "id")?;
+    let content = trimmed_required(content, "content")?;
+    memory
+        .update_content(&id, &content)
+        .await
+        .map_err(Into::into)
+}
+
+/// Deactivate a memory without deleting it.
+#[tauri::command]
+pub async fn agent_memory_deactivate(
+    memory: State<'_, MemoryRepository>,
+    id: String,
+) -> Result<MemoryRecord, CommandError> {
+    let id = trimmed_required(id, "id")?;
+    memory.deactivate(&id).await.map_err(Into::into)
+}
+
+/// Permanently delete a memory.
+#[tauri::command]
+pub async fn agent_memory_delete(
+    memory: State<'_, MemoryRepository>,
+    id: String,
+) -> Result<(), CommandError> {
+    let id = trimmed_required(id, "id")?;
+    memory.delete(&id).await.map_err(Into::into)
+}
+
 /// Hidden planner entry point (M3 Part 1/2): build the provider from settings +
 /// keyring, stream the model -> tool loop over the existing AgentRuntime, emit
 /// one `agent-planner-chunk` event per content delta, and return the final
@@ -197,7 +300,9 @@ pub async fn agent_run_planner(
 mod tests {
     use super::{
         agent_context_audit_list, agent_decide_approval, agent_execute_tool, agent_list_tools,
-        agent_run_planner, agent_undo_tool, trimmed_required, CommandError,
+        agent_memory_confirm, agent_memory_create, agent_memory_deactivate, agent_memory_delete,
+        agent_memory_list, agent_memory_update, agent_run_planner, agent_undo_tool,
+        trimmed_required, CommandError,
     };
     use crate::agent::error::AgentError;
 
@@ -235,6 +340,12 @@ mod tests {
         let _ = agent_undo_tool;
         let _ = agent_run_planner;
         let _ = agent_context_audit_list;
+        let _ = agent_memory_list;
+        let _ = agent_memory_create;
+        let _ = agent_memory_confirm;
+        let _ = agent_memory_update;
+        let _ = agent_memory_deactivate;
+        let _ = agent_memory_delete;
     }
 
     #[test]

@@ -3,6 +3,7 @@ pub mod context;
 pub mod error;
 pub mod executor;
 pub mod llm;
+pub mod memory;
 pub mod model;
 pub mod planner;
 pub mod policy;

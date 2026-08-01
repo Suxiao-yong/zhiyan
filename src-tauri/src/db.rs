@@ -65,6 +65,12 @@ pub fn migrations() -> Vec<Migration> {
             sql: AGENT_CONTEXT_AUDIT_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 7,
+            description: "add structured long-term memory table",
+            sql: AGENT_MEMORIES_SQL,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -336,12 +342,30 @@ CREATE TABLE IF NOT EXISTS agent_context_audit (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_context_audit_run ON agent_context_audit(run_id, call_seq);
 
+CREATE TABLE IF NOT EXISTS agent_memories (
+    id TEXT PRIMARY KEY,
+    exam_id TEXT REFERENCES exams(id) ON DELETE SET NULL,
+    memory_type TEXT NOT NULL CHECK(memory_type IN ('schedule_preference','daily_capacity','subject_preference','learning_constraint','reminder_preference','strategy_preference','confirmed_weakness')),
+    content TEXT NOT NULL,
+    source TEXT NOT NULL CHECK(source IN ('user_statement','behavior_inferred','model_candidate')),
+    confidence REAL NOT NULL DEFAULT 0.5 CHECK(confidence BETWEEN 0 AND 1),
+    status TEXT NOT NULL DEFAULT 'candidate' CHECK(status IN ('candidate','confirmed','inactive')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_memories_exam_type_status ON agent_memories(exam_id, memory_type, status);
+CREATE INDEX IF NOT EXISTS idx_agent_memories_status_last_used ON agent_memories(status, last_used_at);
+
 CREATE TRIGGER IF NOT EXISTS trg_agent_sessions_updated AFTER UPDATE ON agent_sessions
     FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
     BEGIN UPDATE agent_sessions SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
 CREATE TRIGGER IF NOT EXISTS trg_agent_runs_updated AFTER UPDATE ON agent_runs
     FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
     BEGIN UPDATE agent_runs SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
+CREATE TRIGGER IF NOT EXISTS trg_agent_memories_updated AFTER UPDATE ON agent_memories
+    FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
+    BEGIN UPDATE agent_memories SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
 "#;
 
 /// Dedicated model-call data provenance table (M3 Part 3). Records, per model
@@ -366,6 +390,30 @@ CREATE TABLE IF NOT EXISTS agent_context_audit (
 CREATE INDEX IF NOT EXISTS idx_agent_context_audit_run ON agent_context_audit(run_id, call_seq);
 "#;
 
+/// Structured long-term memory (M3 Part 3). Memories carry a type (one of the
+/// seven spec §11 types), source (user statement / behavior inference / model
+/// candidate), confidence, and a status gate: model- or inference-derived
+/// memories start as `candidate` and require user confirmation; explicit user
+/// statements are confirmed automatically. Content is plain text, never
+/// vector-embedded; Runtime picks a few relevant records by exam, type, status,
+/// and last use.
+pub const AGENT_MEMORIES_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_memories (
+    id TEXT PRIMARY KEY,
+    exam_id TEXT REFERENCES exams(id) ON DELETE SET NULL,
+    memory_type TEXT NOT NULL CHECK(memory_type IN ('schedule_preference','daily_capacity','subject_preference','learning_constraint','reminder_preference','strategy_preference','confirmed_weakness')),
+    content TEXT NOT NULL,
+    source TEXT NOT NULL CHECK(source IN ('user_statement','behavior_inferred','model_candidate')),
+    confidence REAL NOT NULL DEFAULT 0.5 CHECK(confidence BETWEEN 0 AND 1),
+    status TEXT NOT NULL DEFAULT 'candidate' CHECK(status IN ('candidate','confirmed','inactive')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_memories_exam_type_status ON agent_memories(exam_id, memory_type, status);
+CREATE INDEX IF NOT EXISTS idx_agent_memories_status_last_used ON agent_memories(status, last_used_at);
+"#;
+
 /// 确保应用数据目录存在（SQLite 数据库文件将落在此目录）。
 pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let app_data = app.path().app_data_dir()?;
@@ -384,7 +432,9 @@ mod tests {
         Row,
     };
 
-    use super::{migrations, AGENT_CONTEXT_AUDIT_SQL, AGENT_SCHEMA_SQL, SCHEMA_SQL};
+    use super::{
+        migrations, AGENT_CONTEXT_AUDIT_SQL, AGENT_MEMORIES_SQL, AGENT_SCHEMA_SQL, SCHEMA_SQL,
+    };
 
     #[test]
     fn agent_schema_contains_required_tables_and_constraints() {
@@ -395,8 +445,12 @@ mod tests {
             "agent_events",
             "agent_approvals",
             "agent_context_audit",
+            "agent_memories",
             "UNIQUE(idempotency_key)",
             "waiting_approval",
+            "schedule_preference",
+            "confirmed_weakness",
+            "candidate",
         ] {
             assert!(
                 AGENT_SCHEMA_SQL.contains(required_fragment),
@@ -413,7 +467,7 @@ mod tests {
             .collect();
 
         assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(versions.last(), Some(&6));
+        assert_eq!(versions.last(), Some(&7));
     }
 
     #[test]
@@ -488,7 +542,7 @@ mod tests {
                 );
                 assert_eq!(
                     migration_list.last().map(|migration| migration.version),
-                    Some(6)
+                    Some(7)
                 );
             });
     }
@@ -554,6 +608,92 @@ mod tests {
                 sqlx::raw_sql(AGENT_CONTEXT_AUDIT_SQL).execute(&pool).await.unwrap();
                 let survived: i64 =
                     sqlx::query_scalar("SELECT COUNT(*) FROM agent_runs WHERE id='run-v6'")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(survived, 1);
+            });
+    }
+
+    #[test]
+    fn migration_v7_adds_memories_table() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                for migration in &migrations() {
+                    sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+                }
+
+                let table_exists: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_memories'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(table_exists, 1);
+
+                let columns: Vec<String> =
+                    sqlx::query_scalar("SELECT name FROM pragma_table_info('agent_memories')")
+                        .fetch_all(&pool)
+                        .await
+                        .unwrap();
+                for column in [
+                    "id",
+                    "exam_id",
+                    "memory_type",
+                    "content",
+                    "source",
+                    "confidence",
+                    "status",
+                    "created_at",
+                    "updated_at",
+                    "last_used_at",
+                ] {
+                    assert!(
+                        columns.iter().any(|c| c == column),
+                        "agent_memories.{column} must exist"
+                    );
+                }
+
+                // CHECKs reject bad type/source/status/confidence values.
+                let bad_type = sqlx::query(
+                    "INSERT INTO agent_memories (id, memory_type, content) VALUES ('m-bad', 'unknown_type', 'x')",
+                )
+                .execute(&pool)
+                .await;
+                assert!(bad_type.is_err());
+                let bad_status = sqlx::query(
+                    "INSERT INTO agent_memories (id, memory_type, content, status) VALUES ('m-bad', 'schedule_preference', 'x', 'deleted')",
+                )
+                .execute(&pool)
+                .await;
+                assert!(bad_status.is_err());
+                let bad_confidence = sqlx::query(
+                    "INSERT INTO agent_memories (id, memory_type, content, confidence) VALUES ('m-bad', 'schedule_preference', 'x', 1.5)",
+                )
+                .execute(&pool)
+                .await;
+                assert!(bad_confidence.is_err());
+
+                // v7 is additive CREATE TABLE; v6-era rows survive a v7 upgrade.
+                sqlx::query("INSERT INTO agent_sessions (id, title) VALUES ('session-v7', 'V7')")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::query("INSERT INTO agent_runs (id, session_id, goal) VALUES ('run-v7', 'session-v7', 'survive')")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::raw_sql(AGENT_MEMORIES_SQL).execute(&pool).await.unwrap();
+                let survived: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM agent_runs WHERE id='run-v7'")
                         .fetch_one(&pool)
                         .await
                         .unwrap();

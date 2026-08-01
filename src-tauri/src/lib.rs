@@ -51,6 +51,12 @@ pub fn run() {
             agent::commands::agent_undo_tool,
             agent::commands::agent_run_planner,
             agent::commands::agent_context_audit_list,
+            agent::commands::agent_memory_list,
+            agent::commands::agent_memory_create,
+            agent::commands::agent_memory_confirm,
+            agent::commands::agent_memory_update,
+            agent::commands::agent_memory_deactivate,
+            agent::commands::agent_memory_delete,
         ])
         .setup(|app| {
             db::init_db(app.handle())?;
@@ -64,12 +70,14 @@ pub fn run() {
                 AgentExecutor::new(pool.clone()),
             );
             let planner = Planner::new(pool.clone(), runtime.clone());
-            let context_audit = agent::context::ContextAudit::new(pool);
+            let context_audit = agent::context::ContextAudit::new(pool.clone());
+            let memory = agent::memory::MemoryRepository::new(pool);
             tauri::async_runtime::block_on(runtime.recover_interrupted())
                 .map_err(|error| setup_error("recovery", &error))?;
             app.manage(runtime);
             app.manage(planner);
             app.manage(context_audit);
+            app.manage(memory);
             Ok(())
         })
         .run(tauri::generate_context!())

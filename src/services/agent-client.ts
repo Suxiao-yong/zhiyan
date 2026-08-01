@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core'
 import type {
   AgentApproval,
   AgentContextAuditRow,
+  AgentMemoryCreateInput,
+  AgentMemoryRecord,
   AgentPlannerTurn,
   AgentRun,
   AgentSession,
@@ -55,4 +57,38 @@ export function runAgentPlanner(runId: string, goal: string): Promise<AgentPlann
 /** Context Inspector (M3 Part 3): every model-call audit row of a run. */
 export function listAgentContextAudit(runId: string): Promise<AgentContextAuditRow[]> {
   return invoke<AgentContextAuditRow[]>('agent_context_audit_list', { runId })
+}
+
+/** Structured long-term memory management (M3 Part 3). */
+export function listAgentMemories(
+  examId: string | null,
+  includeInactive: boolean,
+): Promise<AgentMemoryRecord[]> {
+  return invoke<AgentMemoryRecord[]>('agent_memory_list', { examId, includeInactive })
+}
+
+export function createAgentMemory(input: AgentMemoryCreateInput): Promise<AgentMemoryRecord> {
+  return invoke<AgentMemoryRecord>('agent_memory_create', {
+    examId: input.exam_id,
+    memoryType: input.memory_type,
+    content: input.content,
+    source: input.source,
+    confidence: input.confidence,
+  })
+}
+
+export function confirmAgentMemory(id: string): Promise<AgentMemoryRecord> {
+  return invoke<AgentMemoryRecord>('agent_memory_confirm', { id })
+}
+
+export function updateAgentMemory(id: string, content: string): Promise<AgentMemoryRecord> {
+  return invoke<AgentMemoryRecord>('agent_memory_update', { id, content })
+}
+
+export function deactivateAgentMemory(id: string): Promise<AgentMemoryRecord> {
+  return invoke<AgentMemoryRecord>('agent_memory_deactivate', { id })
+}
+
+export function deleteAgentMemory(id: string): Promise<void> {
+  return invoke<void>('agent_memory_delete', { id })
 }

@@ -301,3 +301,40 @@ export interface AgentContextAuditRow {
   field_sets: Record<string, string[]>
   created_at: string
 }
+
+/** The seven spec §11 structured long-term memory types. */
+export type AgentMemoryType =
+  | 'schedule_preference'
+  | 'daily_capacity'
+  | 'subject_preference'
+  | 'learning_constraint'
+  | 'reminder_preference'
+  | 'strategy_preference'
+  | 'confirmed_weakness'
+
+/** Where a memory came from; user statements auto-confirm. */
+export type AgentMemorySource = 'user_statement' | 'behavior_inferred' | 'model_candidate'
+
+/** candidate → confirmed → inactive. */
+export type AgentMemoryStatus = 'candidate' | 'confirmed' | 'inactive'
+
+export interface AgentMemoryRecord {
+  id: string
+  exam_id: string | null
+  memory_type: AgentMemoryType
+  content: string
+  source: AgentMemorySource
+  confidence: number
+  status: AgentMemoryStatus
+  created_at: string
+  updated_at: string
+  last_used_at: string | null
+}
+
+export interface AgentMemoryCreateInput {
+  exam_id: string | null
+  memory_type: AgentMemoryType
+  content: string
+  source: AgentMemorySource
+  confidence: number
+}

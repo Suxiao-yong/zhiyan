@@ -22,6 +22,12 @@ const client = vi.hoisted(() => ({
   undoAgentTool: vi.fn(),
   runAgentPlanner: vi.fn(),
   listAgentContextAudit: vi.fn(),
+  listAgentMemories: vi.fn(),
+  createAgentMemory: vi.fn(),
+  confirmAgentMemory: vi.fn(),
+  updateAgentMemory: vi.fn(),
+  deactivateAgentMemory: vi.fn(),
+  deleteAgentMemory: vi.fn(),
 }))
 
 vi.mock('@/services/agent-client', () => client)
@@ -118,6 +124,12 @@ describe('AgentDebug', () => {
       trace: [{ kind: 'local_fallback', reason: 'no llm provider configured' }],
     })
     client.listAgentContextAudit.mockResolvedValue([])
+    client.listAgentMemories.mockResolvedValue([])
+    client.createAgentMemory.mockResolvedValue(undefined)
+    client.confirmAgentMemory.mockResolvedValue(undefined)
+    client.updateAgentMemory.mockResolvedValue(undefined)
+    client.deactivateAgentMemory.mockResolvedValue(undefined)
+    client.deleteAgentMemory.mockResolvedValue(undefined)
   })
 
   it('shows health and creates then starts a runtime run', async () => {
@@ -567,5 +579,174 @@ describe('AgentDebug', () => {
     expect(json).toContain('field_sets')
     // No raw business content is shown.
     expect(json).not.toContain('今天复习数学')
+  })
+
+  it('loads memories on mount and renders their type, status, and source', async () => {
+    client.listAgentMemories.mockResolvedValue([
+      {
+        id: 'memory-1',
+        exam_id: null,
+        memory_type: 'daily_capacity',
+        content: '每天最多学习两小时',
+        source: 'user_statement',
+        confidence: 1,
+        status: 'confirmed',
+        created_at: '2026-07-18T00:00:00',
+        updated_at: '2026-07-18T00:00:00',
+        last_used_at: null,
+      },
+      {
+        id: 'memory-2',
+        exam_id: null,
+        memory_type: 'confirmed_weakness',
+        content: '二次函数压轴题',
+        source: 'model_candidate',
+        confidence: 0.5,
+        status: 'candidate',
+        created_at: '2026-07-18T00:00:00',
+        updated_at: '2026-07-18T00:00:00',
+        last_used_at: null,
+      },
+    ])
+    const wrapper = mountPage()
+    await flushPromises()
+
+    expect(client.listAgentMemories).toHaveBeenCalledWith(null, true)
+    expect(wrapper.get('[data-test=memory-meta-memory-1]').text()).toContain('daily_capacity')
+    expect(wrapper.get('[data-test=memory-meta-memory-1]').text()).toContain('confirmed')
+    expect(wrapper.get('[data-test=memory-content-memory-1]').text()).toContain('每天最多学习两小时')
+    // A candidate memory shows a confirm action; a confirmed one does not.
+    expect(wrapper.get('[data-test=memory-confirm-memory-2]').exists()).toBe(true)
+    expect(wrapper.find('[data-test=memory-confirm-memory-1]').exists()).toBe(false)
+  })
+
+  it('creates a memory from the form and prepends it to the list', async () => {
+    client.createAgentMemory.mockResolvedValue({
+      id: 'memory-new',
+      exam_id: null,
+      memory_type: 'schedule_preference',
+      content: '周末上午学习',
+      source: 'user_statement',
+      confidence: 0.7,
+      status: 'confirmed',
+      created_at: '2026-07-18T00:00:00',
+      updated_at: '2026-07-18T00:00:00',
+      last_used_at: null,
+    })
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-test=memory-create-content]').setValue('周末上午学习')
+    await wrapper.find('form.memory-create').trigger('submit')
+    await flushPromises()
+
+    expect(client.createAgentMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        exam_id: 'exam-1',
+        memory_type: 'schedule_preference',
+        content: '周末上午学习',
+        source: 'user_statement',
+        confidence: 0.7,
+      }),
+    )
+    expect(wrapper.get('[data-test=memory-meta-memory-new]').text()).toContain('confirmed')
+  })
+
+  it('confirms a candidate memory in place', async () => {
+    client.listAgentMemories.mockResolvedValue([
+      {
+        id: 'memory-2',
+        exam_id: null,
+        memory_type: 'confirmed_weakness',
+        content: '二次函数压轴题',
+        source: 'model_candidate',
+        confidence: 0.5,
+        status: 'candidate',
+        created_at: '2026-07-18T00:00:00',
+        updated_at: '2026-07-18T00:00:00',
+        last_used_at: null,
+      },
+    ])
+    client.confirmAgentMemory.mockResolvedValue({
+      id: 'memory-2',
+      exam_id: null,
+      memory_type: 'confirmed_weakness',
+      content: '二次函数压轴题',
+      source: 'model_candidate',
+      confidence: 0.5,
+      status: 'confirmed',
+      created_at: '2026-07-18T00:00:00',
+      updated_at: '2026-07-18T00:00:00',
+      last_used_at: null,
+    })
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-test=memory-confirm-memory-2]').trigger('click')
+    await flushPromises()
+
+    expect(client.confirmAgentMemory).toHaveBeenCalledWith('memory-2')
+    expect(wrapper.get('[data-test=memory-meta-memory-2]').text()).toContain('confirmed')
+    expect(wrapper.find('[data-test=memory-confirm-memory-2]').exists()).toBe(false)
+  })
+
+  it('edits a memory inline and deactivates and deletes it', async () => {
+    client.listAgentMemories.mockResolvedValue([
+      {
+        id: 'memory-1',
+        exam_id: null,
+        memory_type: 'daily_capacity',
+        content: '每天两小时',
+        source: 'user_statement',
+        confidence: 1,
+        status: 'confirmed',
+        created_at: '2026-07-18T00:00:00',
+        updated_at: '2026-07-18T00:00:00',
+        last_used_at: null,
+      },
+    ])
+    client.updateAgentMemory.mockResolvedValue({
+      id: 'memory-1',
+      exam_id: null,
+      memory_type: 'daily_capacity',
+      content: '每天三小时',
+      source: 'user_statement',
+      confidence: 1,
+      status: 'confirmed',
+      created_at: '2026-07-18T00:00:00',
+      updated_at: '2026-07-18T00:00:00',
+      last_used_at: null,
+    })
+    client.deactivateAgentMemory.mockResolvedValue({
+      id: 'memory-1',
+      exam_id: null,
+      memory_type: 'daily_capacity',
+      content: '每天三小时',
+      source: 'user_statement',
+      confidence: 1,
+      status: 'inactive',
+      created_at: '2026-07-18T00:00:00',
+      updated_at: '2026-07-18T00:00:00',
+      last_used_at: null,
+    })
+    const wrapper = mountPage()
+    await flushPromises()
+
+    await wrapper.get('[data-test=memory-edit-memory-1]').trigger('click')
+    await wrapper.get('[data-test=memory-edit-input-memory-1]').setValue('每天三小时')
+    await wrapper.get('[data-test=memory-edit-save]').trigger('click')
+    await flushPromises()
+    expect(client.updateAgentMemory).toHaveBeenCalledWith('memory-1', '每天三小时')
+    expect(wrapper.get('[data-test=memory-content-memory-1]').text()).toContain('每天三小时')
+
+    await wrapper.get('[data-test=memory-deactivate-memory-1]').trigger('click')
+    await flushPromises()
+    expect(client.deactivateAgentMemory).toHaveBeenCalledWith('memory-1')
+    expect(wrapper.get('[data-test=memory-meta-memory-1]').text()).toContain('inactive')
+
+    await wrapper.get('[data-test=memory-delete-memory-1]').trigger('click')
+    await flushPromises()
+    expect(client.deleteAgentMemory).toHaveBeenCalledWith('memory-1')
+    expect(wrapper.find('[data-test=memory-row-memory-1]').exists()).toBe(false)
   })
 })
