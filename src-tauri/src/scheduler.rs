@@ -16,6 +16,7 @@ use crate::agent::memory::MemoryRepository;
 use crate::agent::planner::Planner;
 use crate::analytics::Analytics;
 use crate::brief::{brief_payload, Brief, BriefBuilder};
+use crate::notify::NotificationBus;
 
 /// Reminder jobs are suppressed while `agent_reminders_paused` is `1`.
 pub const REMINDERS_PAUSED_KEY: &str = "agent_reminders_paused";
@@ -93,11 +94,15 @@ enum JobOutcome {
 #[derive(Clone)]
 pub struct Scheduler {
     pool: SqlitePool,
+    notifications: NotificationBus,
 }
 
 impl Scheduler {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(pool: SqlitePool, notifications: NotificationBus) -> Self {
+        Self {
+            pool,
+            notifications,
+        }
     }
 
     /// Whether reminder-type jobs are paused.
@@ -154,10 +159,12 @@ impl Scheduler {
         Ok(Some(id))
     }
 
-    /// Run every due job once. `now` is passed in so tests control the clock
-    /// (`"YYYY-MM-DD HH:MM:SS"`, local time, same format as the DB defaults).
-    /// Returns how many jobs ran (including skips).
+    /// Run every due job once, after ensuring today's daily jobs are scheduled.
+    /// `now` is passed in so tests control the clock (`"YYYY-MM-DD HH:MM:SS"`,
+    /// local time, same format as the DB defaults). Returns how many jobs ran
+    /// (including skips).
     pub async fn tick(&self, now: &str) -> Result<usize, AgentError> {
+        self.ensure_today_jobs(now).await?;
         let due: Vec<(String, String)> = sqlx::query_as(
             "SELECT id, job_type FROM agent_jobs \
              WHERE status = 'scheduled' AND scheduled_at <= ? \
@@ -194,35 +201,61 @@ impl Scheduler {
         Ok(ran)
     }
 
-    /// Startup catch-up: re-create today's meaningful jobs (daily brief,
-    /// overdue check) when their dedup keys are absent after a restart or
-    /// sleep/wake. Never replays failed user-visible writes.
+    /// Startup catch-up: ensure today's daily jobs (brief, overdue check, task
+    /// reminder) exist after a restart or sleep/wake. Never replays failed
+    /// user-visible writes. `tick` also calls the same ensure, so day rollover
+    /// while running is covered too.
     pub async fn bootstrap(&self, now: &str) -> Result<usize, AgentError> {
+        self.ensure_today_jobs(now).await
+    }
+
+    /// Ensure today's daily jobs exist (daily brief at 08:00, overdue check at
+    /// 09:00, task reminder at the configured reminder time). Called on every
+    /// tick, so a restart or a day rollover re-creates the day's jobs exactly
+    /// once (dedup keys are date-scoped). Returns how many were created.
+    async fn ensure_today_jobs(&self, now: &str) -> Result<usize, AgentError> {
         let today = &now[..10];
+        let reminder_time = self.reminder_time().await?;
         let mut created = 0;
-        if self
-            .schedule(
+        for (job_type, dedup, scheduled_at) in [
+            (
                 JobType::DailyBrief,
-                &format!("daily_brief:{today}"),
-                &format!("{today} 08:00:00"),
-            )
-            .await?
-            .is_some()
-        {
-            created += 1;
-        }
-        if self
-            .schedule(
+                format!("daily_brief:{today}"),
+                format!("{today} 08:00:00"),
+            ),
+            (
                 JobType::OverdueCheck,
-                &format!("overdue_check:{today}"),
-                &format!("{today} 09:00:00"),
-            )
-            .await?
-            .is_some()
-        {
-            created += 1;
+                format!("overdue_check:{today}"),
+                format!("{today} 09:00:00"),
+            ),
+            (
+                JobType::TaskReminder,
+                format!("task_reminder:{today}"),
+                format!("{today} {reminder_time}:00"),
+            ),
+        ] {
+            if self
+                .schedule(job_type, &dedup, &scheduled_at)
+                .await?
+                .is_some()
+            {
+                created += 1;
+            }
         }
         Ok(created)
+    }
+
+    /// The daily task-reminder clock time (`HH:MM`), from the
+    /// `agent_reminder_time` setting, defaulting to `19:00`.
+    async fn reminder_time(&self) -> Result<String, AgentError> {
+        let value: Option<String> =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'agent_reminder_time'")
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx)?;
+        Ok(value
+            .filter(|raw| raw.len() == 5 && raw.as_bytes()[2] == b':')
+            .unwrap_or_else(|| "19:00".to_owned()))
     }
 
     /// Every job on record, newest first, for the hidden debug page.
@@ -271,14 +304,57 @@ impl Scheduler {
                 }
             }
             JobType::TaskReminder => {
-                // Task 5 replaces this with the notification path.
-                let _ = now;
-                JobOutcome::Skipped(json!({ "note": "task reminder handler lands in M4 Task 5" }))
+                let today = &now[..10];
+                let analytics = Analytics::new(self.pool.clone());
+                let exam_id = self.active_exam_id().await.unwrap_or(None);
+                let Some(exam_id) = exam_id else {
+                    return JobOutcome::Skipped(json!({ "reason": "no exam" }));
+                };
+                let stats = analytics
+                    .day_stats(&exam_id, today)
+                    .await
+                    .unwrap_or_default();
+                let unfinished = stats.planned - stats.completed - stats.skipped;
+                if unfinished > 0 {
+                    let _ = self.notifications.send(
+                        "今日任务提醒",
+                        format!("今日还有 {unfinished} 项任务未完成。"),
+                    );
+                    JobOutcome::Done(json!({ "unfinished": unfinished }))
+                } else {
+                    JobOutcome::Done(json!({ "unfinished": 0, "note": "all done" }))
+                }
             }
             JobType::OverdueCheck => {
-                // Task 5 replaces this with the notification path.
-                let _ = now;
-                JobOutcome::Skipped(json!({ "note": "overdue check handler lands in M4 Task 5" }))
+                let today = &now[..10];
+                let analytics = Analytics::new(self.pool.clone());
+                let exam_id = self.active_exam_id().await.unwrap_or(None);
+                let Some(exam_id) = exam_id else {
+                    return JobOutcome::Skipped(json!({ "reason": "no exam" }));
+                };
+                let overdue = analytics
+                    .overdue_plans(&exam_id, today)
+                    .await
+                    .unwrap_or_default();
+                if !overdue.is_empty() {
+                    let earliest = overdue
+                        .iter()
+                        .map(|plan| plan.date.as_str())
+                        .min()
+                        .unwrap_or("");
+                    let _ = self.notifications.send(
+                        "逾期计划提醒",
+                        format!(
+                            "有 {} 项逾期计划尚未完成（最早：{earliest}）。",
+                            overdue.len()
+                        ),
+                    );
+                    JobOutcome::Done(
+                        json!({ "overdue_count": overdue.len(), "earliest": earliest }),
+                    )
+                } else {
+                    JobOutcome::Done(json!({ "overdue_count": 0, "note": "none overdue" }))
+                }
             }
             JobType::WeeklyReport | JobType::RetryFailed | JobType::CleanupFailed => {
                 let _ = now;
@@ -426,6 +502,7 @@ mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::*;
+    use crate::notify::Notification;
 
     async fn scheduler_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -439,14 +516,20 @@ mod tests {
         pool
     }
 
+    /// A scheduler whose notifications are collected into a test channel.
+    fn test_scheduler(pool: SqlitePool) -> (Scheduler, tokio::sync::mpsc::Receiver<Notification>) {
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        (Scheduler::new(pool, NotificationBus(tx)), rx)
+    }
+
     async fn scheduler() -> Scheduler {
-        Scheduler::new(scheduler_pool().await)
+        test_scheduler(scheduler_pool().await).0
     }
 
     #[tokio::test]
     async fn reminders_default_to_enabled_and_toggle_round_trips() {
         let pool = scheduler_pool().await;
-        let scheduler = Scheduler::new(pool.clone());
+        let scheduler = test_scheduler(pool.clone()).0;
         assert!(!scheduler.reminders_paused().await.unwrap());
         assert!(scheduler.set_reminders_paused(true).await.unwrap());
         assert!(scheduler.reminders_paused().await.unwrap());
@@ -545,7 +628,8 @@ mod tests {
             .unwrap();
 
         let ran = scheduler.tick("2026-07-18 10:00:00").await.unwrap();
-        assert_eq!(ran, 2);
+        // reminder:1 + daily_brief + the overdue_check created by ensure_today_jobs.
+        assert_eq!(ran, 3);
 
         let reminder_result: String =
             sqlx::query_scalar("SELECT last_result FROM agent_jobs WHERE job_type='task_reminder'")
@@ -559,15 +643,154 @@ mod tests {
     async fn bootstrap_creates_only_todays_missing_jobs() {
         let scheduler = scheduler().await;
         let created = scheduler.bootstrap("2026-07-18 07:30:00").await.unwrap();
-        assert_eq!(created, 2);
+        assert_eq!(created, 3); // daily brief + overdue check + task reminder
 
         // Second bootstrap (e.g. another restart the same day) creates nothing.
         let again = scheduler.bootstrap("2026-07-18 07:45:00").await.unwrap();
         assert_eq!(again, 0);
 
-        // A different day creates the new day's pair.
+        // A different day creates the new day's trio.
         let tomorrow = scheduler.bootstrap("2026-07-19 07:00:00").await.unwrap();
-        assert_eq!(tomorrow, 2);
+        assert_eq!(tomorrow, 3);
+    }
+
+    async fn seed_exam_with_plans(pool: &sqlx::SqlitePool) {
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO exams (id, name, exam_date) VALUES ('exam-r', 'R', '2030-06-01');
+            INSERT INTO subjects (id, exam_id, name) VALUES ('sub-r', 'exam-r', 'Math');
+            INSERT INTO study_plans (id, exam_id, subject_id, date, planned_duration, status) VALUES
+                ('rp-1', 'exam-r', 'sub-r', '2026-07-18', 60, 'pending'),
+                ('rp-2', 'exam-r', 'sub-r', '2026-07-18', 30, 'pending'),
+                ('rp-old', 'exam-r', 'sub-r', '2026-07-15', 45, 'pending');
+            "#,
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn task_reminder_notifies_about_unfinished_tasks() {
+        let pool = scheduler_pool().await;
+        seed_exam_with_plans(&pool).await;
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-r')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (scheduler, mut notifications) = test_scheduler(pool.clone());
+        scheduler
+            .schedule(
+                JobType::TaskReminder,
+                "task_reminder:2026-07-18",
+                "2026-07-18 19:00:00",
+            )
+            .await
+            .unwrap();
+
+        let ran = scheduler.tick("2026-07-18 20:00:00").await.unwrap();
+        // reminder + daily_brief + overdue_check (all three today jobs run).
+        assert_eq!(ran, 3);
+
+        // The overdue check also fires for rp-old; collect both notifications.
+        let mut titles = Vec::new();
+        while let Ok(notification) = notifications.try_recv() {
+            titles.push(notification.title.clone());
+            if notification.title == "今日任务提醒" {
+                assert!(notification.body.contains("2"));
+                // Notification bodies never carry plan text.
+                assert!(!notification.body.contains("rp-"));
+            }
+        }
+        assert!(titles.contains(&"今日任务提醒".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn overdue_check_notifies_with_count_and_earliest_date() {
+        let pool = scheduler_pool().await;
+        seed_exam_with_plans(&pool).await;
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-r')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (scheduler, mut notifications) = test_scheduler(pool.clone());
+        scheduler
+            .schedule(
+                JobType::OverdueCheck,
+                "overdue_check:2026-07-18",
+                "2026-07-18 09:00:00",
+            )
+            .await
+            .unwrap();
+
+        scheduler.tick("2026-07-18 10:00:00").await.unwrap();
+
+        let notification = notifications.recv().await.unwrap();
+        assert_eq!(notification.title, "逾期计划提醒");
+        assert!(notification.body.contains("1"));
+        assert!(notification.body.contains("2026-07-15"));
+    }
+
+    #[tokio::test]
+    async fn reminders_stay_silent_when_paused_or_nothing_due() {
+        let pool = scheduler_pool().await;
+        seed_exam_with_plans(&pool).await;
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-r')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (scheduler, mut notifications) = test_scheduler(pool.clone());
+        scheduler.set_reminders_paused(true).await.unwrap();
+        scheduler
+            .schedule(
+                JobType::TaskReminder,
+                "task_reminder:2026-07-18",
+                "2026-07-18 19:00:00",
+            )
+            .await
+            .unwrap();
+
+        scheduler.tick("2026-07-18 20:00:00").await.unwrap();
+        // Paused: the reminder is skipped, no notification is queued.
+        assert!(notifications.try_recv().is_err());
+
+        // Resume and mark today's plans completed -> still no notification.
+        scheduler.set_reminders_paused(false).await.unwrap();
+        sqlx::query("UPDATE study_plans SET status='completed' WHERE id='rp-1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE study_plans SET status='completed' WHERE id='rp-2'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        scheduler
+            .schedule(
+                JobType::TaskReminder,
+                "task_reminder:2026-07-18-2",
+                "2026-07-18 20:00:00",
+            )
+            .await
+            .unwrap();
+        scheduler.tick("2026-07-18 21:00:00").await.unwrap();
+        assert!(notifications.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn reminder_time_setting_controls_the_daily_schedule() {
+        let scheduler = scheduler().await;
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_reminder_time','21:30')")
+            .execute(&scheduler.pool)
+            .await
+            .unwrap();
+        scheduler.bootstrap("2026-07-18 07:00:00").await.unwrap();
+        let scheduled_at: String = sqlx::query_scalar(
+            "SELECT scheduled_at FROM agent_jobs WHERE job_type='task_reminder'",
+        )
+        .fetch_one(&scheduler.pool)
+        .await
+        .unwrap();
+        assert_eq!(scheduled_at, "2026-07-18 21:30:00");
     }
 
     #[tokio::test]

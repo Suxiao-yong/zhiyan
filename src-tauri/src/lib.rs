@@ -5,6 +5,7 @@ pub mod analytics;
 pub mod brief;
 mod credentials;
 pub mod db;
+pub mod notify;
 pub mod scheduler;
 pub mod tray;
 
@@ -95,7 +96,8 @@ pub fn run() {
             let memory = agent::memory::MemoryRepository::new(pool.clone());
             let planner = Planner::new(pool.clone(), runtime.clone(), memory.clone());
             let context_audit = agent::context::ContextAudit::new(pool.clone());
-            let scheduler = scheduler::Scheduler::new(pool);
+            let scheduler =
+                scheduler::Scheduler::new(pool, notify::spawn_notifier(app.handle().clone()));
             tauri::async_runtime::block_on(runtime.recover_interrupted())
                 .map_err(|error| setup_error("recovery", &error))?;
             app.manage(runtime);
