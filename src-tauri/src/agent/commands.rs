@@ -12,6 +12,7 @@ use super::model::{
 use super::planner::{Planner, PlannerTurn};
 use super::runtime::AgentRuntime;
 use super::tools::ListedTool;
+use crate::brief::Brief;
 use crate::scheduler::{JobRecord, JobType, Scheduler};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -300,6 +301,20 @@ pub async fn agent_job_schedule(
         .map_err(Into::into)
 }
 
+/// Hidden daily brief preview (M4): render today's brief on demand. Falls back
+/// to the most recently active exam when no exam id is given.
+#[tauri::command]
+pub async fn agent_brief_preview(
+    scheduler: State<'_, Scheduler>,
+    exam_id: Option<String>,
+) -> Result<Brief, CommandError> {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    scheduler
+        .brief_preview(exam_id.as_deref(), &today)
+        .await
+        .map_err(Into::into)
+}
+
 /// Hidden planner entry point (M3 Part 1/2): build the provider from settings +
 /// keyring, stream the model -> tool loop over the existing AgentRuntime, emit
 /// one `agent-planner-chunk` event per content delta, and return the final
@@ -330,10 +345,10 @@ pub async fn agent_run_planner(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_context_audit_list, agent_decide_approval, agent_execute_tool, agent_job_list,
-        agent_job_schedule, agent_list_tools, agent_memory_confirm, agent_memory_create,
-        agent_memory_deactivate, agent_memory_delete, agent_memory_list, agent_memory_update,
-        agent_run_planner, agent_undo_tool, trimmed_required, CommandError,
+        agent_brief_preview, agent_context_audit_list, agent_decide_approval, agent_execute_tool,
+        agent_job_list, agent_job_schedule, agent_list_tools, agent_memory_confirm,
+        agent_memory_create, agent_memory_deactivate, agent_memory_delete, agent_memory_list,
+        agent_memory_update, agent_run_planner, agent_undo_tool, trimmed_required, CommandError,
     };
     use crate::agent::error::AgentError;
 
@@ -379,6 +394,7 @@ mod tests {
         let _ = agent_memory_delete;
         let _ = agent_job_list;
         let _ = agent_job_schedule;
+        let _ = agent_brief_preview;
     }
 
     #[test]

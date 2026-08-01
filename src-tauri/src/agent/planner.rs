@@ -358,9 +358,17 @@ impl Planner {
     /// provider is configured, the key is absent, or the provider is Ollama
     /// (Ollama has no tool-calling support and degrades to local mode).
     pub(crate) async fn build_provider(&self) -> Result<Option<LlmProvider>, AgentError> {
+        Self::build_provider_from(&self.pool).await
+    }
+
+    /// Provider construction shared by the Planner loop, the brief job, and
+    /// any other M4 background handler that may call the LLM.
+    pub(crate) async fn build_provider_from(
+        pool: &SqlitePool,
+    ) -> Result<Option<LlmProvider>, AgentError> {
         let provider: Option<String> =
             sqlx::query_scalar("SELECT value FROM settings WHERE key = 'llm_provider'")
-                .fetch_optional(&self.pool)
+                .fetch_optional(pool)
                 .await
                 .map_err(map_sqlx)?;
         let Some(provider) = provider.filter(|p| !p.trim().is_empty()) else {
@@ -371,13 +379,13 @@ impl Planner {
         }
         let base_url: String =
             sqlx::query_scalar("SELECT value FROM settings WHERE key = 'llm_base_url'")
-                .fetch_optional(&self.pool)
+                .fetch_optional(pool)
                 .await
                 .map_err(map_sqlx)?
                 .unwrap_or_default();
         let model: String =
             sqlx::query_scalar("SELECT value FROM settings WHERE key = 'llm_model'")
-                .fetch_optional(&self.pool)
+                .fetch_optional(pool)
                 .await
                 .map_err(map_sqlx)?
                 .unwrap_or_default();
@@ -386,7 +394,7 @@ impl Planner {
         }
         let temperature: f32 =
             sqlx::query_scalar("SELECT value FROM settings WHERE key = 'llm_temperature'")
-                .fetch_optional(&self.pool)
+                .fetch_optional(pool)
                 .await
                 .map_err(map_sqlx)?
                 .and_then(|raw: String| raw.parse().ok())

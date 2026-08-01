@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod analytics;
+pub mod brief;
 mod credentials;
 pub mod db;
 pub mod scheduler;
@@ -78,6 +79,7 @@ pub fn run() {
             agent::commands::agent_memory_delete,
             agent::commands::agent_job_list,
             agent::commands::agent_job_schedule,
+            agent::commands::agent_brief_preview,
         ])
         .setup(|app| {
             db::init_db(app.handle())?;

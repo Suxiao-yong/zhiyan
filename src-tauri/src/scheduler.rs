@@ -12,6 +12,10 @@ use serde_json::{json, Value};
 use sqlx::SqlitePool;
 
 use crate::agent::error::AgentError;
+use crate::agent::memory::MemoryRepository;
+use crate::agent::planner::Planner;
+use crate::analytics::Analytics;
+use crate::brief::{brief_payload, Brief, BriefBuilder};
 
 /// Reminder jobs are suppressed while `agent_reminders_paused` is `1`.
 pub const REMINDERS_PAUSED_KEY: &str = "agent_reminders_paused";
@@ -79,10 +83,7 @@ pub struct JobRecord {
 }
 
 /// What a job handler produced: a completed run, a failed run that should
-/// retry, or a deliberately skipped run (e.g. reminders paused). `Done` and
-/// `Retry` are constructed by the Task 4/5 handlers; Task 2's placeholder
-/// handlers only skip.
-#[allow(dead_code)]
+/// retry, or a deliberately skipped run (e.g. reminders paused).
 enum JobOutcome {
     Done(Value),
     Retry(Value),
@@ -243,9 +244,31 @@ impl Scheduler {
         }
         match job_type {
             JobType::DailyBrief => {
-                // Task 4 replaces this with brief.rs.
-                let _ = now;
-                JobOutcome::Skipped(json!({ "note": "daily brief handler lands in M4 Task 4" }))
+                let today = &now[..10];
+                let exam_id = self.active_exam_id().await.unwrap_or(None);
+                let builder = BriefBuilder::new(
+                    self.pool.clone(),
+                    Analytics::new(self.pool.clone()),
+                    MemoryRepository::new(self.pool.clone()),
+                );
+                let provider = Planner::build_provider_from(&self.pool)
+                    .await
+                    .ok()
+                    .flatten();
+                match builder
+                    .build(exam_id.as_deref(), today, provider.as_ref())
+                    .await
+                {
+                    Ok(brief) => {
+                        let payload = brief_payload(&brief);
+                        // The brief result is stored in last_result; pushing a
+                        // UI event needs an AppHandle, which M4 deliberately
+                        // avoids holding in Scheduler (see plan: event push is
+                        // deferred to M5 via the command layer).
+                        JobOutcome::Done(payload)
+                    }
+                    Err(_) => JobOutcome::Retry(json!({ "error": "brief build failed" })),
+                }
             }
             JobType::TaskReminder => {
                 // Task 5 replaces this with the notification path.
@@ -262,6 +285,51 @@ impl Scheduler {
                 JobOutcome::Skipped(json!({ "note": "handler lands in M5" }))
             }
         }
+    }
+
+    /// The exam the brief targets: the persisted `agent_active_exam_id`, or the
+    /// most recently active exam as a fallback.
+    async fn active_exam_id(&self) -> Result<Option<String>, AgentError> {
+        let configured: Option<String> =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'agent_active_exam_id'")
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx)?;
+        if let Some(exam_id) = configured.filter(|value| !value.trim().is_empty()) {
+            return Ok(Some(exam_id));
+        }
+        let latest: Option<String> =
+            sqlx::query_scalar("SELECT id FROM exams ORDER BY updated_at DESC, rowid DESC LIMIT 1")
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx)?;
+        Ok(latest)
+    }
+
+    /// On-demand brief for the hidden debug page. Resolves the exam (explicit
+    /// id or active fallback), builds the brief with or without an LLM
+    /// explanation, and returns it without touching the job table.
+    pub(crate) async fn brief_preview(
+        &self,
+        exam_id: Option<&str>,
+        today: &str,
+    ) -> Result<Brief, AgentError> {
+        let exam_id = match exam_id.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(id) => Some(id.to_owned()),
+            None => self.active_exam_id().await?,
+        };
+        let builder = BriefBuilder::new(
+            self.pool.clone(),
+            Analytics::new(self.pool.clone()),
+            MemoryRepository::new(self.pool.clone()),
+        );
+        let provider = Planner::build_provider_from(&self.pool)
+            .await
+            .ok()
+            .flatten();
+        builder
+            .build(exam_id.as_deref(), today, provider.as_ref())
+            .await
     }
 
     async fn record_outcome(
