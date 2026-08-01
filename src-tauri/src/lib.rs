@@ -3,6 +3,8 @@
 pub mod agent;
 mod credentials;
 pub mod db;
+pub mod scheduler;
+pub mod tray;
 
 use agent::executor::AgentExecutor;
 use agent::planner::Planner;
@@ -35,6 +37,16 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
+        .on_window_event(|window, event| {
+            // Close-to-hide: the tray 彻底退出 item sets EXITING so the real
+            // quit path closes instead of hiding (M4 Task 1).
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if !tray::EXITING.load(std::sync::atomic::Ordering::Relaxed) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             credentials::store_api_key,
             credentials::load_api_key,
@@ -71,13 +83,16 @@ pub fn run() {
             );
             let memory = agent::memory::MemoryRepository::new(pool.clone());
             let planner = Planner::new(pool.clone(), runtime.clone(), memory.clone());
-            let context_audit = agent::context::ContextAudit::new(pool);
+            let context_audit = agent::context::ContextAudit::new(pool.clone());
+            let scheduler = scheduler::Scheduler::new(pool);
             tauri::async_runtime::block_on(runtime.recover_interrupted())
                 .map_err(|error| setup_error("recovery", &error))?;
             app.manage(runtime);
             app.manage(planner);
             app.manage(context_audit);
             app.manage(memory);
+            app.manage(scheduler);
+            tray::build_tray(app.handle())?;
             Ok(())
         })
         .run(tauri::generate_context!())
