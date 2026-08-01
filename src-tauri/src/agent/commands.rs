@@ -12,6 +12,7 @@ use super::model::{
 use super::planner::{Planner, PlannerTurn};
 use super::runtime::AgentRuntime;
 use super::tools::ListedTool;
+use crate::scheduler::{JobRecord, JobType, Scheduler};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CommandError {
@@ -269,6 +270,36 @@ pub async fn agent_memory_delete(
     memory.delete(&id).await.map_err(Into::into)
 }
 
+/// Hidden job debug reads (M4): list recent background jobs.
+#[tauri::command]
+pub async fn agent_job_list(
+    scheduler: State<'_, Scheduler>,
+    limit: Option<i64>,
+) -> Result<Vec<JobRecord>, CommandError> {
+    let limit = limit.unwrap_or(50).clamp(1, 500);
+    scheduler.list(limit).await.map_err(Into::into)
+}
+
+/// Hidden job debug write (M4): schedule a job instance with a dedup key.
+#[tauri::command]
+pub async fn agent_job_schedule(
+    scheduler: State<'_, Scheduler>,
+    job_type: String,
+    dedup_key: String,
+    scheduled_at: String,
+) -> Result<Option<String>, CommandError> {
+    let job_type = JobType::parse(&job_type).ok_or_else(|| CommandError {
+        code: "validation_error".to_owned(),
+        message: "job_type must be one of daily_brief, task_reminder, overdue_check, weekly_report, retry_failed, cleanup_failed".to_owned(),
+    })?;
+    let dedup_key = trimmed_required(dedup_key, "dedup_key")?;
+    let scheduled_at = trimmed_required(scheduled_at, "scheduled_at")?;
+    scheduler
+        .schedule(job_type, &dedup_key, &scheduled_at)
+        .await
+        .map_err(Into::into)
+}
+
 /// Hidden planner entry point (M3 Part 1/2): build the provider from settings +
 /// keyring, stream the model -> tool loop over the existing AgentRuntime, emit
 /// one `agent-planner-chunk` event per content delta, and return the final
@@ -299,10 +330,10 @@ pub async fn agent_run_planner(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_context_audit_list, agent_decide_approval, agent_execute_tool, agent_list_tools,
-        agent_memory_confirm, agent_memory_create, agent_memory_deactivate, agent_memory_delete,
-        agent_memory_list, agent_memory_update, agent_run_planner, agent_undo_tool,
-        trimmed_required, CommandError,
+        agent_context_audit_list, agent_decide_approval, agent_execute_tool, agent_job_list,
+        agent_job_schedule, agent_list_tools, agent_memory_confirm, agent_memory_create,
+        agent_memory_deactivate, agent_memory_delete, agent_memory_list, agent_memory_update,
+        agent_run_planner, agent_undo_tool, trimmed_required, CommandError,
     };
     use crate::agent::error::AgentError;
 
@@ -346,6 +377,8 @@ mod tests {
         let _ = agent_memory_update;
         let _ = agent_memory_deactivate;
         let _ = agent_memory_delete;
+        let _ = agent_job_list;
+        let _ = agent_job_schedule;
     }
 
     #[test]

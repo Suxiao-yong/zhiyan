@@ -71,6 +71,12 @@ pub fn migrations() -> Vec<Migration> {
             sql: AGENT_MEMORIES_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 8,
+            description: "add background job scheduling table",
+            sql: AGENT_JOBS_SQL,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -357,6 +363,22 @@ CREATE TABLE IF NOT EXISTS agent_memories (
 CREATE INDEX IF NOT EXISTS idx_agent_memories_exam_type_status ON agent_memories(exam_id, memory_type, status);
 CREATE INDEX IF NOT EXISTS idx_agent_memories_status_last_used ON agent_memories(status, last_used_at);
 
+CREATE TABLE IF NOT EXISTS agent_jobs (
+    id TEXT PRIMARY KEY,
+    job_type TEXT NOT NULL CHECK(job_type IN ('daily_brief','task_reminder','overdue_check','weekly_report','retry_failed','cleanup_failed')),
+    dedup_key TEXT NOT NULL,
+    scheduled_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'scheduled' CHECK(status IN ('scheduled','running','completed','failed','paused')),
+    last_result TEXT,
+    retry_at TEXT,
+    runs INTEGER NOT NULL DEFAULT 0,
+    last_run_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE(dedup_key)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_jobs_status_scheduled ON agent_jobs(status, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_agent_jobs_status_retry ON agent_jobs(status, retry_at);
+
 CREATE TRIGGER IF NOT EXISTS trg_agent_sessions_updated AFTER UPDATE ON agent_sessions
     FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
     BEGIN UPDATE agent_sessions SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
@@ -414,6 +436,29 @@ CREATE INDEX IF NOT EXISTS idx_agent_memories_exam_type_status ON agent_memories
 CREATE INDEX IF NOT EXISTS idx_agent_memories_status_last_used ON agent_memories(status, last_used_at);
 "#;
 
+/// Background job scheduling (M4). Jobs carry a job type, a globally unique
+/// dedup key, a scheduled time, and a status machine
+/// `scheduled -> running -> completed | failed (retry_at)` with `paused` for
+/// suppressed reminder jobs. `last_result` holds a small JSON payload per run
+/// (never raw plan/record/wrong-question text).
+pub const AGENT_JOBS_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_jobs (
+    id TEXT PRIMARY KEY,
+    job_type TEXT NOT NULL CHECK(job_type IN ('daily_brief','task_reminder','overdue_check','weekly_report','retry_failed','cleanup_failed')),
+    dedup_key TEXT NOT NULL,
+    scheduled_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'scheduled' CHECK(status IN ('scheduled','running','completed','failed','paused')),
+    last_result TEXT,
+    retry_at TEXT,
+    runs INTEGER NOT NULL DEFAULT 0,
+    last_run_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE(dedup_key)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_jobs_status_scheduled ON agent_jobs(status, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_agent_jobs_status_retry ON agent_jobs(status, retry_at);
+"#;
+
 /// 确保应用数据目录存在（SQLite 数据库文件将落在此目录）。
 pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let app_data = app.path().app_data_dir()?;
@@ -433,7 +478,8 @@ mod tests {
     };
 
     use super::{
-        migrations, AGENT_CONTEXT_AUDIT_SQL, AGENT_MEMORIES_SQL, AGENT_SCHEMA_SQL, SCHEMA_SQL,
+        migrations, AGENT_CONTEXT_AUDIT_SQL, AGENT_JOBS_SQL, AGENT_MEMORIES_SQL, AGENT_SCHEMA_SQL,
+        SCHEMA_SQL,
     };
 
     #[test]
@@ -446,6 +492,7 @@ mod tests {
             "agent_approvals",
             "agent_context_audit",
             "agent_memories",
+            "agent_jobs",
             "UNIQUE(idempotency_key)",
             "waiting_approval",
             "schedule_preference",
@@ -467,7 +514,7 @@ mod tests {
             .collect();
 
         assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(versions.last(), Some(&7));
+        assert_eq!(versions.last(), Some(&8));
     }
 
     #[test]
@@ -542,7 +589,7 @@ mod tests {
                 );
                 assert_eq!(
                     migration_list.last().map(|migration| migration.version),
-                    Some(7)
+                    Some(8)
                 );
             });
     }
@@ -694,6 +741,94 @@ mod tests {
                 sqlx::raw_sql(AGENT_MEMORIES_SQL).execute(&pool).await.unwrap();
                 let survived: i64 =
                     sqlx::query_scalar("SELECT COUNT(*) FROM agent_runs WHERE id='run-v7'")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(survived, 1);
+            });
+    }
+
+    #[test]
+    fn migration_v8_adds_jobs_table() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                for migration in &migrations() {
+                    sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+                }
+
+                let table_exists: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_jobs'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(table_exists, 1);
+
+                let columns: Vec<String> =
+                    sqlx::query_scalar("SELECT name FROM pragma_table_info('agent_jobs')")
+                        .fetch_all(&pool)
+                        .await
+                        .unwrap();
+                for column in [
+                    "id",
+                    "job_type",
+                    "dedup_key",
+                    "scheduled_at",
+                    "status",
+                    "last_result",
+                    "retry_at",
+                    "runs",
+                    "last_run_at",
+                    "created_at",
+                ] {
+                    assert!(
+                        columns.iter().any(|c| c == column),
+                        "agent_jobs.{column} must exist"
+                    );
+                }
+
+                // Dedup key is globally unique; bad type rejected.
+                sqlx::query(
+                    "INSERT INTO agent_jobs (id, job_type, dedup_key, scheduled_at) \
+                     VALUES ('j-1','daily_brief','d:1','2026-07-18 08:00:00')",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                let dup = sqlx::query(
+                    "INSERT INTO agent_jobs (id, job_type, dedup_key, scheduled_at) \
+                     VALUES ('j-2','overdue_check','d:1','2026-07-18 09:00:00')",
+                )
+                .execute(&pool)
+                .await;
+                assert!(dup.is_err());
+                let bad_type = sqlx::query(
+                    "INSERT INTO agent_jobs (id, job_type, dedup_key, scheduled_at) \
+                     VALUES ('j-3','cron','d:3','2026-07-18 09:00:00')",
+                )
+                .execute(&pool)
+                .await;
+                assert!(bad_type.is_err());
+
+                // v8 is additive; v7-era rows survive a v8 upgrade.
+                sqlx::query(
+                    "INSERT INTO agent_memories (id, memory_type, content, source) \
+                     VALUES ('m-v8','schedule_preference','survive','user_statement')",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                sqlx::raw_sql(AGENT_JOBS_SQL).execute(&pool).await.unwrap();
+                let survived: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM agent_memories WHERE id='m-v8'")
                         .fetch_one(&pool)
                         .await
                         .unwrap();

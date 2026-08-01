@@ -19,6 +19,12 @@ fn agent_database_path(config_dir: &std::path::Path) -> std::path::PathBuf {
     config_dir.join("zhiyan.db")
 }
 
+/// Local time in the DB's `datetime('now','localtime')` format, shared by the
+/// scheduler bootstrap/tick loop.
+fn now_local() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
 fn setup_error(stage: &str, error: &dyn std::fmt::Display) -> std::io::Error {
     std::io::Error::other(format!("agent {stage}: {error}"))
 }
@@ -69,6 +75,8 @@ pub fn run() {
             agent::commands::agent_memory_update,
             agent::commands::agent_memory_deactivate,
             agent::commands::agent_memory_delete,
+            agent::commands::agent_job_list,
+            agent::commands::agent_job_schedule,
         ])
         .setup(|app| {
             db::init_db(app.handle())?;
@@ -91,8 +99,25 @@ pub fn run() {
             app.manage(planner);
             app.manage(context_audit);
             app.manage(memory);
-            app.manage(scheduler);
+            app.manage(scheduler.clone());
             tray::build_tray(app.handle())?;
+            // M4: background scheduler — catch up on restart, then tick every
+            // minute. The loop is not spawned in tests (run() is the app path).
+            {
+                let scheduler = scheduler.clone();
+                tauri::async_runtime::spawn(async move {
+                    let now = now_local();
+                    let _ = scheduler.bootstrap(&now).await;
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                    loop {
+                        interval.tick().await;
+                        let now = now_local();
+                        if let Err(error) = scheduler.tick(&now).await {
+                            eprintln!("agent scheduler tick failed: {error}");
+                        }
+                    }
+                });
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
