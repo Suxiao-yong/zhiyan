@@ -1,22 +1,34 @@
 # 项目进度状态
 
-更新时间：2026-07-18（M5 完成后更新）
+更新时间：2026-07-18（M6 完成后更新）
 工作区：`D:\智研\zhiyan`（main 分支）
 分支：`main`
 
 ## 当前结论
 
-纯 agent 改造的 M3（模型、上下文与记忆）、M4（托盘、调度与简报）、M5（Agent OS 界面）全部完成并提交：
+纯 agent 改造的 M3（模型、上下文与记忆）、M4（托盘、调度与简报）、M5（Agent OS 界面）、M6（全面迁移与生产化）全部完成并提交：
 
 - **M3 Part 1**：OpenAI 兼容 Provider、模型↔工具循环、本地降级与软 token 预算（`4528a45` 记录里程碑）。
 - **M3 Part 2**：SSE 流式对话与工具循环，`agent-planner-chunk` 事件实时渲染（`323902f` 标记 shipped）。
 - **M3 Part 3**：Context Inspector（v6 `agent_context_audit`）、结构化长期记忆（v7 `agent_memories`）、记忆接入 Context Builder（`e6c5550`）。
 - **M4**：托盘生命周期、`agent_jobs` v8 后台调度、本地聚合、每日简报、任务/逾期通知、费用估算。
 - **M5**：`/agent` Agent OS 三栏界面——会话侧栏、对话中心（`agent_messages` v9 持久化、审批卡、状态、简报卡）、计划打卡工作台嵌入右栏；简报命令层推送与 `weekly_report` job。
+- **M6**：§8.2 剩余工具集（三个 R0 查询、三个 R1 写、`plan.generate` R2 周草案）、右栏五工作台注册表、`agent_os_enabled` 回退开关（默认 `/agent`，关闭回旧仪表盘并禁用 TS 分析补跑）、生产化加固（forward-only 迁移测试、安全审查闭环、M6 打包验收清单）。
 
-仍搁置：完整 Fallback Engine 产品面与工作台全集（M6）、TypeScript planner/LLM adapter 切换（M6）、通知偏好 UI。Ollama 工具支持按产品决策排除。
+仍搁置：完整 Fallback Engine 产品面、`data.*` agent 工具、`exam.update`/`plan.reorder`/`record.update|delete`/`visualization.get_dataset`、TypeScript planner 文件移除（`plan-chat-agent.ts` 保留为回退聊天 UI）、通知偏好 UI。Ollama 工具支持按产品决策排除。
 
-## M5 提交记录
+## M6 提交记录
+
+提交：`53b7365`（计划）、`1f0d16d`（查询工具）、`03ca580`（写工具）、`517b6ed`（plan.generate）、`e1704db`（工作台注册表）、`0001ead`（TS 分析降级）、`33b1c23`（回退开关+路由）、`ed465bb`（加固）、`cd33140`（slotting 死循环修复）、`c6569ad`（周内日期分布）、`e25f5a6`/`84378fa`（KP 校验测试）
+
+- 九个工具：`exam.get_active`/`plan.get_range`/`record.get_history`（R0）、`record.create_free`/`wrong_question.create`/`wrong_question.mark_mastered`（R1 幂等写）、`plan.generate`（R2 周草案，`agent_r2_auto_execute` 门控，按权重 floor+最大小数分配、每周幂等、日期严格在周内）。新工具默认 rust-owned（v5 seed）；未配置工具保持 fail-closed。
+- 工作台注册表：右栏五个工作台（打卡/学习计划/记录与错题/AI 分析/数据可视化），原生切换器，切换不丢对话；`StudyRecord` 支持 `initial-tab`。
+- 回退开关：`agent_os_enabled`（默认开）决定 `/` → `/agent` 或 `/dashboard`；关闭时 `App.vue` 恢复 TS 分析补跑路径。4 个路由测试。
+- 加固：forward-only 迁移测试（无 DROP/RENAME/DELETE）、日期解析、KP 归属校验（两工具+正负测试）、slotting 死循环修复（8-14 科目回归）、MANUAL_TEST M6 打包清单。
+- 安全审查：两轮 security_review 后 verdict 无 blocking；review 最终 ship as-is。
+- 验证：Rust 全量 113 lib + 12 repository + 42 tools = 167 通过；前端 75 用例通过；typecheck、build、Clippy `-D warnings`、fmt、diff-check 全部通过。
+
+## 历史：M5 提交记录
 
 提交：`2c30e55`（计划）、`41586c7`（消息层 v9 + 读命令）、`9cf9214`（三栏壳 + store + 路由）、`41ec696`（简报推送 + 周报）
 
