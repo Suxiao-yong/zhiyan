@@ -648,9 +648,9 @@ mod tests {
     async fn tool_offering_defaults_to_shadow_reads_only() {
         let (planner, _pool) = planner().await;
         let offering = planner.tool_offering().await.unwrap();
-        // plan.get_today (shadow) plus the six new rust-owned M6 tools;
+        // plan.get_today (shadow) plus the seven new rust-owned M6 tools;
         // the typescript-owned check-in is not offered.
-        assert_eq!(offering.len(), 7);
+        assert_eq!(offering.len(), 8);
         let today = offering
             .iter()
             .find(|t| t["function"]["name"] == "plan.get_today")

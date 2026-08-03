@@ -61,7 +61,8 @@ pub fn migrations() -> Vec<Migration> {
                     ('agent_tool_owner.record.get_history','rust-owned','M6 query tool; rust-owned by default'),
                     ('agent_tool_owner.record.create_free','rust-owned','M6 write tool; rust-owned by default'),
                     ('agent_tool_owner.wrong_question.create','rust-owned','M6 write tool; rust-owned by default'),
-                    ('agent_tool_owner.wrong_question.mark_mastered','rust-owned','M6 write tool; rust-owned by default');
+                    ('agent_tool_owner.wrong_question.mark_mastered','rust-owned','M6 write tool; rust-owned by default'),
+                    ('agent_tool_owner.plan.generate','rust-owned','M6 R2 tool; rust-owned by default');
             "#,
             kind: MigrationKind::Up,
         },
@@ -625,6 +626,10 @@ mod tests {
                     vec![
                         (
                             "agent_tool_owner.exam.get_active".to_owned(),
+                            "rust-owned".to_owned(),
+                        ),
+                        (
+                            "agent_tool_owner.plan.generate".to_owned(),
                             "rust-owned".to_owned(),
                         ),
                         (

@@ -231,7 +231,7 @@ mod tests {
     async fn runtime_is_the_public_tool_execution_boundary() {
         let (runtime, pool) = test_runtime().await;
         let listed = runtime.list_tools().await.unwrap();
-        assert_eq!(listed.len(), 8);
+        assert_eq!(listed.len(), 9);
         assert_eq!(
             listed
                 .iter()
@@ -550,5 +550,123 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), "persistence_error");
+    }
+
+    #[tokio::test]
+    async fn plan_generate_is_approval_gated_and_idempotent_per_week() {
+        let (runtime, pool) = test_runtime().await;
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO exams(id,name,exam_date) VALUES('exam-g','G','2030-01-01');
+            INSERT INTO subjects(id,exam_id,name,weight) VALUES
+                ('sub-g1','exam-g','数学',2.0),
+                ('sub-g2','exam-g','英语',1.0);
+            INSERT INTO agent_sessions(id,title) VALUES('session-tool','Tool');
+            INSERT INTO agent_runs(id,session_id,goal,status)
+            VALUES('run-tool','session-tool','Tool','running');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // First call: R2 asks for a summary first, nothing is written yet.
+        let response = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 0,
+                tool_name: "plan.generate".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id":"exam-g","week_start":"2026-07-13","daily_capacity_min":90
+                }),
+                idempotency_key: Some("gen-1".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let preview = match response {
+            ToolCallResponse::SummaryRequired { preview, .. } => preview,
+            other => panic!("expected summary required, got {other:?}"),
+        };
+        assert_eq!(preview["exam_id"], "exam-g");
+        let plan_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_plans")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(plan_count, 0);
+
+        // Enabling auto-execution lets the same call dispatch: seven rows.
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_r2_auto_execute','true')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let response = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 0,
+                tool_name: "plan.generate".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id":"exam-g","week_start":"2026-07-13","daily_capacity_min":90
+                }),
+                idempotency_key: Some("gen-1".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let output = match response {
+            ToolCallResponse::Completed { output, .. } => output,
+            other => panic!("expected completed, got {other:?}"),
+        };
+        assert_eq!(output["newly_created"], true);
+        assert_eq!(output["rows"].as_array().unwrap().len(), 7);
+        assert_eq!(output["capacity_min"], 90);
+        let plan_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_plans")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(plan_count, 7);
+
+        // Re-running the same week returns the existing rows unchanged.
+        let response = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 1,
+                tool_name: "plan.generate".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id":"exam-g","week_start":"2026-07-13","daily_capacity_min":90
+                }),
+                idempotency_key: Some("gen-2".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let output = match response {
+            ToolCallResponse::Completed { output, .. } => output,
+            other => panic!("expected completed, got {other:?}"),
+        };
+        assert_eq!(output["newly_created"], false);
+        assert_eq!(output["rows"].as_array().unwrap().len(), 7);
+        let plan_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_plans")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(plan_count, 7);
+
+        // Weighted slotting: the heavier subject gets the most days.
+        let math_days: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM study_plans WHERE subject_id='sub-g1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let english_days: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM study_plans WHERE subject_id='sub-g2'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(math_days > english_days);
+        assert_eq!(math_days + english_days, 7);
     }
 }

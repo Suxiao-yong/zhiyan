@@ -14,7 +14,7 @@ use super::{
     policy::{self, PolicyContext, PolicyDecision},
     tools::{
         exam,
-        plan::{self, PlanGetRangeInput, PlanGetTodayInput},
+        plan::{self, PlanGenerateInput, PlanGetRangeInput, PlanGetTodayInput},
         record::{
             self, RecordCheckinPlanInput, RecordCheckinPlanOutput, RecordCreateFreeInput,
             RecordGetHistoryInput,
@@ -723,6 +723,18 @@ impl ToolDispatcher {
                     let input: PlanGetRangeInput =
                         serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
                     let output = plan::get_range(&mut **tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "plan.generate" => {
+                    let input: PlanGenerateInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = plan::generate(tx, input).await?;
                     Ok(DispatchResult {
                         output: serde_json::to_value(output)
                             .map_err(|_| AgentError::ToolSchemaInvalid)?,

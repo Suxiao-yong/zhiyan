@@ -318,6 +318,10 @@ async fn assert_v5_database(pool: &SqlitePool, label: &str, expected_agent_rows:
                 "rust-owned".to_owned()
             ),
             (
+                "agent_tool_owner.plan.generate".to_owned(),
+                "rust-owned".to_owned()
+            ),
+            (
                 "agent_tool_owner.plan.get_range".to_owned(),
                 "rust-owned".to_owned()
             ),

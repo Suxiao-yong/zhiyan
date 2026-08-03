@@ -82,6 +82,7 @@ impl ToolRegistry {
         for descriptor in [
             plan::descriptor(),
             plan::get_range_descriptor(),
+            plan::generate_descriptor(),
             record::descriptor(),
             record::get_history_descriptor(),
             record::create_free_descriptor(),
@@ -158,6 +159,7 @@ mod tests {
             names,
             [
                 "exam.get_active",
+                "plan.generate",
                 "plan.get_range",
                 "plan.get_today",
                 "record.checkin_plan",
