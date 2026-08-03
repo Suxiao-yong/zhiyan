@@ -81,6 +81,9 @@ pub fn run() {
             agent::commands::agent_job_list,
             agent::commands::agent_job_schedule,
             agent::commands::agent_brief_preview,
+            agent::commands::agent_session_list,
+            agent::commands::agent_session_messages,
+            agent::commands::agent_approval_list,
         ])
         .setup(|app| {
             db::init_db(app.handle())?;

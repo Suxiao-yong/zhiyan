@@ -7,7 +7,8 @@ use super::error::AgentError;
 use super::executor::ToolUndoResponse;
 use super::memory::{MemoryRecord, MemoryRepository, MemorySource, MemoryType};
 use super::model::{
-    AgentRun, AgentSession, ApprovalRecord, RunEvent, ToolCallRequest, ToolCallResponse,
+    AgentMessage, AgentRun, AgentSession, ApprovalRecord, RunEvent, ToolCallRequest,
+    ToolCallResponse,
 };
 use super::planner::{Planner, PlannerTurn};
 use super::runtime::AgentRuntime;
@@ -78,6 +79,48 @@ pub async fn agent_create_session(
     let title = trimmed_required(title, "title")?;
     runtime
         .create_session(exam_id.as_deref(), &title)
+        .await
+        .map_err(Into::into)
+}
+
+/// Agent OS sidebar (M5): recent sessions, newest activity first.
+#[tauri::command]
+pub async fn agent_session_list(
+    runtime: State<'_, AgentRuntime>,
+    limit: Option<i64>,
+) -> Result<Vec<AgentSession>, CommandError> {
+    let limit = limit.unwrap_or(50).clamp(1, 500);
+    runtime
+        .repository()
+        .session_list(limit)
+        .await
+        .map_err(Into::into)
+}
+
+/// Agent OS conversation (M5): a session's messages, oldest first.
+#[tauri::command]
+pub async fn agent_session_messages(
+    runtime: State<'_, AgentRuntime>,
+    session_id: String,
+) -> Result<Vec<AgentMessage>, CommandError> {
+    let session_id = trimmed_required(session_id, "session_id")?;
+    runtime
+        .repository()
+        .session_messages(&session_id)
+        .await
+        .map_err(Into::into)
+}
+
+/// Agent OS approval card (M5): approvals, pending first then decided.
+#[tauri::command]
+pub async fn agent_approval_list(
+    runtime: State<'_, AgentRuntime>,
+    limit: Option<i64>,
+) -> Result<Vec<ApprovalRecord>, CommandError> {
+    let limit = limit.unwrap_or(20).clamp(1, 200);
+    runtime
+        .repository()
+        .approval_list(limit)
         .await
         .map_err(Into::into)
 }
@@ -345,10 +388,11 @@ pub async fn agent_run_planner(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_brief_preview, agent_context_audit_list, agent_decide_approval, agent_execute_tool,
-        agent_job_list, agent_job_schedule, agent_list_tools, agent_memory_confirm,
-        agent_memory_create, agent_memory_deactivate, agent_memory_delete, agent_memory_list,
-        agent_memory_update, agent_run_planner, agent_undo_tool, trimmed_required, CommandError,
+        agent_approval_list, agent_brief_preview, agent_context_audit_list, agent_decide_approval,
+        agent_execute_tool, agent_job_list, agent_job_schedule, agent_list_tools,
+        agent_memory_confirm, agent_memory_create, agent_memory_deactivate, agent_memory_delete,
+        agent_memory_list, agent_memory_update, agent_run_planner, agent_session_list,
+        agent_session_messages, agent_undo_tool, trimmed_required, CommandError,
     };
     use crate::agent::error::AgentError;
 
@@ -395,6 +439,9 @@ mod tests {
         let _ = agent_job_list;
         let _ = agent_job_schedule;
         let _ = agent_brief_preview;
+        let _ = agent_session_list;
+        let _ = agent_session_messages;
+        let _ = agent_approval_list;
     }
 
     #[test]

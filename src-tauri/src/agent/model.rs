@@ -93,6 +93,23 @@ pub struct AgentSession {
     pub updated_at: String,
 }
 
+/// One conversation message (M5, spec §7.1). `content_json` holds structured
+/// payloads when present; token usage and model are recorded per assistant
+/// turn so the UI can show cost and provenance.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct AgentMessage {
+    pub id: String,
+    pub session_id: String,
+    pub run_id: Option<String>,
+    pub role: String,
+    pub text: String,
+    pub content_json: Option<String>,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub model: Option<String>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct AgentRun {
     pub id: String,

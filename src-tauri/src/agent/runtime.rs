@@ -52,6 +52,12 @@ impl AgentRuntime {
         self.repository.create_session(exam_id, title).await
     }
 
+    /// Read access for the read-only UI commands (session list, messages,
+    /// approvals).
+    pub(crate) fn repository(&self) -> &AgentRepository {
+        &self.repository
+    }
+
     pub async fn create_run(&self, session_id: &str, goal: &str) -> Result<AgentRun, AgentError> {
         self.repository.create_run(session_id, goal, "user").await
     }

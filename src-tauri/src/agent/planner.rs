@@ -162,6 +162,18 @@ impl Planner {
         goal: &str,
         on_chunk: &mut (dyn FnMut(&str) + Send),
     ) -> Result<PlannerTurn, AgentError> {
+        let turn = self.run_inner(provider, run_id, goal, on_chunk).await?;
+        self.record_messages(run_id, goal, &turn).await?;
+        Ok(turn)
+    }
+
+    async fn run_inner(
+        &self,
+        provider: Option<&LlmProvider>,
+        run_id: &str,
+        goal: &str,
+        on_chunk: &mut (dyn FnMut(&str) + Send),
+    ) -> Result<PlannerTurn, AgentError> {
         let Some(provider) = provider else {
             return self
                 .local_turn(
@@ -392,6 +404,56 @@ impl Planner {
             rate(&self.pool, "agent_cost_per_1k_prompt_tokens", 0.002).await?,
             rate(&self.pool, "agent_cost_per_1k_completion_tokens", 0.006).await?,
         ))
+    }
+
+    /// Persist a turn as user + assistant messages (M5 conversation). Local
+    /// turns record zero tokens. Runs without a session (or a missing run row)
+    /// are skipped safely.
+    async fn record_messages(
+        &self,
+        run_id: &str,
+        goal: &str,
+        turn: &PlannerTurn,
+    ) -> Result<(), AgentError> {
+        let session_id: Option<String> =
+            sqlx::query_scalar("SELECT session_id FROM agent_runs WHERE id = ?")
+                .bind(run_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx)?;
+        let Some(session_id) = session_id else {
+            return Ok(());
+        };
+        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+        let user_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO agent_messages (id, session_id, run_id, role, text) \
+             VALUES (?, ?, ?, 'user', ?)",
+        )
+        .bind(&user_id)
+        .bind(&session_id)
+        .bind(run_id)
+        .bind(goal)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx)?;
+        let assistant_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO agent_messages (id, session_id, run_id, role, text, \
+             prompt_tokens, completion_tokens) \
+             VALUES (?, ?, ?, 'assistant', ?, ?, ?)",
+        )
+        .bind(&assistant_id)
+        .bind(&session_id)
+        .bind(run_id)
+        .bind(&turn.final_text)
+        .bind(turn.prompt_tokens)
+        .bind(turn.completion_tokens)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx)?;
+        tx.commit().await.map_err(map_sqlx)?;
+        Ok(())
     }
 
     /// Read the LLM config from settings + keyring. Returns None when no
@@ -943,5 +1005,70 @@ mod tests {
         assert!(record_ids.contains(&confirmed.id));
         assert!(!record_ids.contains(&candidate.id));
         assert!(!record_ids.contains("每天最多学习两小时"));
+    }
+
+    #[tokio::test]
+    async fn run_persists_user_and_assistant_messages() {
+        let (planner, pool) = planner().await;
+        let run_id = started_run(&pool, &planner).await;
+
+        let provider =
+            LlmProvider::Synthetic(SyntheticProvider::scripted(vec![ProviderResponse {
+                content: Some("今日有一项复习任务。".into()),
+                tool_calls: Vec::new(),
+                usage: ProviderUsage {
+                    prompt_tokens: 40,
+                    completion_tokens: 5,
+                },
+            }]));
+
+        let turn = planner
+            .run(Some(&provider), &run_id, "看今天的计划", &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(turn.mode, "model");
+
+        let messages: Vec<(String, String, i64, i64)> = sqlx::query_as(
+            "SELECT role, text, prompt_tokens, completion_tokens \
+             FROM agent_messages WHERE run_id = ? ORDER BY created_at, rowid",
+        )
+        .bind(&run_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].0, "user");
+        assert_eq!(messages[0].1, "看今天的计划");
+        assert_eq!(messages[0].2, 0);
+        assert_eq!(messages[1].0, "assistant");
+        assert_eq!(messages[1].1, "今日有一项复习任务。");
+        assert_eq!(messages[1].2, 40);
+        assert_eq!(messages[1].3, 5);
+    }
+
+    #[tokio::test]
+    async fn local_turn_persists_messages_with_zero_tokens() {
+        let (planner, pool) = planner().await;
+        let run_id = started_run(&pool, &planner).await;
+
+        let turn = planner
+            .run(None, &run_id, "看今天的计划", &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(turn.mode, "local");
+
+        let messages: Vec<(String, i64, i64)> = sqlx::query_as(
+            "SELECT role, prompt_tokens, completion_tokens \
+             FROM agent_messages WHERE run_id = ?",
+        )
+        .bind(&run_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].0, "user");
+        assert_eq!(messages[1].0, "assistant");
+        assert_eq!(messages[1].1, 0);
+        assert_eq!(messages[1].2, 0);
     }
 }

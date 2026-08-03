@@ -77,6 +77,12 @@ pub fn migrations() -> Vec<Migration> {
             sql: AGENT_JOBS_SQL,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 9,
+            description: "add agent message table for the agent os conversation",
+            sql: AGENT_MESSAGES_SQL,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -379,6 +385,20 @@ CREATE TABLE IF NOT EXISTS agent_jobs (
 CREATE INDEX IF NOT EXISTS idx_agent_jobs_status_scheduled ON agent_jobs(status, scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_agent_jobs_status_retry ON agent_jobs(status, retry_at);
 
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+    role TEXT NOT NULL CHECK(role IN ('user','assistant','system')),
+    text TEXT NOT NULL,
+    content_json TEXT,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    model TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_id, created_at);
+
 CREATE TRIGGER IF NOT EXISTS trg_agent_sessions_updated AFTER UPDATE ON agent_sessions
     FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
     BEGIN UPDATE agent_sessions SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
@@ -459,6 +479,25 @@ CREATE INDEX IF NOT EXISTS idx_agent_jobs_status_scheduled ON agent_jobs(status,
 CREATE INDEX IF NOT EXISTS idx_agent_jobs_status_retry ON agent_jobs(status, retry_at);
 "#;
 
+/// Conversation messages (M5, spec §7.1): session-scoped roles with token
+/// usage and an optional run reference. Additive; the Agent OS conversation
+/// pane reads this through `agent_session_messages`.
+pub const AGENT_MESSAGES_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+    run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+    role TEXT NOT NULL CHECK(role IN ('user','assistant','system')),
+    text TEXT NOT NULL,
+    content_json TEXT,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    model TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_id, created_at);
+"#;
+
 /// 确保应用数据目录存在（SQLite 数据库文件将落在此目录）。
 pub fn init_db(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let app_data = app.path().app_data_dir()?;
@@ -478,8 +517,8 @@ mod tests {
     };
 
     use super::{
-        migrations, AGENT_CONTEXT_AUDIT_SQL, AGENT_JOBS_SQL, AGENT_MEMORIES_SQL, AGENT_SCHEMA_SQL,
-        SCHEMA_SQL,
+        migrations, AGENT_CONTEXT_AUDIT_SQL, AGENT_JOBS_SQL, AGENT_MEMORIES_SQL,
+        AGENT_MESSAGES_SQL, AGENT_SCHEMA_SQL, SCHEMA_SQL,
     };
 
     #[test]
@@ -493,6 +532,7 @@ mod tests {
             "agent_context_audit",
             "agent_memories",
             "agent_jobs",
+            "agent_messages",
             "UNIQUE(idempotency_key)",
             "waiting_approval",
             "schedule_preference",
@@ -514,7 +554,7 @@ mod tests {
             .collect();
 
         assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(versions.last(), Some(&8));
+        assert_eq!(versions.last(), Some(&9));
     }
 
     #[test]
@@ -589,7 +629,7 @@ mod tests {
                 );
                 assert_eq!(
                     migration_list.last().map(|migration| migration.version),
-                    Some(8)
+                    Some(9)
                 );
             });
     }
@@ -832,6 +872,79 @@ mod tests {
                         .fetch_one(&pool)
                         .await
                         .unwrap();
+                assert_eq!(survived, 1);
+            });
+    }
+
+    #[test]
+    fn migration_v9_adds_messages_table() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                for migration in &migrations() {
+                    sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+                }
+
+                let table_exists: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_messages'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(table_exists, 1);
+
+                // Bad role is rejected; valid rows and cascade work.
+                let bad_role = sqlx::query(
+                    "INSERT INTO agent_messages (id, session_id, role, text) \
+                     VALUES ('m-bad', 's-1', 'bot', 'x')",
+                )
+                .execute(&pool)
+                .await;
+                assert!(bad_role.is_err());
+
+                sqlx::query("INSERT INTO agent_sessions (id, title) VALUES ('s-1', 'S')")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::query(
+                    "INSERT INTO agent_messages (id, session_id, role, text) \
+                     VALUES ('m-1', 's-1', 'user', 'hello')",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                sqlx::query("DELETE FROM agent_sessions WHERE id='s-1'")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_messages")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                assert_eq!(remaining, 0);
+
+                // v9 is additive; v8-era rows survive a v9 upgrade.
+                sqlx::query(
+                    "INSERT INTO agent_jobs (id, job_type, dedup_key, scheduled_at) \
+                     VALUES ('j-v9','daily_brief','d:9','2026-07-18 08:00:00')",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                sqlx::raw_sql(AGENT_MESSAGES_SQL).execute(&pool).await.unwrap();
+                let survived: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM agent_jobs WHERE id='j-v9'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
                 assert_eq!(survived, 1);
             });
     }
