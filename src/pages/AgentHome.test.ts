@@ -28,6 +28,9 @@ const client = vi.hoisted(() => ({
 
 vi.mock('@/services/agent-client', () => client)
 
+const eventApi = vi.hoisted(() => ({ listen: vi.fn().mockResolvedValue(() => {}) }))
+vi.mock('@tauri-apps/api/event', () => eventApi)
+
 import AgentHome from './AgentHome.vue'
 
 const session = (id: string, title: string): AgentSession => ({

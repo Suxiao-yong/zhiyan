@@ -345,17 +345,24 @@ pub async fn agent_job_schedule(
 }
 
 /// Hidden daily brief preview (M4): render today's brief on demand. Falls back
-/// to the most recently active exam when no exam id is given.
+/// to the most recently active exam when no exam id is given. When a window is
+/// listening, the command also pushes the brief as the `agent-daily-brief`
+/// event — emitted here from the injected AppHandle, never from a managed
+/// state holding one (M4/M5 contract).
 #[tauri::command]
 pub async fn agent_brief_preview(
     scheduler: State<'_, Scheduler>,
+    app: tauri::AppHandle,
     exam_id: Option<String>,
 ) -> Result<Brief, CommandError> {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    scheduler
+    let brief = scheduler
         .brief_preview(exam_id.as_deref(), &today)
         .await
-        .map_err(Into::into)
+        .map_err(CommandError::from)?;
+    use tauri::Emitter;
+    let _ = app.emit("agent-daily-brief", crate::brief::brief_payload(&brief));
+    Ok(brief)
 }
 
 /// Hidden planner entry point (M3 Part 1/2): build the provider from settings +

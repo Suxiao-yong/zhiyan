@@ -1,13 +1,23 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { Calendar, Check } from '@element-plus/icons-vue'
 import { useAgentStore } from '@/stores/agent'
 
 const agent = useAgentStore()
+let unlisten: UnlistenFn | undefined
 
 onMounted(async () => {
   await agent.loadBrief()
   await agent.refreshApprovals()
+  // Command-layer push (agent_brief_preview emits this) refreshes the card.
+  unlisten = await listen('agent-daily-brief', () => {
+    void agent.loadBrief()
+  })
+})
+
+onUnmounted(() => {
+  unlisten?.()
 })
 
 function formatRate(value: number): string {

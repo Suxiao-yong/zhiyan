@@ -356,9 +356,50 @@ impl Scheduler {
                     JobOutcome::Done(json!({ "overdue_count": 0, "note": "none overdue" }))
                 }
             }
-            JobType::WeeklyReport | JobType::RetryFailed | JobType::CleanupFailed => {
+            JobType::WeeklyReport => {
+                let today = &now[..10];
+                let exam_id: Option<String> = self.active_exam_id().await.unwrap_or(None);
+                let Some(exam_id) = exam_id else {
+                    return JobOutcome::Skipped(json!({ "reason": "no exam" }));
+                };
+                let analytics = Analytics::new(self.pool.clone());
+                let monday = crate::brief::monday_of(today);
+                let week = analytics
+                    .week_stats(&exam_id, &monday)
+                    .await
+                    .unwrap_or_default();
+                let weak = analytics
+                    .weak_areas(&exam_id, 0.6, 5)
+                    .await
+                    .unwrap_or_default();
+                let weak_names: Vec<String> = weak
+                    .iter()
+                    .filter_map(|area| area.knowledge_point_name.clone())
+                    .collect();
+                let summary = format!(
+                    "本周完成率 {:.0}%（{}/{} 项），已记录 {} 分钟。薄弱点：{}。",
+                    week.completion_rate * 100.0,
+                    week.completed,
+                    week.planned,
+                    week.actual_duration_min,
+                    if weak_names.is_empty() {
+                        "无".to_owned()
+                    } else {
+                        weak_names.join("、")
+                    },
+                );
+                JobOutcome::Done(json!({
+                    "monday": monday,
+                    "summary": summary,
+                    "planned": week.planned,
+                    "completed": week.completed,
+                    "duration_min": week.actual_duration_min,
+                    "weak_areas": weak,
+                }))
+            }
+            JobType::RetryFailed | JobType::CleanupFailed => {
                 let _ = now;
-                JobOutcome::Skipped(json!({ "note": "handler lands in M5" }))
+                JobOutcome::Skipped(json!({ "note": "handler lands in M6" }))
             }
         }
     }
@@ -791,6 +832,37 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(scheduled_at, "2026-07-18 21:30:00");
+    }
+
+    #[tokio::test]
+    async fn weekly_report_produces_a_summary_payload() {
+        let pool = scheduler_pool().await;
+        seed_exam_with_plans(&pool).await;
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-r')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (scheduler, _notifications) = test_scheduler(pool);
+        scheduler
+            .schedule(
+                JobType::WeeklyReport,
+                "weekly_report:2026-07-13",
+                "2026-07-13 08:00:00",
+            )
+            .await
+            .unwrap();
+
+        let ran = scheduler.tick("2026-07-18 09:00:00").await.unwrap();
+        // weekly + daily_brief + overdue_check (task_reminder is 19:00, not due).
+        assert_eq!(ran, 3);
+
+        let result: String =
+            sqlx::query_scalar("SELECT last_result FROM agent_jobs WHERE job_type='weekly_report'")
+                .fetch_one(&scheduler.pool)
+                .await
+                .unwrap();
+        assert!(result.contains("本周完成率"));
+        assert!(result.contains("monday"));
     }
 
     #[tokio::test]

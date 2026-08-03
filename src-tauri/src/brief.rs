@@ -173,7 +173,9 @@ impl BriefBuilder {
     }
 }
 
-fn monday_of(date: &str) -> String {
+/// Monday of the week containing `date` (`YYYY-MM-DD`), shared by the brief
+/// and the weekly report job.
+pub(crate) fn monday_of(date: &str) -> String {
     use chrono::Datelike;
     match chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
         Ok(parsed) => {
