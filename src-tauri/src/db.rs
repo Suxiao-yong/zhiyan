@@ -58,7 +58,10 @@ pub fn migrations() -> Vec<Migration> {
                     ('agent_tool_owner.record.checkin_plan','typescript','typescript|shadow|rust-owned; controls record.checkin_plan writes'),
                     ('agent_tool_owner.exam.get_active','rust-owned','M6 query tool; rust-owned by default'),
                     ('agent_tool_owner.plan.get_range','rust-owned','M6 query tool; rust-owned by default'),
-                    ('agent_tool_owner.record.get_history','rust-owned','M6 query tool; rust-owned by default');
+                    ('agent_tool_owner.record.get_history','rust-owned','M6 query tool; rust-owned by default'),
+                    ('agent_tool_owner.record.create_free','rust-owned','M6 write tool; rust-owned by default'),
+                    ('agent_tool_owner.wrong_question.create','rust-owned','M6 write tool; rust-owned by default'),
+                    ('agent_tool_owner.wrong_question.mark_mastered','rust-owned','M6 write tool; rust-owned by default');
             "#,
             kind: MigrationKind::Up,
         },
@@ -637,7 +640,19 @@ mod tests {
                             "typescript".to_owned(),
                         ),
                         (
+                            "agent_tool_owner.record.create_free".to_owned(),
+                            "rust-owned".to_owned(),
+                        ),
+                        (
                             "agent_tool_owner.record.get_history".to_owned(),
+                            "rust-owned".to_owned(),
+                        ),
+                        (
+                            "agent_tool_owner.wrong_question.create".to_owned(),
+                            "rust-owned".to_owned(),
+                        ),
+                        (
+                            "agent_tool_owner.wrong_question.mark_mastered".to_owned(),
                             "rust-owned".to_owned(),
                         ),
                     ]

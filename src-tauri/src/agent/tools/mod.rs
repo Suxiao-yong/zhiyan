@@ -9,6 +9,7 @@ use crate::agent::error::AgentError;
 pub mod exam;
 pub mod plan;
 pub mod record;
+pub mod wrong_question;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum RiskLevel {
@@ -83,7 +84,10 @@ impl ToolRegistry {
             plan::get_range_descriptor(),
             record::descriptor(),
             record::get_history_descriptor(),
+            record::create_free_descriptor(),
             exam::descriptor(),
+            wrong_question::create_descriptor(),
+            wrong_question::mark_mastered_descriptor(),
         ] {
             tools.insert(descriptor.name, descriptor);
         }
@@ -157,7 +161,10 @@ mod tests {
                 "plan.get_range",
                 "plan.get_today",
                 "record.checkin_plan",
-                "record.get_history"
+                "record.create_free",
+                "record.get_history",
+                "wrong_question.create",
+                "wrong_question.mark_mastered"
             ]
         );
         for descriptor in descriptors {

@@ -125,6 +125,110 @@ where
     Ok(RecordGetHistoryOutput { records })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordCreateFreeInput {
+    pub exam_id: String,
+    pub date: String,
+    pub subject_id: String,
+    pub knowledge_point_id: Option<String>,
+    pub duration_min: i64,
+    pub content: Option<String>,
+    pub questions_count: Option<i64>,
+    pub correct_count: Option<i64>,
+    pub mastery_rating: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecordCreateFreeOutput {
+    pub id: String,
+}
+
+/// `record.create_free` (R1): a free-form study record for a subject of the
+/// exam. The subject must belong to the exam; mastery must be 1-5 when set.
+pub async fn create_free(
+    tx: &mut Transaction<'_, Sqlite>,
+    input: RecordCreateFreeInput,
+) -> Result<RecordCreateFreeOutput, AgentError> {
+    if input.duration_min < 0 {
+        return Err(AgentError::ToolSchemaInvalid);
+    }
+    if let Some(rating) = input.mastery_rating {
+        if !(1..=5).contains(&rating) {
+            return Err(AgentError::ToolSchemaInvalid);
+        }
+    }
+    let subject_exam: Option<String> =
+        sqlx::query_scalar("SELECT exam_id FROM subjects WHERE id = ?")
+            .bind(&input.subject_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(|_| {
+                AgentError::Persistence("record.create_free subject check failed".to_owned())
+            })?;
+    match subject_exam {
+        None => return Err(AgentError::Persistence("subject not found".to_owned())),
+        Some(exam_id) if exam_id != input.exam_id => {
+            return Err(AgentError::Persistence("subject not in exam".to_owned()));
+        }
+        _ => {}
+    }
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO study_records
+            (id, date, subject_id, knowledge_point_id, duration_min, content,
+             questions_count, correct_count, mastery_rating)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(&id)
+    .bind(&input.date)
+    .bind(&input.subject_id)
+    .bind(&input.knowledge_point_id)
+    .bind(input.duration_min)
+    .bind(&input.content)
+    .bind(input.questions_count.unwrap_or(0))
+    .bind(input.correct_count.unwrap_or(0))
+    .bind(input.mastery_rating)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| AgentError::Persistence("record.create_free insert failed".to_owned()))?;
+    Ok(RecordCreateFreeOutput { id })
+}
+
+pub fn create_free_descriptor() -> ToolDescriptor {
+    ToolDescriptor {
+        name: "record.create_free",
+        version: "1",
+        input_schema: json!({
+            "type":"object", "additionalProperties":false,
+            "required":["exam_id","date","subject_id","duration_min"],
+            "properties":{
+                "exam_id":{"type":"string","minLength":1},
+                "date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},
+                "subject_id":{"type":"string","minLength":1},
+                "knowledge_point_id":{"type":"string"},
+                "duration_min":{"type":"integer","minimum":0},
+                "content":{"type":"string"},
+                "questions_count":{"type":"integer","minimum":0},
+                "correct_count":{"type":"integer","minimum":0},
+                "mastery_rating":{"type":"integer","minimum":1,"maximum":5}
+            }
+        }),
+        output_schema: json!({
+            "type":"object", "additionalProperties":false,
+            "required":["id"],
+            "properties":{"id":{"type":"string"}}
+        }),
+        risk: RiskLevel::R1,
+        confirmation: Confirmation::Automatic,
+        supports_undo: false,
+        timeout_ms: 3000,
+        idempotency: Idempotency::RetrySafe,
+        data_permissions: vec!["study_records:write", "subjects:read"],
+    }
+}
+
 pub fn get_history_descriptor() -> ToolDescriptor {
     ToolDescriptor {
         name: "record.get_history",

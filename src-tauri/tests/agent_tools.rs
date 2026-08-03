@@ -330,7 +330,19 @@ async fn assert_v5_database(pool: &SqlitePool, label: &str, expected_agent_rows:
                 "typescript".to_owned()
             ),
             (
+                "agent_tool_owner.record.create_free".to_owned(),
+                "rust-owned".to_owned()
+            ),
+            (
                 "agent_tool_owner.record.get_history".to_owned(),
+                "rust-owned".to_owned()
+            ),
+            (
+                "agent_tool_owner.wrong_question.create".to_owned(),
+                "rust-owned".to_owned()
+            ),
+            (
+                "agent_tool_owner.wrong_question.mark_mastered".to_owned(),
                 "rust-owned".to_owned()
             )
         ]

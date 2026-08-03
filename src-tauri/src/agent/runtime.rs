@@ -231,7 +231,7 @@ mod tests {
     async fn runtime_is_the_public_tool_execution_boundary() {
         let (runtime, pool) = test_runtime().await;
         let listed = runtime.list_tools().await.unwrap();
-        assert_eq!(listed.len(), 5);
+        assert_eq!(listed.len(), 8);
         assert_eq!(
             listed
                 .iter()
@@ -292,7 +292,7 @@ mod tests {
         sqlx::raw_sql(
             r#"
             INSERT INTO exams(id,name,exam_date) VALUES('exam-q','Q','2030-01-01');
-            INSERT INTO subjects(id,exam_id,name) VALUES('sub-q','exam-q','数学');
+            INSERT INTO subjects(id,exam_id,name) VALUES('sub-q','exam-q','鏁板');
             INSERT INTO study_plans(id,exam_id,subject_id,date,planned_duration,status)
             VALUES('plan-q','exam-q','sub-q','2026-07-18',60,'pending');
             INSERT INTO study_records(id,date,subject_id,duration_min,questions_count,correct_count)
@@ -324,7 +324,7 @@ mod tests {
             other => panic!("expected completed, got {other:?}"),
         };
         assert_eq!(output["exam_id"], "exam-q");
-        assert_eq!(output["subjects"][0]["name"], "数学");
+        assert_eq!(output["subjects"][0]["name"], "鏁板");
 
         // plan.get_range: plans within the interval.
         let response = runtime
@@ -363,7 +363,7 @@ mod tests {
             other => panic!("expected completed, got {other:?}"),
         };
         assert_eq!(output["records"][0]["id"], "rec-q");
-        assert_eq!(output["records"][0]["subject_name"], "数学");
+        assert_eq!(output["records"][0]["subject_name"], "鏁板");
         assert_eq!(output["records"][0]["duration_min"], 30);
 
         // Range validation: inverted dates are schema-invalid.
@@ -380,5 +380,175 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), "tool_schema_invalid");
+    }
+
+    #[tokio::test]
+    async fn write_tools_create_records_and_wrong_questions_idempotently() {
+        let (runtime, pool) = test_runtime().await;
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO exams(id,name,exam_date) VALUES('exam-w','W','2030-01-01');
+            INSERT INTO subjects(id,exam_id,name) VALUES('sub-w','exam-w','鏁板');
+            INSERT INTO agent_sessions(id,title) VALUES('session-tool','Tool');
+            INSERT INTO agent_runs(id,session_id,goal,status)
+            VALUES('run-tool','session-tool','Tool','running');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // record.create_free inserts a record.
+        let response = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 0,
+                tool_name: "record.create_free".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id":"exam-w","date":"2026-07-18","subject_id":"sub-w",
+                    "duration_min":45,"content":"鑷敱澶嶄範","questions_count":6,"correct_count":5
+                }),
+                idempotency_key: Some("free-1".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let output = match response {
+            ToolCallResponse::Completed { output, .. } => output,
+            other => panic!("expected completed, got {other:?}"),
+        };
+        let record_id = output["id"].as_str().unwrap().to_owned();
+        let row_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row_count, 1);
+
+        // Replaying the same idempotency key is rejected (only check-in
+        // supports replayed delivery); the row is still written exactly once.
+        let err = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 1,
+                tool_name: "record.create_free".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id":"exam-w","date":"2026-07-18","subject_id":"sub-w","duration_min":45
+                }),
+                idempotency_key: Some("free-1".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "idempotency_conflict");
+        let row_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row_count, 1);
+
+        // wrong_question.create links to the record; replay adds nothing.
+        let response = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 1,
+                tool_name: "wrong_question.create".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "subject_id":"sub-w","record_id":record_id,
+                    "question_desc":"閿欓鎻忚堪","my_answer":"x"
+                }),
+                idempotency_key: Some("wq-1".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap_or_else(|err| panic!("wq create failed: {err:?} (code {})", err.code()));
+        let output = match response {
+            ToolCallResponse::Completed { output, .. } => output,
+            other => panic!("expected completed, got {other:?}"),
+        };
+        let wrong_id = output["id"].as_str().unwrap().to_owned();
+        let err = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 2,
+                tool_name: "wrong_question.create".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "subject_id":"sub-w","record_id":record_id,"question_desc":"閿欓鎻忚堪"
+                }),
+                idempotency_key: Some("wq-1".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "idempotency_conflict");
+        let wq_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM wrong_questions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(wq_count, 1);
+
+        // mark_mastered flips the flag; a missing id is a persistence error.
+        let response = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 2,
+                tool_name: "wrong_question.mark_mastered".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"id": wrong_id}),
+                idempotency_key: Some("mm-1".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let output = match response {
+            ToolCallResponse::Completed { output, .. } => output,
+            other => panic!("expected completed, got {other:?}"),
+        };
+        assert_eq!(output["mastered"], 1);
+        let mastered: i64 = sqlx::query_scalar("SELECT mastered FROM wrong_questions WHERE id = ?")
+            .bind(&wrong_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(mastered, 1);
+
+        // A subject outside the exam is rejected (run then fails; reset it).
+        let err = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 3,
+                tool_name: "record.create_free".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id":"other","date":"2026-07-18","subject_id":"sub-w","duration_min":10
+                }),
+                idempotency_key: Some("free-2".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "persistence_error");
+        sqlx::query("UPDATE agent_runs SET status='running', current_step=4 WHERE id='run-tool'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Marking a missing wrong question is a persistence error.
+        let err = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 4,
+                tool_name: "wrong_question.mark_mastered".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"id":"missing"}),
+                idempotency_key: Some("mm-2".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "persistence_error");
     }
 }

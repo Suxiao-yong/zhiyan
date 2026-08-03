@@ -15,7 +15,11 @@ use super::{
     tools::{
         exam,
         plan::{self, PlanGetRangeInput, PlanGetTodayInput},
-        record::{self, RecordCheckinPlanInput, RecordCheckinPlanOutput, RecordGetHistoryInput},
+        record::{
+            self, RecordCheckinPlanInput, RecordCheckinPlanOutput, RecordCreateFreeInput,
+            RecordGetHistoryInput,
+        },
+        wrong_question::{self, WrongQuestionCreateInput, WrongQuestionMarkMasteredInput},
         Idempotency, ListedTool, RiskLevel, ToolDescriptor, ToolOwnership, ToolRegistry,
     },
 };
@@ -731,6 +735,42 @@ impl ToolDispatcher {
                     let input: RecordGetHistoryInput =
                         serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
                     let output = record::get_history(&mut **tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "record.create_free" => {
+                    let input: RecordCreateFreeInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = record::create_free(tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "wrong_question.create" => {
+                    let input: WrongQuestionCreateInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = wrong_question::create(tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "wrong_question.mark_mastered" => {
+                    let input: WrongQuestionMarkMasteredInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = wrong_question::mark_mastered(tx, input).await?;
                     Ok(DispatchResult {
                         output: serde_json::to_value(output)
                             .map_err(|_| AgentError::ToolSchemaInvalid)?,
