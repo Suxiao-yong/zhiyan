@@ -139,20 +139,25 @@ pub async fn generate(
         remaining -= 1;
     }
 
-    let mut rows = Vec::with_capacity(WEEK_DAYS);
-    for (day, (subject, count)) in subjects.iter().zip(counts.iter()).enumerate() {
+    // Flatten the counts into exactly seven daily slots ordered by the week
+    // day, one subject per day (dates strictly inside the week).
+    let mut slots: Vec<&SubjectWeightRow> = Vec::with_capacity(WEEK_DAYS);
+    for (subject, count) in subjects.iter().zip(counts.iter()) {
         for _ in 0..*count {
-            let date = week_start + chrono::Days::new(day as u64);
-            rows.push(PlanGenerateRow {
-                date: date.format("%Y-%m-%d").to_string(),
-                subject_id: subject.id.clone(),
-                subject_name: subject.name.clone(),
-                planned_duration: capacity,
-                planned_tasks: format!("按计划复习《{}》", subject.name),
-            });
+            slots.push(subject);
         }
     }
-    rows.sort_by(|a, b| a.date.cmp(&b.date));
+    let mut rows = Vec::with_capacity(WEEK_DAYS);
+    for (day, subject) in slots.iter().take(WEEK_DAYS).enumerate() {
+        let date = week_start + chrono::Days::new(day as u64);
+        rows.push(PlanGenerateRow {
+            date: date.format("%Y-%m-%d").to_string(),
+            subject_id: subject.id.clone(),
+            subject_name: subject.name.clone(),
+            planned_duration: capacity,
+            planned_tasks: format!("按计划复习《{}》", subject.name),
+        });
+    }
 
     for row in &rows {
         sqlx::query(

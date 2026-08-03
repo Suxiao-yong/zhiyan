@@ -172,6 +172,30 @@ pub async fn create_free(
         }
         _ => {}
     }
+    // The knowledge point, when provided, must belong to the same subject.
+    if let Some(kp_id) = &input.knowledge_point_id {
+        let kp_subject: Option<String> =
+            sqlx::query_scalar("SELECT subject_id FROM knowledge_points WHERE id = ?")
+                .bind(kp_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(|_| {
+                    AgentError::Persistence("record.create_free kp check failed".to_owned())
+                })?;
+        match kp_subject {
+            Some(subject_id) if subject_id == input.subject_id => {}
+            Some(_) => {
+                return Err(AgentError::Persistence(
+                    "knowledge point not in subject".to_owned(),
+                ))
+            }
+            None => {
+                return Err(AgentError::Persistence(
+                    "knowledge point not found".to_owned(),
+                ))
+            }
+        }
+    }
     let id = Uuid::new_v4().to_string();
     sqlx::query(
         r#"

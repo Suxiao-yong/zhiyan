@@ -668,6 +668,33 @@ mod tests {
                 .unwrap();
         assert!(math_days > english_days);
         assert_eq!(math_days + english_days, 7);
+
+        // The seven rows land on seven distinct days inside the week, with the
+        // heavier subject spanning the first five days.
+        let distinct_dates: Vec<String> =
+            sqlx::query_scalar("SELECT DISTINCT date FROM study_plans ORDER BY date")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(distinct_dates.len(), 7);
+        assert_eq!(distinct_dates.first().unwrap(), "2026-07-13");
+        assert_eq!(distinct_dates.last().unwrap(), "2026-07-19");
+        let math_dates: Vec<String> = sqlx::query_scalar(
+            "SELECT date FROM study_plans WHERE subject_id='sub-g1' ORDER BY date",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            math_dates,
+            vec![
+                "2026-07-13".to_owned(),
+                "2026-07-14".to_owned(),
+                "2026-07-15".to_owned(),
+                "2026-07-16".to_owned(),
+                "2026-07-17".to_owned(),
+            ]
+        );
     }
 
     #[tokio::test]
