@@ -116,11 +116,16 @@
 
 ## M6 Parity & Production（打包后手测）
 
-- [ ] `/agent` 右栏工作台切换：计划打卡 / 学习计划 / 记录与错题 / AI 分析 / 数据可视化 五个 tab 均可挂载，切换不丢对话。
-- [ ] 首页默认进 `/agent`；设置页"Agent 工作台"开关关闭并重启后首页进旧仪表盘（`/dashboard`），恢复旧分析路径。
-- [ ] Agent Debug 页工具列表显示 9 个工具：`exam.get_active`、`plan.get_range`、`record.get_history`、`record.create_free`、`wrong_question.create`、`wrong_question.mark_mastered`、`plan.generate` 均为 rust-owned。
-- [ ] 通过 Agent Debug 执行 `plan.generate`：首次返回摘要；开启 `agent_r2_auto_execute` 后执行写入 7 天计划；同周重跑不重复生成。
-- [ ] 执行 `record.create_free` 后 `record.get_history` 能读到；错题创建后 `mark_mastered` 生效。
-- [ ] Windows 升级演练：旧版本数据目录直接覆盖安装新版本，`agent_*` 表保留、无重复通知；迁移均 additive（v1→v9）。
-- [ ] 24h 常驻：托盘提醒按时、简报卡正常、无重复每日简报；重启后代理计划/记忆/会话完整。
-- [ ] 回滚演练：备份数据目录后降级到上一版本安装包，数据可打开（migration forward-only 保证）。
+### 2026-08-04 真机验证（release exe + NSIS setup + CDP 驱动）
+
+- [x] 干净库启动：全新数据目录初始化 v1→v10 无 panic，WebView 加载引导页。
+- [x] 首页路由：`agent_os_enabled` 默认(未设/1) → `/` 进 `/agent`（三栏壳：侧栏/对话/简报/审批/五工作台）。
+- [x] 回退开关：设置 `agent_os_enabled=0` 重启 → 进 `/dashboard`（旧界面 + 恢复旧分析路径）；恢复 `1` 后回 `/agent`。
+- [x] 工作台切换：计划打卡/学习计划/记录与错题/AI 分析/数据可视化 五 tab 点击挂载正确，切换不丢对话。
+- [x] Agent Debug 工具列表：9 个工具卡片齐全（`exam.get_active`/`plan.get_range`/`record.get_history` R0、`record.create_free`/`wrong_question.*` R1、`plan.generate` R2，均 rust-owned），健康状态可用。
+- [x] 对话链路：发送消息 → 创建会话 + run → planner 本地降级回复（"no llm provider configured"）→ 消息持久化（`agent_sessions` 1 / `agent_messages` 2 / `agent_runs` 1）。
+- [x] Windows 安装：`智研_0.1.0_x64-setup.exe` 静默安装成功（zhiyan.exe 26MB + uninstall.exe），安装版启动正常（窗口标题正确），卸载清理无注册表残留。
+- [x] 升级演练：自动化覆盖 v1→v10 文件库升级数据保留（`file_databases_from_v1_through_v4` / `prepared_restore_replaces_with_v4_backup` 测试）。**手测发现并修复真实升级 bug**：v4/v5 迁移曾被打补丁（新增表/seed）导致老库启动 panic（101），已恢复不可变迁移并把 M6 seed 移至 v10（`d61defe`）。
+- [ ] 通过 Agent Debug 执行 `plan.generate`：首次返回摘要；开启 `agent_r2_auto_execute` 后执行写入 7 天计划；同周重跑不重复生成。（debug 页暂无 generate 执行控件，链路由 Rust 测试 `plan_generate_is_approval_gated_and_idempotent_per_week` 覆盖；待补 debug 控件后真机复验。）
+- [ ] 24h 常驻：托盘提醒按时、简报卡正常、无重复每日简报；重启后代理计划/记忆/会话完整。（待长时间运行复验。）
+- [ ] 回滚演练：备份数据目录后降级到上一版本安装包，数据可打开。（上一版本无发布安装包，待首个发布后执行。）
