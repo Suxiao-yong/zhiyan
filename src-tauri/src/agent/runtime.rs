@@ -823,5 +823,27 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), "persistence_error");
+        sqlx::query("UPDATE agent_runs SET status='running', current_step=3 WHERE id='run-tool'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // wrong_question.create also rejects a cross-subject knowledge point.
+        let err = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 3,
+                tool_name: "wrong_question.create".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "subject_id":"sub-k2","knowledge_point_id":"kp-k1",
+                    "question_desc":"跨科目错题"
+                }),
+                idempotency_key: Some("kw-1".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "persistence_error");
     }
 }
