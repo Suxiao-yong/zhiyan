@@ -314,12 +314,24 @@ async fn assert_v5_database(pool: &SqlitePool, label: &str, expected_agent_rows:
         owners,
         [
             (
+                "agent_tool_owner.exam.get_active".to_owned(),
+                "rust-owned".to_owned()
+            ),
+            (
+                "agent_tool_owner.plan.get_range".to_owned(),
+                "rust-owned".to_owned()
+            ),
+            (
                 "agent_tool_owner.plan.get_today".to_owned(),
                 "shadow".to_owned()
             ),
             (
                 "agent_tool_owner.record.checkin_plan".to_owned(),
                 "typescript".to_owned()
+            ),
+            (
+                "agent_tool_owner.record.get_history".to_owned(),
+                "rust-owned".to_owned()
             )
         ]
     );
@@ -1858,9 +1870,23 @@ fn executor_lists_dynamic_ownership_and_fails_closed() {
             .unwrap();
 
         let listed = executor.list_tools().await.unwrap();
-        assert!(listed.iter().all(|tool| {
-            tool.ownership == zhiyan_lib::agent::tools::ToolOwnership::Unavailable
-        }));
+        // Missing (plan.get_today) and invalid (record.checkin_plan) ownership
+        // values fail closed; the three M6 query tools stay rust-owned.
+        assert!(listed
+            .iter()
+            .filter(|tool| {
+                tool.descriptor.name == "plan.get_today"
+                    || tool.descriptor.name == "record.checkin_plan"
+            })
+            .all(|tool| tool.ownership == zhiyan_lib::agent::tools::ToolOwnership::Unavailable));
+        assert!(listed
+            .iter()
+            .filter(|tool| {
+                tool.descriptor.name == "exam.get_active"
+                    || tool.descriptor.name == "plan.get_range"
+                    || tool.descriptor.name == "record.get_history"
+            })
+            .all(|tool| tool.ownership == zhiyan_lib::agent::tools::ToolOwnership::RustOwned));
 
         sqlx::query("DROP TABLE settings")
             .execute(&pool)

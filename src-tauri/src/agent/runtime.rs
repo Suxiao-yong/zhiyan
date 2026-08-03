@@ -231,7 +231,7 @@ mod tests {
     async fn runtime_is_the_public_tool_execution_boundary() {
         let (runtime, pool) = test_runtime().await;
         let listed = runtime.list_tools().await.unwrap();
-        assert_eq!(listed.len(), 2);
+        assert_eq!(listed.len(), 5);
         assert_eq!(
             listed
                 .iter()
@@ -284,5 +284,101 @@ mod tests {
             runtime.undo_tool("missing-step").await.unwrap_err().code(),
             "not_found"
         );
+    }
+
+    #[tokio::test]
+    async fn query_tools_read_the_active_exam_range_and_history() {
+        let (runtime, pool) = test_runtime().await;
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO exams(id,name,exam_date) VALUES('exam-q','Q','2030-01-01');
+            INSERT INTO subjects(id,exam_id,name) VALUES('sub-q','exam-q','数学');
+            INSERT INTO study_plans(id,exam_id,subject_id,date,planned_duration,status)
+            VALUES('plan-q','exam-q','sub-q','2026-07-18',60,'pending');
+            INSERT INTO study_records(id,date,subject_id,duration_min,questions_count,correct_count)
+            VALUES('rec-q','2026-07-18','sub-q',30,5,4);
+            INSERT INTO agent_sessions(id,title) VALUES('session-tool','Tool');
+            INSERT INTO agent_runs(id,session_id,goal,status)
+            VALUES('run-tool','session-tool','Tool','running');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // exam.get_active: no active-exam setting, so the latest exam wins.
+        let response = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 0,
+                tool_name: "exam.get_active".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let output = match response {
+            ToolCallResponse::Completed { output, .. } => output,
+            other => panic!("expected completed, got {other:?}"),
+        };
+        assert_eq!(output["exam_id"], "exam-q");
+        assert_eq!(output["subjects"][0]["name"], "数学");
+
+        // plan.get_range: plans within the interval.
+        let response = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 1,
+                tool_name: "plan.get_range".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"exam_id":"exam-q","start_date":"2026-07-01","end_date":"2026-07-31"}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let output = match response {
+            ToolCallResponse::Completed { output, .. } => output,
+            other => panic!("expected completed, got {other:?}"),
+        };
+        assert_eq!(output["plans"][0]["id"], "plan-q");
+
+        // record.get_history: newest record with subject name.
+        let response = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 2,
+                tool_name: "record.get_history".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"exam_id":"exam-q"}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let output = match response {
+            ToolCallResponse::Completed { output, .. } => output,
+            other => panic!("expected completed, got {other:?}"),
+        };
+        assert_eq!(output["records"][0]["id"], "rec-q");
+        assert_eq!(output["records"][0]["subject_name"], "数学");
+        assert_eq!(output["records"][0]["duration_min"], 30);
+
+        // Range validation: inverted dates are schema-invalid.
+        let err = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 3,
+                tool_name: "plan.get_range".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"exam_id":"exam-q","start_date":"2026-07-31","end_date":"2026-07-01"}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "tool_schema_invalid");
     }
 }

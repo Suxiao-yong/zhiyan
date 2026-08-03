@@ -648,10 +648,15 @@ mod tests {
     async fn tool_offering_defaults_to_shadow_reads_only() {
         let (planner, _pool) = planner().await;
         let offering = planner.tool_offering().await.unwrap();
-        assert_eq!(offering.len(), 1);
-        assert_eq!(offering[0]["function"]["name"], "plan.get_today");
-        assert_eq!(offering[0]["function"]["parameters"]["type"], "object");
-        let description = offering[0]["function"]["description"].as_str().unwrap();
+        // plan.get_today (shadow) plus the three new rust-owned query tools;
+        // the typescript-owned check-in is not offered.
+        assert_eq!(offering.len(), 4);
+        let today = offering
+            .iter()
+            .find(|t| t["function"]["name"] == "plan.get_today")
+            .expect("plan.get_today must be offered");
+        assert_eq!(today["function"]["parameters"]["type"], "object");
+        let description = today["function"]["description"].as_str().unwrap();
         assert!(!description.contains("idempotency key is supplied"));
     }
 

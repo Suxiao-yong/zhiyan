@@ -41,6 +41,62 @@ pub struct PlanGetTodayOutput {
     pub plans: Vec<PlanWithNames>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanGetRangeInput {
+    pub exam_id: String,
+    pub start_date: String,
+    pub end_date: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanGetRangeOutput {
+    pub start_date: String,
+    pub end_date: String,
+    pub plans: Vec<PlanWithNames>,
+}
+
+/// `plan.get_range` lists plans in a date interval (inclusive).
+pub async fn get_range<'e, E>(
+    executor: E,
+    input: PlanGetRangeInput,
+) -> Result<PlanGetRangeOutput, AgentError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    if input.start_date > input.end_date {
+        return Err(AgentError::ToolSchemaInvalid);
+    }
+    let plans = sqlx::query_as::<_, PlanWithNames>(
+        r#"
+        SELECT
+            p.id, p.exam_id, p.subject_id, p.knowledge_point_id, p.date,
+            p.planned_tasks, p.planned_duration, p.actual_duration, p.actual_tasks,
+            p.status, p.generated_by, p.ai_suggestion, p.user_modified, p.sort_order,
+            p.created_at, p.updated_at,
+            s.name AS subject_name, k.name AS knowledge_point_name,
+            COUNT(r.id) AS record_count
+        FROM study_plans p
+        LEFT JOIN subjects s ON s.id = p.subject_id
+        LEFT JOIN knowledge_points k ON k.id = p.knowledge_point_id
+        LEFT JOIN study_records r ON r.plan_id = p.id
+        WHERE p.exam_id = ? AND p.date BETWEEN ? AND ?
+        GROUP BY p.id
+        ORDER BY p.date, p.sort_order, p.created_at
+        "#,
+    )
+    .bind(&input.exam_id)
+    .bind(&input.start_date)
+    .bind(&input.end_date)
+    .fetch_all(executor)
+    .await
+    .map_err(|_| AgentError::Persistence("plan.get_range query failed".to_owned()))?;
+    Ok(PlanGetRangeOutput {
+        start_date: input.start_date,
+        end_date: input.end_date,
+        plans,
+    })
+}
+
 pub fn business_date_at(now: DateTime<FixedOffset>) -> String {
     let date = if now.hour() < 4 {
         now.date_naive() - Duration::days(1)
@@ -163,6 +219,42 @@ pub fn descriptor() -> ToolDescriptor {
         version: "1",
         input_schema: json!({"type":"object", "additionalProperties":false, "required":["exam_id"], "properties":{"exam_id":{"type":"string","minLength":1}}}),
         output_schema: json!({"type":"object", "additionalProperties":false, "required":["business_date","plans"], "properties":{"business_date":{"type":"string"},"plans":{"type":"array","items":plan_schema}}}),
+        risk: RiskLevel::R0,
+        confirmation: Confirmation::Automatic,
+        supports_undo: false,
+        timeout_ms: 2000,
+        idempotency: Idempotency::RetrySafe,
+        data_permissions: vec![
+            "study_plans:read",
+            "subjects:read",
+            "knowledge_points:read",
+            "study_records:aggregate",
+        ],
+    }
+}
+
+pub fn get_range_descriptor() -> ToolDescriptor {
+    ToolDescriptor {
+        name: "plan.get_range",
+        version: "1",
+        input_schema: json!({
+            "type":"object", "additionalProperties":false,
+            "required":["exam_id","start_date","end_date"],
+            "properties":{
+                "exam_id":{"type":"string","minLength":1},
+                "start_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},
+                "end_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}
+            }
+        }),
+        output_schema: json!({
+            "type":"object", "additionalProperties":false,
+            "required":["start_date","end_date","plans"],
+            "properties":{
+                "start_date":{"type":"string"},
+                "end_date":{"type":"string"},
+                "plans":{"type":"array","items":{"type":"object"}}
+            }
+        }),
         risk: RiskLevel::R0,
         confirmation: Confirmation::Automatic,
         supports_undo: false,

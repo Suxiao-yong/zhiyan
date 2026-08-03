@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{Sqlite, Transaction};
+use sqlx::{Executor, FromRow, Sqlite, Transaction};
 use uuid::Uuid;
 
 use super::{Confirmation, Idempotency, RiskLevel, ToolDescriptor};
@@ -57,6 +57,102 @@ struct CheckinPlanRow {
     subject_id: String,
     knowledge_point_id: Option<String>,
     status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordGetHistoryInput {
+    pub exam_id: String,
+    #[serde(default = "default_history_limit")]
+    pub limit: i64,
+}
+
+fn default_history_limit() -> i64 {
+    20
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct RecordHistoryRow {
+    pub id: String,
+    pub date: String,
+    pub subject_id: String,
+    pub subject_name: Option<String>,
+    pub knowledge_point_id: Option<String>,
+    pub knowledge_point_name: Option<String>,
+    pub duration_min: i64,
+    pub content: Option<String>,
+    pub questions_count: i64,
+    pub correct_count: i64,
+    pub mastery_rating: Option<i64>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecordGetHistoryOutput {
+    pub records: Vec<RecordHistoryRow>,
+}
+
+/// `record.get_history` (R0): the most recent study records of an exam with
+/// subject/knowledge-point names, newest first.
+pub async fn get_history<'e, E>(
+    executor: E,
+    input: RecordGetHistoryInput,
+) -> Result<RecordGetHistoryOutput, AgentError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let records = sqlx::query_as::<_, RecordHistoryRow>(
+        r#"
+        SELECT
+            r.id, r.date, r.subject_id, s.name AS subject_name,
+            r.knowledge_point_id, k.name AS knowledge_point_name,
+            COALESCE(r.duration_min, 0) AS duration_min, r.content,
+            COALESCE(r.questions_count, 0) AS questions_count,
+            COALESCE(r.correct_count, 0) AS correct_count,
+            r.mastery_rating, r.created_at
+        FROM study_records r
+        JOIN subjects s ON s.id = r.subject_id
+        LEFT JOIN knowledge_points k ON k.id = r.knowledge_point_id
+        WHERE s.exam_id = ?
+        ORDER BY r.date DESC, r.created_at DESC, r.rowid DESC
+        LIMIT ?
+        "#,
+    )
+    .bind(&input.exam_id)
+    .bind(input.limit.clamp(1, 100))
+    .fetch_all(executor)
+    .await
+    .map_err(|_| AgentError::Persistence("record.get_history query failed".to_owned()))?;
+    Ok(RecordGetHistoryOutput { records })
+}
+
+pub fn get_history_descriptor() -> ToolDescriptor {
+    ToolDescriptor {
+        name: "record.get_history",
+        version: "1",
+        input_schema: json!({
+            "type":"object", "additionalProperties":false,
+            "required":["exam_id"],
+            "properties":{
+                "exam_id":{"type":"string","minLength":1},
+                "limit":{"type":"integer","minimum":1,"maximum":100}
+            }
+        }),
+        output_schema: json!({
+            "type":"object", "additionalProperties":false,
+            "required":["records"],
+            "properties":{"records":{"type":"array","items":{"type":"object"}}}
+        }),
+        risk: RiskLevel::R0,
+        confirmation: Confirmation::Automatic,
+        supports_undo: false,
+        timeout_ms: 2000,
+        idempotency: Idempotency::RetrySafe,
+        data_permissions: vec![
+            "study_records:read",
+            "subjects:read",
+            "knowledge_points:read",
+        ],
+    }
 }
 
 pub async fn checkin_plan(

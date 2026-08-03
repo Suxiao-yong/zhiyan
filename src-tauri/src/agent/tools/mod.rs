@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::agent::error::AgentError;
 
+pub mod exam;
 pub mod plan;
 pub mod record;
 
@@ -77,7 +78,13 @@ pub struct ToolRegistry {
 impl ToolRegistry {
     pub fn built_in() -> Self {
         let mut tools = BTreeMap::new();
-        for descriptor in [plan::descriptor(), record::descriptor()] {
+        for descriptor in [
+            plan::descriptor(),
+            plan::get_range_descriptor(),
+            record::descriptor(),
+            record::get_history_descriptor(),
+            exam::descriptor(),
+        ] {
             tools.insert(descriptor.name, descriptor);
         }
         Self { tools }
@@ -143,7 +150,16 @@ mod tests {
         let registry = ToolRegistry::built_in();
         let descriptors = registry.descriptors();
         let names: Vec<_> = descriptors.iter().map(|d| d.name).collect();
-        assert_eq!(names, ["plan.get_today", "record.checkin_plan"]);
+        assert_eq!(
+            names,
+            [
+                "exam.get_active",
+                "plan.get_range",
+                "plan.get_today",
+                "record.checkin_plan",
+                "record.get_history"
+            ]
+        );
         for descriptor in descriptors {
             assert_eq!(descriptor.version, "1");
             assert!(descriptor.timeout_ms > 0);

@@ -13,8 +13,9 @@ use super::{
     model::{ApprovalRecord, ToolCallRequest, ToolCallResponse},
     policy::{self, PolicyContext, PolicyDecision},
     tools::{
-        plan::{self, PlanGetTodayInput},
-        record::{self, RecordCheckinPlanInput, RecordCheckinPlanOutput},
+        exam,
+        plan::{self, PlanGetRangeInput, PlanGetTodayInput},
+        record::{self, RecordCheckinPlanInput, RecordCheckinPlanOutput, RecordGetHistoryInput},
         Idempotency, ListedTool, RiskLevel, ToolDescriptor, ToolOwnership, ToolRegistry,
     },
 };
@@ -710,6 +711,42 @@ impl ToolDispatcher {
                         output: serde_json::to_value(output)
                             .map_err(|_| AgentError::ToolSchemaInvalid)?,
                         receipt: Some(json!({"delivery":delivery})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "plan.get_range" => {
+                    let input: PlanGetRangeInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = plan::get_range(&mut **tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "record.get_history" => {
+                    let input: RecordGetHistoryInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = record::get_history(&mut **tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "exam.get_active" => {
+                    let _: Value =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = exam::get_active(tx).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
                         undo: None,
                         undo_available: false,
                     })
