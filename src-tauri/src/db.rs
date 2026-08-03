@@ -565,6 +565,31 @@ mod tests {
     }
 
     #[test]
+    fn migrations_are_forward_only_and_never_drop_data() {
+        // M6 Task 7 upgrade matrix: every migration must be additive. Drop or
+        // rename of existing tables/columns is forbidden so a downgrade to the
+        // previous release keeps user data intact.
+        let destructive_patterns = [
+            "DROP TABLE",
+            "DROP COLUMN",
+            "RENAME TO",
+            "TRUNCATE",
+            "DELETE FROM",
+        ];
+        for migration in migrations() {
+            let upper = migration.sql.to_uppercase();
+            for pattern in destructive_patterns {
+                assert!(
+                    !upper.contains(pattern),
+                    "migration v{} must not contain {pattern}: {}",
+                    migration.version,
+                    migration.sql.lines().next().unwrap_or_default()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn migration_v5_adds_tool_receipts_and_ownership_flags() {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()

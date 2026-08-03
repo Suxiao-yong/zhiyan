@@ -113,3 +113,14 @@
 - [ ] 运行状态 pill 反映 queued/running/waiting_approval/completed；运行中可取消。
 - [ ] 右栏计划打卡工作台可加载当日计划并完成打卡（与 /study-record 行为一致）。
 - [ ] 侧栏工作台深链（仪表盘/学习计划/学习记录/Agent 调试）可跳转，原页面正常。
+
+## M6 Parity & Production（打包后手测）
+
+- [ ] `/agent` 右栏工作台切换：计划打卡 / 学习计划 / 记录与错题 / AI 分析 / 数据可视化 五个 tab 均可挂载，切换不丢对话。
+- [ ] 首页默认进 `/agent`；设置页"Agent 工作台"开关关闭并重启后首页进旧仪表盘（`/dashboard`），恢复旧分析路径。
+- [ ] Agent Debug 页工具列表显示 9 个工具：`exam.get_active`、`plan.get_range`、`record.get_history`、`record.create_free`、`wrong_question.create`、`wrong_question.mark_mastered`、`plan.generate` 均为 rust-owned。
+- [ ] 通过 Agent Debug 执行 `plan.generate`：首次返回摘要；开启 `agent_r2_auto_execute` 后执行写入 7 天计划；同周重跑不重复生成。
+- [ ] 执行 `record.create_free` 后 `record.get_history` 能读到；错题创建后 `mark_mastered` 生效。
+- [ ] Windows 升级演练：旧版本数据目录直接覆盖安装新版本，`agent_*` 表保留、无重复通知；迁移均 additive（v1→v9）。
+- [ ] 24h 常驻：托盘提醒按时、简报卡正常、无重复每日简报；重启后代理计划/记忆/会话完整。
+- [ ] 回滚演练：备份数据目录后降级到上一版本安装包，数据可打开（migration forward-only 保证）。

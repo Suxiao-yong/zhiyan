@@ -281,6 +281,11 @@ where
     if input.start_date > input.end_date {
         return Err(AgentError::ToolSchemaInvalid);
     }
+    if input.start_date.parse::<chrono::NaiveDate>().is_err()
+        || input.end_date.parse::<chrono::NaiveDate>().is_err()
+    {
+        return Err(AgentError::ToolSchemaInvalid);
+    }
     let plans = sqlx::query_as::<_, PlanWithNames>(
         r#"
         SELECT
