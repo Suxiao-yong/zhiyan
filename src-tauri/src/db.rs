@@ -55,14 +55,7 @@ pub fn migrations() -> Vec<Migration> {
                 CREATE INDEX IF NOT EXISTS idx_agent_steps_tool_status ON agent_steps(tool_name, status);
                 INSERT OR IGNORE INTO settings (key, value, description) VALUES
                     ('agent_tool_owner.plan.get_today','shadow','typescript|shadow|rust-owned; controls plan.get_today delivery'),
-                    ('agent_tool_owner.record.checkin_plan','typescript','typescript|shadow|rust-owned; controls record.checkin_plan writes'),
-                    ('agent_tool_owner.exam.get_active','rust-owned','M6 query tool; rust-owned by default'),
-                    ('agent_tool_owner.plan.get_range','rust-owned','M6 query tool; rust-owned by default'),
-                    ('agent_tool_owner.record.get_history','rust-owned','M6 query tool; rust-owned by default'),
-                    ('agent_tool_owner.record.create_free','rust-owned','M6 write tool; rust-owned by default'),
-                    ('agent_tool_owner.wrong_question.create','rust-owned','M6 write tool; rust-owned by default'),
-                    ('agent_tool_owner.wrong_question.mark_mastered','rust-owned','M6 write tool; rust-owned by default'),
-                    ('agent_tool_owner.plan.generate','rust-owned','M6 R2 tool; rust-owned by default');
+                    ('agent_tool_owner.record.checkin_plan','typescript','typescript|shadow|rust-owned; controls record.checkin_plan writes');
             "#,
             kind: MigrationKind::Up,
         },
@@ -88,6 +81,24 @@ pub fn migrations() -> Vec<Migration> {
             version: 9,
             description: "add agent message table for the agent os conversation",
             sql: AGENT_MESSAGES_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 10,
+            description: "seed M6 tool ownership and restore memories updated_at trigger",
+            sql: r#"
+                INSERT OR IGNORE INTO settings (key, value, description) VALUES
+                    ('agent_tool_owner.exam.get_active','rust-owned','M6 query tool; rust-owned by default'),
+                    ('agent_tool_owner.plan.get_range','rust-owned','M6 query tool; rust-owned by default'),
+                    ('agent_tool_owner.record.get_history','rust-owned','M6 query tool; rust-owned by default'),
+                    ('agent_tool_owner.record.create_free','rust-owned','M6 write tool; rust-owned by default'),
+                    ('agent_tool_owner.wrong_question.create','rust-owned','M6 write tool; rust-owned by default'),
+                    ('agent_tool_owner.wrong_question.mark_mastered','rust-owned','M6 write tool; rust-owned by default'),
+                    ('agent_tool_owner.plan.generate','rust-owned','M6 R2 tool; rust-owned by default');
+                CREATE TRIGGER IF NOT EXISTS trg_agent_memories_updated AFTER UPDATE ON agent_memories
+                    FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
+                    BEGIN UPDATE agent_memories SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
+            "#,
             kind: MigrationKind::Up,
         },
     ]
@@ -345,76 +356,12 @@ CREATE INDEX IF NOT EXISTS idx_agent_steps_run_index ON agent_steps(run_id, step
 CREATE INDEX IF NOT EXISTS idx_agent_events_run_id ON agent_events(run_id, id);
 CREATE INDEX IF NOT EXISTS idx_agent_approvals_status_expires ON agent_approvals(status, expires_at);
 
-CREATE TABLE IF NOT EXISTS agent_context_audit (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
-    call_seq INTEGER NOT NULL,
-    purpose TEXT NOT NULL,
-    local INTEGER NOT NULL DEFAULT 0,
-    prompt_tokens INTEGER NOT NULL DEFAULT 0,
-    completion_tokens INTEGER NOT NULL DEFAULT 0,
-    tools_offered_json TEXT NOT NULL DEFAULT '[]',
-    categories_json TEXT NOT NULL DEFAULT '[]',
-    record_ids_json TEXT NOT NULL DEFAULT '{}',
-    field_sets_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-CREATE INDEX IF NOT EXISTS idx_agent_context_audit_run ON agent_context_audit(run_id, call_seq);
-
-CREATE TABLE IF NOT EXISTS agent_memories (
-    id TEXT PRIMARY KEY,
-    exam_id TEXT REFERENCES exams(id) ON DELETE SET NULL,
-    memory_type TEXT NOT NULL CHECK(memory_type IN ('schedule_preference','daily_capacity','subject_preference','learning_constraint','reminder_preference','strategy_preference','confirmed_weakness')),
-    content TEXT NOT NULL,
-    source TEXT NOT NULL CHECK(source IN ('user_statement','behavior_inferred','model_candidate')),
-    confidence REAL NOT NULL DEFAULT 0.5 CHECK(confidence BETWEEN 0 AND 1),
-    status TEXT NOT NULL DEFAULT 'candidate' CHECK(status IN ('candidate','confirmed','inactive')),
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    last_used_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_agent_memories_exam_type_status ON agent_memories(exam_id, memory_type, status);
-CREATE INDEX IF NOT EXISTS idx_agent_memories_status_last_used ON agent_memories(status, last_used_at);
-
-CREATE TABLE IF NOT EXISTS agent_jobs (
-    id TEXT PRIMARY KEY,
-    job_type TEXT NOT NULL CHECK(job_type IN ('daily_brief','task_reminder','overdue_check','weekly_report','retry_failed','cleanup_failed')),
-    dedup_key TEXT NOT NULL,
-    scheduled_at TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'scheduled' CHECK(status IN ('scheduled','running','completed','failed','paused')),
-    last_result TEXT,
-    retry_at TEXT,
-    runs INTEGER NOT NULL DEFAULT 0,
-    last_run_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    UNIQUE(dedup_key)
-);
-CREATE INDEX IF NOT EXISTS idx_agent_jobs_status_scheduled ON agent_jobs(status, scheduled_at);
-CREATE INDEX IF NOT EXISTS idx_agent_jobs_status_retry ON agent_jobs(status, retry_at);
-
-CREATE TABLE IF NOT EXISTS agent_messages (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
-    run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
-    role TEXT NOT NULL CHECK(role IN ('user','assistant','system')),
-    text TEXT NOT NULL,
-    content_json TEXT,
-    prompt_tokens INTEGER NOT NULL DEFAULT 0,
-    completion_tokens INTEGER NOT NULL DEFAULT 0,
-    model TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
-);
-CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_id, created_at);
-
 CREATE TRIGGER IF NOT EXISTS trg_agent_sessions_updated AFTER UPDATE ON agent_sessions
     FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
     BEGIN UPDATE agent_sessions SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
 CREATE TRIGGER IF NOT EXISTS trg_agent_runs_updated AFTER UPDATE ON agent_runs
     FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
     BEGIN UPDATE agent_runs SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
-CREATE TRIGGER IF NOT EXISTS trg_agent_memories_updated AFTER UPDATE ON agent_memories
-    FOR EACH ROW WHEN NEW.updated_at = OLD.updated_at
-    BEGIN UPDATE agent_memories SET updated_at = datetime('now','localtime') WHERE id = NEW.id; END;
 "#;
 
 /// Dedicated model-call data provenance table (M3 Part 3). Records, per model
@@ -530,21 +477,16 @@ mod tests {
 
     #[test]
     fn agent_schema_contains_required_tables_and_constraints() {
+        // v4 carries the five core runtime tables; the audit/memory/jobs/
+        // messages tables live in their own v6-v9 migrations.
         for required_fragment in [
             "agent_sessions",
             "agent_runs",
             "agent_steps",
             "agent_events",
             "agent_approvals",
-            "agent_context_audit",
-            "agent_memories",
-            "agent_jobs",
-            "agent_messages",
             "UNIQUE(idempotency_key)",
             "waiting_approval",
-            "schedule_preference",
-            "confirmed_weakness",
-            "candidate",
         ] {
             assert!(
                 AGENT_SCHEMA_SQL.contains(required_fragment),
@@ -561,7 +503,7 @@ mod tests {
             .collect();
 
         assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(versions.last(), Some(&9));
+        assert_eq!(versions.last(), Some(&10));
     }
 
     #[test]
@@ -689,7 +631,7 @@ mod tests {
                 );
                 assert_eq!(
                     migration_list.last().map(|migration| migration.version),
-                    Some(9)
+                    Some(10)
                 );
             });
     }
@@ -1009,6 +951,57 @@ mod tests {
             });
     }
 
+    #[test]
+    fn migration_v10_seeds_m6_tools_and_memories_trigger() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                // A v9-era database: run everything through v9, then v10.
+                for migration in &migrations() {
+                    sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+                }
+
+                // M6 tool ownership rows are seeded by v10.
+                let tool_keys: Vec<String> = sqlx::query_scalar(
+                    "SELECT key FROM settings WHERE key LIKE 'agent_tool_owner.%' ORDER BY key",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+                for key in [
+                    "agent_tool_owner.exam.get_active",
+                    "agent_tool_owner.plan.get_range",
+                    "agent_tool_owner.record.get_history",
+                    "agent_tool_owner.record.create_free",
+                    "agent_tool_owner.wrong_question.create",
+                    "agent_tool_owner.wrong_question.mark_mastered",
+                    "agent_tool_owner.plan.generate",
+                ] {
+                    assert!(
+                        tool_keys.iter().any(|actual| actual == key),
+                        "{key} must be seeded by v10"
+                    );
+                }
+
+                // The memories updated_at trigger exists after v10.
+                let trigger_count: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM sqlite_master \
+                     WHERE type='trigger' AND name='trg_agent_memories_updated'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(trigger_count, 1);
+            });
+    }
+
     async fn seed_v4_rows(pool: &sqlx::SqlitePool) {
         sqlx::raw_sql(
             r#"
@@ -1155,7 +1148,6 @@ mod tests {
                     "agent_steps",
                     "agent_events",
                     "agent_approvals",
-                    "agent_context_audit",
                 ] {
                     assert!(tables.iter().any(|table| table == expected_table));
                 }

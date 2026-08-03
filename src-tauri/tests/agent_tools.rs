@@ -2443,7 +2443,7 @@ fn file_databases_from_v1_through_v4_upgrade_once_and_reopen_through_both_pools(
             drop(seed_pool);
 
             let plugin_pool = database.open_pool().await;
-            migrator_through(5).run(&plugin_pool).await.unwrap();
+            migrator_through(10).run(&plugin_pool).await.unwrap();
             let runtime_pool = db::runtime::connect(&database.path).await.unwrap();
             assert_v5_database(&plugin_pool, &label, i64::from(version == 4)).await;
             assert_v5_database(&runtime_pool, &label, i64::from(version == 4)).await;
@@ -2456,7 +2456,7 @@ fn file_databases_from_v1_through_v4_upgrade_once_and_reopen_through_both_pools(
                 .unwrap(),
                 1
             );
-            migrator_through(5).run(&plugin_pool).await.unwrap();
+            migrator_through(10).run(&plugin_pool).await.unwrap();
             assert_eq!(
                 sqlx::query_scalar::<_, i64>(
                     "SELECT COUNT(*) FROM _sqlx_migrations WHERE version=5 AND success=1"
@@ -2492,7 +2492,7 @@ fn prepared_restore_replaces_with_v4_backup_and_relaunch_upgrades_it_once() {
         drop(backup_pool);
 
         let plugin_pool = primary.open_pool().await;
-        migrator_through(5).run(&plugin_pool).await.unwrap();
+        migrator_through(10).run(&plugin_pool).await.unwrap();
         seed_versioned_database(&plugin_pool, 5, "primary").await;
         let runtime_pool = db::runtime::connect(&primary.path).await.unwrap();
         let runtime = AgentRuntime::new(
@@ -2511,7 +2511,7 @@ fn prepared_restore_replaces_with_v4_backup_and_relaunch_upgrades_it_once() {
         std::fs::copy(&backup.path, &primary.path).unwrap();
 
         let relaunched_plugin = primary.open_pool().await;
-        migrator_through(5).run(&relaunched_plugin).await.unwrap();
+        migrator_through(10).run(&relaunched_plugin).await.unwrap();
         let relaunched_runtime = db::runtime::connect(&primary.path).await.unwrap();
         assert_v5_database(&relaunched_plugin, "backup", 1).await;
         assert_v5_database(&relaunched_runtime, "backup", 1).await;
@@ -2524,7 +2524,7 @@ fn prepared_restore_replaces_with_v4_backup_and_relaunch_upgrades_it_once() {
             .unwrap(),
             0
         );
-        migrator_through(5).run(&relaunched_plugin).await.unwrap();
+        migrator_through(10).run(&relaunched_plugin).await.unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM _sqlx_migrations WHERE version=5 AND success=1"
