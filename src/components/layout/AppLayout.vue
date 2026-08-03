@@ -9,6 +9,7 @@ import {
   TrendCharts,
   DataLine,
   Setting,
+  Monitor,
   Fold,
   Expand,
   Moon,
@@ -33,6 +34,7 @@ const menuItems: MenuItem[] = [
   { index: '/study-plan', label: '学习计划', icon: Calendar },
   { index: '/analysis', label: 'AI 分析', icon: TrendCharts },
   { index: '/visualization', label: '数据可视化', icon: DataLine },
+  { index: '/agent', label: 'Agent', icon: Monitor },
   { index: '/settings', label: '设置', icon: Setting },
 ]
 

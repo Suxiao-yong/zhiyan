@@ -102,3 +102,14 @@
 - [ ] `/agent-debug` 的 Background Jobs 区块显示三类每日任务及其状态；Daily Brief 区块可预览今日简报。
 - [ ] 应用运行跨天（或休眠唤醒）后，`agent_jobs` 自动出现新一天的三个任务（去重键防重复）。
 - [ ] 通知正文不包含计划任务、记录或错题原文。
+
+## M5 Agent OS（打包后手测）
+
+- [ ] 侧栏"Agent"入口或直接访问 `/agent` 打开三栏界面。
+- [ ] 左栏"新会话"创建会话；最近会话列表出现并可切换。
+- [ ] 中栏发送消息：user/assistant 气泡出现（assistant 显示 token）；重启应用后消息仍在（`agent_messages` 持久化）。
+- [ ] 每日简报卡首次打开显示摘要与统计；点"知道了"后折叠为 artifact；`agent-daily-brief` 推送可刷新。
+- [ ] 有待审批操作时审批卡显示 R2-R4 与预览；批准/拒绝后卡片消失。
+- [ ] 运行状态 pill 反映 queued/running/waiting_approval/completed；运行中可取消。
+- [ ] 右栏计划打卡工作台可加载当日计划并完成打卡（与 /study-record 行为一致）。
+- [ ] 侧栏工作台深链（仪表盘/学习计划/学习记录/Agent 调试）可跳转，原页面正常。

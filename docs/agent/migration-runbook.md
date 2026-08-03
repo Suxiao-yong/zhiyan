@@ -131,3 +131,12 @@ The following checks remain manual pending and are not claimed as passed: packag
 - Daily brief (`brief.rs`) is a local skeleton (today plans, overdue count, week completion, due wrong questions, weak areas, confirmed-memory hints) with an optional tool-free LLM explanation; provider failure degrades to local. The `daily_brief` job stores the brief in `last_result`; push-style events are deferred to M5.
 - Cost accounting: `PlannerTurn.estimated_cost_usd` uses `agent_cost_per_1k_prompt_tokens` / `agent_cost_per_1k_completion_tokens` (defaults 0.002 / 0.006 USD per 1k).
 - Rollback: disable the tick task spawn, remove `agent_job_*`/`agent_brief_preview` commands, and skip `tray::build_tray` + the `on_window_event` close interceptor. `agent_jobs` is additive; leave it or drop on disposable test databases.
+
+## M5 (Agent OS shell + conversation)
+
+- Migration **v9** adds `agent_messages` (additive): session-scoped conversation rows with role CHECK (`user|assistant|system`), an optional run reference, token usage, and model. The planner appends one user row (goal) and one assistant row (final text) per turn inside the run; local turns record zero tokens. Conversation survives restarts.
+- New read-only commands: `agent_session_list`, `agent_session_messages`, `agent_approval_list` (pending first, then decided). `AgentRuntime` exposes a `repository()` read accessor.
+- `/agent` (full-screen route) hosts the three-column shell: `AgentSidebar` (new session, recent sessions, workbench deep links), `ConversationPane` (message stream + composer; `sendMessage` = create session if needed → create/start run → planner turn → reload persisted messages), `DailyBrief` card (folds into an artifact after acknowledge; refreshes from the `agent-daily-brief` push), `ApprovalCard` (approve/reject), `AgentStatus`, and `WorkbenchHost` embedding the existing `PlanCheckinBoard`.
+- Brief push happens **from the command layer**: `agent_brief_preview` receives the injected `app: tauri::AppHandle` and emits `agent-daily-brief` there. Managed states never hold an owned `AppHandle` (a held one produced a broken test exe on this toolchain — see M4 note).
+- `weekly_report` job handler produces a text summary (week completion + weak areas) stored in `last_result`.
+- Rollback: remove the `/agent` route/components, the three read commands, and the planner message writes. `agent_messages` is additive; leave it or drop on disposable test databases.

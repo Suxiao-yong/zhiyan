@@ -1,21 +1,33 @@
 # 项目进度状态
 
-更新时间：2026-07-18（M4 完成后更新）
+更新时间：2026-07-18（M5 完成后更新）
 工作区：`D:\智研\zhiyan`（main 分支）
 分支：`main`
 
 ## 当前结论
 
-纯 agent 改造的 M3（模型、上下文与记忆）与 M4（托盘、调度与简报）全部完成并提交：
+纯 agent 改造的 M3（模型、上下文与记忆）、M4（托盘、调度与简报）、M5（Agent OS 界面）全部完成并提交：
 
 - **M3 Part 1**：OpenAI 兼容 Provider、模型↔工具循环、本地降级与软 token 预算（`4528a45` 记录里程碑）。
 - **M3 Part 2**：SSE 流式对话与工具循环，`agent-planner-chunk` 事件实时渲染（`323902f` 标记 shipped）。
-- **M3 Part 3**：Context Inspector（v6 `agent_context_audit` 表 + Context Builder + `agent_context_audit_list` 命令 + `/agent-debug` 视图）、结构化长期记忆（v7 `agent_memories` 表 + 7 种记忆类型 + candidate→confirmed 流程 + 记忆管理命令与 UI）、记忆接入 Context Builder（`e6c5550`）。
-- **M4**：托盘生命周期（关闭隐藏、暂停提醒、彻底退出）、`agent_jobs` v8 后台调度（去重/补跑/跨天自愈）、本地聚合（overdue/日周统计/薄弱点）、每日简报（本地骨架 + LLM 解释）、任务/逾期通知（仅计数与日期）、费用估算（`estimated_cost_usd`）。
+- **M3 Part 3**：Context Inspector（v6 `agent_context_audit`）、结构化长期记忆（v7 `agent_memories`）、记忆接入 Context Builder（`e6c5550`）。
+- **M4**：托盘生命周期、`agent_jobs` v8 后台调度、本地聚合、每日简报、任务/逾期通知、费用估算。
+- **M5**：`/agent` Agent OS 三栏界面——会话侧栏、对话中心（`agent_messages` v9 持久化、审批卡、状态、简报卡）、计划打卡工作台嵌入右栏；简报命令层推送与 `weekly_report` job。
 
-仍搁置：完整 Fallback Engine 产品面与周报（M5）、Agent OS 界面（M5）、M6 的 TypeScript planner/LLM adapter 切换。Ollama 工具支持按产品决策排除（Agent 循环仅云端 LLM）。
+仍搁置：完整 Fallback Engine 产品面与工作台全集（M6）、TypeScript planner/LLM adapter 切换（M6）、通知偏好 UI。Ollama 工具支持按产品决策排除。
 
-## M4 提交记录
+## M5 提交记录
+
+提交：`2c30e55`（计划）、`41586c7`（消息层 v9 + 读命令）、`9cf9214`（三栏壳 + store + 路由）、`41ec696`（简报推送 + 周报）
+
+- v9 迁移新增 `agent_messages`（角色 CHECK、会话级联、token 列），planner 每 turn 持久化 user/assistant 消息（本地 turn 零 token）。
+- 新读命令：`agent_session_list` / `agent_session_messages` / `agent_approval_list`。
+- `/agent`（全屏）三栏：AgentSidebar（新会话/最近会话/工作台深链）、ConversationPane（消息流+输入）、DailyBrief（acknowledge 折叠）、ApprovalCard、AgentStatus、WorkbenchHost（嵌入 PlanCheckinBoard）。
+- 简报推送走命令层（`agent_brief_preview` 注入 AppHandle 发射事件），managed state 不持 AppHandle（M4 教训）。
+- `weekly_report` handler：周统计 + 薄弱点 → 文本摘要。
+- 验证：Rust 全量 107 lib + 12 repository + 42 tools = 161 通过；前端 70 用例通过；typecheck、build、Clippy `-D warnings`、fmt、diff-check 全部通过。
+
+## 历史：M4 提交记录
 
 提交：`ed89962`（计划）、`e48a0fe`（托盘）、`82f0133`（调度器 + v8）、`71d8315`（本地聚合）、`c74f65a`（每日简报）、`53a27ab`（通知出站）、`6e4c7d5`（费用 + 调试页 Jobs/Brief）
 
