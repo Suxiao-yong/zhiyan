@@ -7,6 +7,7 @@ import type {
   AgentJobType,
   AgentMemoryCreateInput,
   AgentMemoryRecord,
+  AgentMessage,
   AgentPlannerTurn,
   AgentRun,
   AgentSession,
@@ -116,4 +117,17 @@ export function scheduleAgentJob(
 /** Daily brief preview (M4). */
 export function agentBriefPreview(examId?: string | null): Promise<AgentBrief> {
   return invoke<AgentBrief>('agent_brief_preview', { examId: examId ?? null })
+}
+
+/** Agent OS reads (M5). */
+export function agentSessionList(limit?: number): Promise<AgentSession[]> {
+  return invoke<AgentSession[]>('agent_session_list', { limit: limit ?? null })
+}
+
+export function agentSessionMessages(sessionId: string): Promise<AgentMessage[]> {
+  return invoke<AgentMessage[]>('agent_session_messages', { sessionId })
+}
+
+export function agentApprovalList(limit?: number): Promise<AgentApproval[]> {
+  return invoke<AgentApproval[]>('agent_approval_list', { limit: limit ?? null })
 }

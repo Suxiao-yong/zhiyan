@@ -38,6 +38,12 @@ const routes = [
     name: 'agent-debug',
     component: () => import('@/pages/AgentDebug.vue'),
   },
+  {
+    path: '/agent',
+    name: 'agent',
+    component: () => import('@/pages/AgentHome.vue'),
+    meta: { layout: 'full' },
+  },
   { path: '/', redirect: '/dashboard' },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
 ]

@@ -157,6 +157,20 @@ export interface AgentSession {
   updated_at: string
 }
 
+/** One conversation message (M5 Agent OS). */
+export interface AgentMessage {
+  id: string
+  session_id: string
+  run_id: string | null
+  role: 'user' | 'assistant' | 'system'
+  text: string
+  content_json: string | null
+  prompt_tokens: number
+  completion_tokens: number
+  model: string | null
+  created_at: string
+}
+
 /** Agent runtime run state */
 export type AgentRunStatus =
   'queued' | 'running' | 'waiting_approval' | 'completed' | 'cancelled' | 'failed' | 'interrupted'
