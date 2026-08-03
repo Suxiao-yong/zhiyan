@@ -10,8 +10,12 @@ import QuickRecordDialog from '@/components/record/QuickRecordDialog.vue'
 import PlanCheckinBoard from '@/components/record/PlanCheckinBoard.vue'
 import { initialStudyRecordTab } from '@/components/record/checkin-ui'
 
+// M6 Task 4: the workbench host mounts this page with initial-tab to land on
+// the records list; the full page still supports ?tab= and ?date= routing.
+const props = defineProps<{ initialTab?: 'checkin' | 'records' | 'wrong' }>()
+
 const route = useRoute()
-const activeTab = ref(initialStudyRecordTab(route.query.date))
+const activeTab = ref(props.initialTab ?? initialStudyRecordTab(route.query.date))
 const quickVisible = ref(false)
 const preselectDate = ref<string | undefined>(undefined)
 const calendarRef = ref<InstanceType<typeof RecordCalendar> | null>(null)

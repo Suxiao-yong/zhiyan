@@ -2,6 +2,7 @@
 
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   AgentApproval,
@@ -97,13 +98,21 @@ function mountPage() {
   const pinia = createPinia()
   setActivePinia(pinia)
   useExamStore().setActiveExam('exam-1')
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/', component: { template: '<div />' } }],
+  })
   const wrapper = mount(AgentHome, {
     global: {
-      plugins: [pinia],
+      plugins: [pinia, router],
       stubs: {
-        // The check-in workbench has its own tests; stub it here to isolate
-        // the Agent OS shell.
+        // The workbench content has its own tests; stub the page components
+        // here to isolate the Agent OS shell.
         PlanCheckinBoard: { template: '<div data-test="workbench-checkin" />' },
+        StudyPlan: { template: '<div data-test="workbench-plan" />' },
+        StudyRecord: { template: '<div data-test="workbench-record" />' },
+        Analysis: { template: '<div data-test="workbench-analysis" />' },
+        Visualization: { template: '<div data-test="workbench-visualization" />' },
       },
     },
   })
@@ -219,5 +228,32 @@ describe('AgentHome', () => {
     await wrapper.get('[data-test=approval-approve-ap-1]').trigger('click')
     await flushPromises()
     expect(client.decideAgentApproval).toHaveBeenCalledWith('ap-1', true)
+  })
+
+  it('switches workbenches in the right pane without losing the conversation', async () => {
+    const { wrapper } = mountPage()
+    await flushPromises()
+
+    // Default workbench: check-in board is mounted in the host.
+    expect(wrapper.get('[data-test=workbench-host]').exists()).toBe(true)
+    expect(wrapper.get('[data-test=workbench-host]').text()).toContain('计划打卡')
+
+    // Switch to the plan workbench; the conversation pane stays mounted.
+    await wrapper.get('[data-test=workbench-tab-plan]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test=workbench-host]').text()).toContain('学习计划')
+    expect(wrapper.get('[data-test=workbench-host]').text()).not.toContain('计划打卡')
+    expect(wrapper.get('[data-test=conversation-pane]').exists()).toBe(true)
+
+    // Switch again to records, analysis, and visualization.
+    await wrapper.get('[data-test=workbench-tab-record]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test=workbench-host]').text()).toContain('记录与错题')
+    await wrapper.get('[data-test=workbench-tab-analysis]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test=workbench-host]').text()).toContain('AI 分析')
+    await wrapper.get('[data-test=workbench-tab-visualization]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test=workbench-host]').text()).toContain('数据可视化')
   })
 })
