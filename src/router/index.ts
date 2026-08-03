@@ -44,7 +44,7 @@ const routes = [
     component: () => import('@/pages/AgentHome.vue'),
     meta: { layout: 'full' },
   },
-  { path: '/', redirect: '/dashboard' },
+  { path: '/', name: 'home', component: { render: () => null } },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
 ]
 
@@ -52,6 +52,24 @@ const router = createRouter({
   history: createWebHistory(),
   routes,
 })
+
+// M6 Task 6: the home route is the Agent OS by default (agent_os_enabled
+// unset or '1'); flipping it to '0' restores the legacy dashboard first
+// screen. Cached per process to keep navigation cheap.
+let agentOsResolved = false
+let agentOsEnabled = true
+
+async function resolveAgentOsFlag(): Promise<boolean> {
+  if (agentOsResolved) return agentOsEnabled
+  try {
+    const value = await getSetting('agent_os_enabled')
+    agentOsEnabled = value !== '0'
+  } catch {
+    agentOsEnabled = true
+  }
+  agentOsResolved = true
+  return agentOsEnabled
+}
 
 // 引导完成态缓存：避免每次导航都查库
 let resolved = false
@@ -79,7 +97,13 @@ export function markOnboardingDone(): void {
 
 router.beforeEach(async (to) => {
   if (to.path === '/welcome') return true
-  if (await checkOnboarding()) return true
+  if (await checkOnboarding()) {
+    if (to.path === '/') {
+      // M6 Task 6: home is the Agent OS unless the fallback flag is off.
+      return (await resolveAgentOsFlag()) ? { path: '/agent' } : { path: '/dashboard' }
+    }
+    return true
+  }
   return { path: '/welcome' }
 })
 

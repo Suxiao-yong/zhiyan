@@ -23,11 +23,26 @@ const form = reactive({
   temperature: settingsStore.llmConfig?.temperature ?? 0.7,
 })
 const showKey = ref(false)
+
+// ---- Agent OS fallback (M6 Task 6) ----
+const agentOsEnabled = ref(true)
+
+async function loadAgentOsFlag() {
+  const value = await getSetting('agent_os_enabled')
+  agentOsEnabled.value = value !== '0'
+}
+
+async function onAgentOsToggle(value: string | number | boolean) {
+  await setSetting('agent_os_enabled', value ? '1' : '0')
+  ElMessage.success(value ? '已启用 Agent OS 首页' : '已回退旧界面，重启生效')
+}
 const testing = ref(false)
 
 // ---- anysearch 联网搜索（可选 key，匿名可用）----
 const anysearchKey = ref('')
 onMounted(async () => {
+  // 0. Agent OS fallback flag.
+  await loadAgentOsFlag()
   // 1. 首选 keyring
   try {
     const k = await invoke<string | null>('load_api_key', { provider: 'anysearch' })
@@ -291,6 +306,26 @@ async function onRestore() {
     <el-card shadow="never" class="card">
       <template #header>
         <div class="card-head">
+          <el-icon class="card-head__icon" :size="18"><Connection /></el-icon>
+          <span class="card-head__title">Agent 工作台</span>
+        </div>
+      </template>
+      <el-form label-width="100px">
+        <el-form-item label="Agent OS 首页">
+          <el-switch
+            v-model="agentOsEnabled"
+            active-text="启用"
+            inactive-text="回退旧界面"
+            @change="onAgentOsToggle"
+          />
+          <span class="field-hint">关闭后默认进入旧版仪表盘，并恢复旧的分析路径。</span>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
+    <el-card shadow="never" class="card">
+      <template #header>
+        <div class="card-head">
           <el-icon class="card-head__icon" :size="18"><Files /></el-icon>
           <span class="card-head__title">数据导入导出 / 备份恢复</span>
         </div>
@@ -367,6 +402,11 @@ async function onRestore() {
   font-size: var(--fs-md);
   font-weight: 600;
   color: var(--c-ink);
+}
+.field-hint {
+  font-size: 12px;
+  color: var(--c-gray);
+  margin-left: 12px;
 }
 .field-w {
   width: 240px;
