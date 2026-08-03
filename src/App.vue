@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useExamStore } from '@/stores/exam'
+import { getSetting } from '@/services/db'
 import { runPendingAnalyses } from '@/services/agent-engine'
 import {
   isPermissionGranted,
@@ -27,9 +28,15 @@ onMounted(async () => {
   watch(() => settingsStore.theme, applyTheme)
   await examStore.loadExams()
   if (examStore.activeExamId) {
-    runPendingAnalyses(examStore.activeExamId, settingsStore.llmConfig).catch((e) =>
-      console.warn('启动补跑分析失败', e),
-    )
+    // M6 Task 5: the legacy TS LLM analysis catch-up path is disabled when the
+    // Agent OS is active (agent_os_enabled); the Rust planner owns analysis
+    // there. Flipping the setting off restores the legacy path.
+    const agentOsEnabled = await getSetting('agent_os_enabled')
+    if (agentOsEnabled === '0') {
+      runPendingAnalyses(examStore.activeExamId, settingsStore.llmConfig).catch((e) =>
+        console.warn('启动补跑分析失败', e),
+      )
+    }
     sendStartupReminder()
   }
 })
