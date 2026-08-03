@@ -110,41 +110,33 @@ pub async fn generate(
         return Err(AgentError::Persistence("exam has no subjects".to_owned()));
     }
 
-    // Weighted slotting: day counts proportional to weight, at least one day
-    // for each subject, total exactly seven days.
+    // Weighted slotting (deterministic, no loop hazards): floor each
+    // subject's share of the seven days, then hand the remainder to the
+    // subjects with the largest fractional parts, one day each.
     let total: f64 = subjects
         .iter()
         .map(|subject| subject.weight.max(0.01))
         .sum();
     let mut counts: Vec<i64> = subjects
         .iter()
-        .map(|subject| (WEEK_DAYS as f64 * subject.weight.max(0.01) / total).round() as i64)
+        .map(|subject| (WEEK_DAYS as f64 * subject.weight.max(0.01) / total).floor() as i64)
         .collect();
-    let mut used: i64 = counts.iter().sum();
-    for count in counts.iter_mut() {
-        if *count < 1 && used < WEEK_DAYS as i64 {
-            *count = 1;
-            used += 1;
+    let mut fractions: Vec<(usize, f64)> = subjects
+        .iter()
+        .enumerate()
+        .map(|(index, subject)| {
+            let raw = WEEK_DAYS as f64 * subject.weight.max(0.01) / total;
+            (index, raw - raw.floor())
+        })
+        .collect();
+    fractions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let mut remaining = WEEK_DAYS as i64 - counts.iter().sum::<i64>();
+    for (index, _) in fractions {
+        if remaining <= 0 {
+            break;
         }
-    }
-    let mut index = 0;
-    while used < WEEK_DAYS as i64 {
-        let target = index % counts.len();
-        counts[target] += 1;
-        used += 1;
-        index += 1;
-    }
-    let mut over = used - WEEK_DAYS as i64;
-    while over > 0 {
-        for count in counts.iter_mut().rev() {
-            if *count > 1 {
-                *count -= 1;
-                over -= 1;
-                if over == 0 {
-                    break;
-                }
-            }
-        }
+        counts[index] += 1;
+        remaining -= 1;
     }
 
     let mut rows = Vec::with_capacity(WEEK_DAYS);

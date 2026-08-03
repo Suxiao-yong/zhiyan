@@ -669,4 +669,55 @@ mod tests {
         assert!(math_days > english_days);
         assert_eq!(math_days + english_days, 7);
     }
+
+    #[tokio::test]
+    async fn plan_generate_handles_many_subjects_without_stalling() {
+        // Regression: with 8-14 equal-weight subjects the old slotting loop
+        // never terminated (nothing to decrement). The floor+largest-fraction
+        // algorithm must return exactly seven rows and finish quickly.
+        let (runtime, pool) = test_runtime().await;
+        let mut seed =
+            String::from("INSERT INTO exams(id,name,exam_date) VALUES('exam-m','M','2030-01-01');");
+        for index in 0..10 {
+            seed.push_str(&format!(
+                "INSERT INTO subjects(id,exam_id,name,weight) VALUES('sub-m{index}','exam-m','S{index}',1.0);"
+            ));
+        }
+        seed.push_str(
+            "INSERT INTO agent_sessions(id,title) VALUES('session-tool','Tool');\
+             INSERT INTO agent_runs(id,session_id,goal,status)\
+             VALUES('run-tool','session-tool','Tool','running');",
+        );
+        sqlx::raw_sql(&seed).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_r2_auto_execute','true')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let response = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 0,
+                tool_name: "plan.generate".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id":"exam-m","week_start":"2026-07-13","daily_capacity_min":60
+                }),
+                idempotency_key: Some("gen-m".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let output = match response {
+            ToolCallResponse::Completed { output, .. } => output,
+            other => panic!("expected completed, got {other:?}"),
+        };
+        let rows = output["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 7);
+        let plan_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_plans")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(plan_count, 7);
+    }
 }
