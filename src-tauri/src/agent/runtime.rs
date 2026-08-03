@@ -747,4 +747,81 @@ mod tests {
             .unwrap();
         assert_eq!(plan_count, 7);
     }
+
+    #[tokio::test]
+    async fn create_free_validates_knowledge_point_ownership() {
+        let (runtime, pool) = test_runtime().await;
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO exams(id,name,exam_date) VALUES('exam-k','K','2030-01-01');
+            INSERT INTO subjects(id,exam_id,name) VALUES('sub-k1','exam-k','数学');
+            INSERT INTO subjects(id,exam_id,name) VALUES('sub-k2','exam-k','英语');
+            INSERT INTO knowledge_points(id,subject_id,name) VALUES('kp-k1','sub-k1','函数');
+            INSERT INTO agent_sessions(id,title) VALUES('session-tool','Tool');
+            INSERT INTO agent_runs(id,session_id,goal,status)
+            VALUES('run-tool','session-tool','Tool','running');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // A knowledge point of the same subject is accepted.
+        let response = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 0,
+                tool_name: "record.create_free".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id":"exam-k","date":"2026-07-18","subject_id":"sub-k1",
+                    "knowledge_point_id":"kp-k1","duration_min":30
+                }),
+                idempotency_key: Some("kf-1".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(response, ToolCallResponse::Completed { .. }));
+
+        // A knowledge point of another subject is rejected.
+        let err = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 1,
+                tool_name: "record.create_free".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id":"exam-k","date":"2026-07-18","subject_id":"sub-k2",
+                    "knowledge_point_id":"kp-k1","duration_min":30
+                }),
+                idempotency_key: Some("kf-2".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "persistence_error");
+        sqlx::query("UPDATE agent_runs SET status='running', current_step=2 WHERE id='run-tool'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // An unknown knowledge point is rejected.
+        let err = runtime
+            .execute_tool(ToolCallRequest {
+                run_id: "run-tool".to_owned(),
+                step_index: 2,
+                tool_name: "record.create_free".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id":"exam-k","date":"2026-07-18","subject_id":"sub-k1",
+                    "knowledge_point_id":"missing-kp","duration_min":30
+                }),
+                idempotency_key: Some("kf-3".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "persistence_error");
+    }
 }
