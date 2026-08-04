@@ -38,3 +38,6 @@ coverage/
 
 # Local isolated feature worktrees
 .worktrees/
+
+# Reasonix desktop client local session metadata
+.reasonix/

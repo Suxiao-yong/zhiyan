@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <rect width="1440" height="900" fill="#0d1117"/>
+  <rect x="0" y="0" width="1440" height="64" fill="#11161d"/>
+  <line x1="0" y1="64" x2="1440" y2="64" stroke="#28313b"/>
+  <rect x="0" y="64" width="252" height="836" fill="#0a0e13"/>
+  <line x1="252" y1="64" x2="252" y2="900" stroke="#28313b"/>
+  <g font-family="Segoe UI, Microsoft YaHei, sans-serif">
+    <text x="28" y="38" fill="#f3f5f7" font-size="18" font-weight="700">智研</text>
+    <text x="104" y="38" fill="#7b8794" font-size="11" letter-spacing="2">AGENT OS</text>
+    <circle cx="1340" cy="32" r="5" fill="#b9f227"/>
+    <text x="1355" y="37" fill="#b9f227" font-size="12">运行中</text>
+    <text x="280" y="28" fill="#8794a3" font-size="10" letter-spacing="2">EXECUTION WORKSPACE / 01</text>
+    <text x="280" y="48" fill="#f0f3f6" font-size="14" font-weight="600">今天的学习行动</text>
+    <text x="1090" y="37" fill="#6f7b89" font-size="12">2026.08.04 · 周二</text>
+
+    <text x="28" y="98" fill="#65717e" font-size="10" letter-spacing="2">RUNS</text>
+    <rect x="20" y="115" width="212" height="54" rx="8" fill="#172029" stroke="#b9f227" stroke-width="1"/>
+    <circle cx="42" cy="142" r="9" fill="#b9f227"/>
+    <text x="61" y="137" fill="#e9edf0" font-size="13" font-weight="600">今日复习编排</text>
+    <text x="61" y="155" fill="#7f8a96" font-size="11">正在执行 · 3 个动作</text>
+    <rect x="20" y="179" width="212" height="48" rx="8" fill="transparent"/>
+    <circle cx="42" cy="203" r="9" fill="#35404b"/>
+    <text x="61" y="198" fill="#a9b2bb" font-size="13">本周薄弱点诊断</text>
+    <text x="61" y="216" fill="#66727e" font-size="11">昨天 · 已完成</text>
+    <rect x="20" y="237" width="212" height="48" rx="8" fill="transparent"/>
+    <circle cx="42" cy="261" r="9" fill="#35404b"/>
+    <text x="61" y="256" fill="#a9b2bb" font-size="13">考试计划调整</text>
+    <text x="61" y="274" fill="#66727e" font-size="11">07.31 · 已完成</text>
+
+    <text x="28" y="330" fill="#65717e" font-size="10" letter-spacing="2">WORKBENCH</text>
+    <rect x="20" y="348" width="212" height="42" rx="7" fill="#182028"/>
+    <rect x="32" y="362" width="4" height="14" rx="2" fill="#b9f227"/>
+    <text x="52" y="373" fill="#e9edf0" font-size="12">计划打卡</text>
+    <text x="28" y="420" fill="#7f8a96" font-size="12">学习计划</text>
+    <text x="28" y="454" fill="#7f8a96" font-size="12">记录与错题</text>
+    <text x="28" y="488" fill="#7f8a96" font-size="12">分析洞察</text>
+    <text x="28" y="522" fill="#7f8a96" font-size="12">数据视图</text>
+    <line x1="28" y1="556" x2="224" y2="556" stroke="#232c35"/>
+    <text x="28" y="590" fill="#65717e" font-size="10" letter-spacing="2">SYSTEM</text>
+    <text x="28" y="626" fill="#7f8a96" font-size="12">模型与权限</text>
+    <text x="28" y="660" fill="#7f8a96" font-size="12">运行日志</text>
+    <rect x="20" y="822" width="212" height="48" rx="8" fill="#11171e" stroke="#242e38"/>
+    <circle cx="43" cy="846" r="14" fill="#2a3540"/>
+    <text x="43" y="850" fill="#c9d1d9" font-size="12" text-anchor="middle">林</text>
+    <text x="68" y="842" fill="#dce2e7" font-size="12">考研 · 目标 420</text>
+    <text x="68" y="859" fill="#6f7b89" font-size="10">Agent 可代办，决定权在你</text>
+
+    <text x="280" y="94" fill="#687583" font-size="11">CONVERSATION</text>
+    <text x="280" y="122" fill="#e9edf0" font-size="23" font-weight="700">把今天变得可执行</text>
+    <text x="280" y="146" fill="#7f8a96" font-size="12">Agent 已读取 4 条计划、12 条学习记录和 3 个薄弱知识点</text>
+    <rect x="280" y="174" width="602" height="90" rx="12" fill="#151c23" stroke="#2a343e"/>
+    <circle cx="310" cy="204" r="15" fill="#2a3540"/>
+    <text x="310" y="209" fill="#dce2e7" font-size="12" text-anchor="middle">我</text>
+    <text x="342" y="206" fill="#dce2e7" font-size="14">帮我安排今天的复习，晚上 10 点前结束。</text>
+    <text x="342" y="232" fill="#6f7b89" font-size="11">刚刚 · 目标明确</text>
+    <rect x="280" y="284" width="602" height="194" rx="12" fill="#151c23" stroke="#2a343e"/>
+    <circle cx="310" cy="316" r="15" fill="#b9f227"/>
+    <text x="310" y="321" fill="#10160d" font-size="11" font-weight="700" text-anchor="middle">智</text>
+    <text x="342" y="316" fill="#b9f227" font-size="11" letter-spacing="1">AGENT · PLAN BUILDER</text>
+    <text x="342" y="345" fill="#e9edf0" font-size="14" font-weight="600">我把今晚拆成 3 个动作，预计 145 分钟</text>
+    <text x="342" y="375" fill="#9da8b2" font-size="12">先补线性代数的薄弱点，再用一组真题验证，最后留 15 分钟复盘。</text>
+    <line x1="342" y1="394" x2="840" y2="394" stroke="#2a343e"/>
+    <circle cx="352" cy="422" r="5" fill="#b9f227"/>
+    <text x="368" y="427" fill="#cdd5dc" font-size="12">19:00 · 线代特征值 · 60 min</text>
+    <circle cx="574" cy="422" r="5" fill="#4f6571"/>
+    <text x="590" y="427" fill="#9aa6b1" font-size="12">20:10 · 真题演练 · 70 min</text>
+    <circle cx="352" cy="452" r="5" fill="#4f6571"/>
+    <text x="368" y="457" fill="#9aa6b1" font-size="12">21:40 · 复盘记录 · 15 min</text>
+    <rect x="280" y="498" width="602" height="88" rx="12" fill="#131a20" stroke="#3b4a54"/>
+    <text x="304" y="526" fill="#d5dde3" font-size="11" letter-spacing="1">WAITING FOR APPROVAL</text>
+    <text x="304" y="552" fill="#f2f5f6" font-size="14" font-weight="600">是否将这 3 项写入今天的计划？</text>
+    <rect x="742" y="519" width="60" height="28" rx="6" fill="#b9f227"/>
+    <text x="772" y="538" fill="#0d1117" font-size="12" font-weight="700" text-anchor="middle">批准</text>
+    <rect x="810" y="519" width="48" height="28" rx="6" fill="#202932" stroke="#3a4651"/>
+    <text x="834" y="538" fill="#9da8b2" font-size="12" text-anchor="middle">修改</text>
+    <text x="280" y="625" fill="#687583" font-size="11">ACTIVITY LOG</text>
+    <text x="280" y="657" fill="#c4cdd5" font-size="12">● 读取今日计划</text>
+    <text x="470" y="657" fill="#7f8a96" font-size="11">12:04:18</text>
+    <text x="280" y="685" fill="#c4cdd5" font-size="12">● 定位线代薄弱知识点</text>
+    <text x="470" y="685" fill="#7f8a96" font-size="11">12:04:19</text>
+    <text x="280" y="713" fill="#b9f227" font-size="12">● 等待你确认执行</text>
+    <text x="470" y="713" fill="#7f8a96" font-size="11">12:04:21</text>
+
+    <rect x="922" y="84" width="486" height="752" rx="14" fill="#11181f" stroke="#2a343e"/>
+    <text x="948" y="120" fill="#687583" font-size="10" letter-spacing="2">LIVE WORKBENCH</text>
+    <text x="948" y="149" fill="#f0f3f6" font-size="20" font-weight="700">计划打卡</text>
+    <rect x="1266" y="112" width="112" height="28" rx="14" fill="#1e2930"/>
+    <circle cx="1283" cy="126" r="5" fill="#b9f227"/>
+    <text x="1295" y="130" fill="#b9f227" font-size="11">实时同步</text>
+    <line x1="948" y1="175" x2="1382" y2="175" stroke="#2a343e"/>
+    <text x="948" y="210" fill="#7f8a96" font-size="12">今日完成度</text>
+    <text x="948" y="255" fill="#f0f3f6" font-size="42" font-weight="700">72%</text>
+    <text x="1082" y="250" fill="#b9f227" font-size="12">+18% 较昨日</text>
+    <rect x="948" y="275" width="434" height="7" rx="3.5" fill="#27323b"/>
+    <rect x="948" y="275" width="312" height="7" rx="3.5" fill="#b9f227"/>
+    <text x="948" y="324" fill="#687583" font-size="10" letter-spacing="2">NEXT ACTION</text>
+    <rect x="948" y="342" width="434" height="112" rx="10" fill="#172029" stroke="#394651"/>
+    <rect x="968" y="364" width="34" height="34" rx="8" fill="#26343a"/>
+    <text x="985" y="387" fill="#b9f227" font-size="16" text-anchor="middle">∑</text>
+    <text x="1020" y="371" fill="#f0f3f6" font-size="14" font-weight="600">线性代数 · 特征值</text>
+    <text x="1020" y="394" fill="#8b98a4" font-size="12">薄弱点复习 · 60 分钟</text>
+    <rect x="1248" y="370" width="112" height="30" rx="6" fill="#b9f227"/>
+    <text x="1304" y="390" fill="#0d1117" font-size="12" font-weight="700" text-anchor="middle">开始学习</text>
+    <text x="948" y="499" fill="#687583" font-size="10" letter-spacing="2">TODAY'S QUEUE</text>
+    <g fill="#d2d9df" font-size="12">
+      <text x="948" y="535">01  线代特征值</text><text x="1310" y="535" fill="#b9f227">进行中</text>
+      <text x="948" y="575">02  真题演练</text><text x="1310" y="575" fill="#7f8a96">待执行</text>
+      <text x="948" y="615">03  错题复盘</text><text x="1310" y="615" fill="#7f8a96">待执行</text>
+    </g>
+    <line x1="948" y1="648" x2="1382" y2="648" stroke="#2a343e"/>
+    <text x="948" y="681" fill="#687583" font-size="10" letter-spacing="2">AGENT NOTE</text>
+    <text x="948" y="713" fill="#c7d0d7" font-size="13">完成第一项后，我会根据你的正确率</text>
+    <text x="948" y="737" fill="#c7d0d7" font-size="13">自动决定第二项是继续真题，还是补讲。</text>
+    <rect x="948" y="772" width="434" height="40" rx="8" fill="#1b252d"/>
+    <text x="1165" y="797" fill="#95a2ad" font-size="12" text-anchor="middle">查看运行详情  →</text>
+  </g>
+</svg>

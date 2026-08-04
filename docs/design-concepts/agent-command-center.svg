@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <rect width="1440" height="900" fill="#0b1420"/>
+  <rect x="0" y="0" width="1440" height="60" fill="#0e1b29"/>
+  <line x1="0" y1="60" x2="1440" y2="60" stroke="#22384a"/>
+  <rect x="0" y="60" width="218" height="840" fill="#0b1622"/>
+  <line x1="218" y1="60" x2="218" y2="900" stroke="#22384a"/>
+  <g font-family="Segoe UI, Microsoft YaHei, sans-serif">
+    <text x="28" y="37" fill="#ecf7f5" font-size="17" font-weight="700" letter-spacing="1">智研 / COMMAND</text>
+    <text x="1112" y="36" fill="#6b8796" font-size="11">LOCAL-FIRST AGENT SYSTEM</text>
+    <circle cx="1330" cy="30" r="5" fill="#2dd4bf"/><text x="1343" y="35" fill="#2dd4bf" font-size="11">SYSTEM NOMINAL</text>
+    <text x="28" y="104" fill="#5f7a89" font-size="10" letter-spacing="2">MISSION</text>
+    <text x="28" y="140" fill="#ecf7f5" font-size="14" font-weight="700">2026 考研</text>
+    <text x="28" y="163" fill="#76919f" font-size="11">目标：总分 420 · 剩余 130 天</text>
+    <rect x="28" y="190" width="162" height="5" rx="2.5" fill="#213544"/><rect x="28" y="190" width="78" height="5" rx="2.5" fill="#2dd4bf"/>
+    <text x="28" y="222" fill="#5f7a89" font-size="10" letter-spacing="2">CONTROL</text>
+    <rect x="20" y="244" width="178" height="42" rx="5" fill="#12302f" stroke="#2dd4bf"/>
+    <text x="42" y="270" fill="#2dd4bf" font-size="12">◈  总览态势</text>
+    <text x="42" y="313" fill="#76919f" font-size="12">◇  今日编排</text>
+    <text x="42" y="355" fill="#76919f" font-size="12">◇  计划矩阵</text>
+    <text x="42" y="397" fill="#76919f" font-size="12">◇  记录与错题</text>
+    <text x="42" y="439" fill="#76919f" font-size="12">◇  分析信号</text>
+    <line x1="28" y1="478" x2="190" y2="478" stroke="#22384a"/>
+    <text x="28" y="515" fill="#5f7a89" font-size="10" letter-spacing="2">AGENT MEMORY</text>
+    <rect x="28" y="540" width="162" height="34" rx="5" fill="#111f2c"/>
+    <circle cx="45" cy="557" r="4" fill="#e7b85d"/><text x="58" y="561" fill="#acc0c7" font-size="11">晚间效率较低</text>
+    <rect x="28" y="583" width="162" height="34" rx="5" fill="#111f2c"/>
+    <circle cx="45" cy="600" r="4" fill="#2dd4bf"/><text x="58" y="604" fill="#acc0c7" font-size="11">数学优先策略</text>
+    <text x="28" y="861" fill="#56707f" font-size="10">v0.1 · 运行日志已开启</text>
+
+    <text x="248" y="98" fill="#6d8998" font-size="10" letter-spacing="2">SITUATION ROOM / OVERVIEW</text>
+    <text x="248" y="136" fill="#ecf7f5" font-size="26" font-weight="700">学习态势总览</text>
+    <text x="248" y="161" fill="#76919f" font-size="12">让 Agent 把分散的记录，整理成今天可以决策的信号。</text>
+    <rect x="248" y="193" width="225" height="118" rx="8" fill="#101e2b" stroke="#22384a"/>
+    <text x="270" y="222" fill="#6d8998" font-size="11">距离考试</text>
+    <text x="270" y="272" fill="#ecf7f5" font-size="39" font-weight="700">130</text><text x="365" y="267" fill="#6d8998" font-size="12">天</text>
+    <text x="270" y="292" fill="#2dd4bf" font-size="11">▲ 进入强化阶段</text>
+    <rect x="489" y="193" width="225" height="118" rx="8" fill="#101e2b" stroke="#22384a"/>
+    <text x="511" y="222" fill="#6d8998" font-size="11">本周完成率</text>
+    <text x="511" y="272" fill="#ecf7f5" font-size="39" font-weight="700">72%</text>
+    <text x="511" y="292" fill="#2dd4bf" font-size="11">▲ 12% vs 上周</text>
+    <rect x="730" y="193" width="225" height="118" rx="8" fill="#101e2b" stroke="#22384a"/>
+    <text x="752" y="222" fill="#6d8998" font-size="11">风险知识点</text>
+    <text x="752" y="272" fill="#e7b85d" font-size="39" font-weight="700">07</text>
+    <text x="752" y="292" fill="#e7b85d" font-size="11">需要本周处理</text>
+    <rect x="971" y="193" width="225" height="118" rx="8" fill="#101e2b" stroke="#22384a"/>
+    <text x="993" y="222" fill="#6d8998" font-size="11">Agent 队列</text>
+    <text x="993" y="272" fill="#ecf7f5" font-size="39" font-weight="700">03</text>
+    <text x="993" y="292" fill="#6d8998" font-size="11">1 项待你确认</text>
+
+    <rect x="248" y="337" width="707" height="256" rx="8" fill="#101e2b" stroke="#22384a"/>
+    <text x="272" y="371" fill="#ecf7f5" font-size="15" font-weight="700">目标推进轨迹</text>
+    <text x="778" y="371" fill="#6d8998" font-size="11">最近 14 天</text>
+    <line x1="286" y1="526" x2="925" y2="526" stroke="#274050"/>
+    <line x1="286" y1="420" x2="925" y2="420" stroke="#1c3040" stroke-dasharray="3 5"/>
+    <line x1="286" y1="473" x2="925" y2="473" stroke="#1c3040" stroke-dasharray="3 5"/>
+    <polyline points="286,505 334,491 382,500 430,464 478,478 526,448 574,459 622,431 670,442 718,408 766,425 814,396 862,404 910,379" fill="none" stroke="#2dd4bf" stroke-width="3"/>
+    <polyline points="286,522 334,514 382,518 430,503 478,510 526,495 574,501 622,486 670,490 718,478 766,486 814,468 862,474 910,458" fill="none" stroke="#e7b85d" stroke-width="2" stroke-dasharray="5 5"/>
+    <circle cx="910" cy="379" r="5" fill="#2dd4bf"/>
+    <text x="286" y="555" fill="#6d8998" font-size="10">07/22</text><text x="592" y="555" fill="#6d8998" font-size="10">07/29</text><text x="887" y="555" fill="#6d8998" font-size="10">08/04</text>
+    <rect x="272" y="390" width="66" height="22" rx="11" fill="#123a39"/><text x="305" y="405" fill="#2dd4bf" font-size="10" text-anchor="middle">实际</text>
+    <rect x="350" y="390" width="66" height="22" rx="11" fill="#2f2b1d"/><text x="383" y="405" fill="#e7b85d" font-size="10" text-anchor="middle">目标</text>
+
+    <rect x="248" y="619" width="707" height="220" rx="8" fill="#101e2b" stroke="#22384a"/>
+    <text x="272" y="653" fill="#ecf7f5" font-size="15" font-weight="700">薄弱点热区</text>
+    <text x="272" y="678" fill="#6d8998" font-size="11">按掌握度 × 近期错误率排序</text>
+    <g font-size="11">
+      <text x="272" y="720" fill="#a9bec6">线代 / 特征值</text><rect x="420" y="708" width="360" height="17" rx="3" fill="#203544"/><rect x="420" y="708" width="304" height="17" rx="3" fill="#d96e52"/><text x="800" y="721" fill="#e6a18e">84%</text>
+      <text x="272" y="757" fill="#a9bec6">概率 / 数字特征</text><rect x="420" y="745" width="360" height="17" rx="3" fill="#203544"/><rect x="420" y="745" width="248" height="17" rx="3" fill="#e7b85d"/><text x="800" y="758" fill="#e7b85d">69%</text>
+      <text x="272" y="794" fill="#a9bec6">高数 / 多元积分</text><rect x="420" y="782" width="360" height="17" rx="3" fill="#203544"/><rect x="420" y="782" width="178" height="17" rx="3" fill="#2dd4bf"/><text x="800" y="795" fill="#2dd4bf">49%</text>
+    </g>
+
+    <rect x="979" y="337" width="417" height="502" rx="8" fill="#0e1b28" stroke="#2b4453"/>
+    <text x="1005" y="371" fill="#ecf7f5" font-size="15" font-weight="700">AGENT QUEUE</text>
+    <text x="1268" y="371" fill="#6d8998" font-size="11">3 active</text>
+    <line x1="1005" y1="392" x2="1370" y2="392" stroke="#22384a"/>
+    <rect x="1005" y="416" width="365" height="104" rx="6" fill="#12302f" stroke="#2dd4bf"/>
+    <circle cx="1028" cy="441" r="5" fill="#2dd4bf"/><text x="1043" y="445" fill="#2dd4bf" font-size="10" letter-spacing="1">RUNNING</text>
+    <text x="1025" y="477" fill="#ecf7f5" font-size="13" font-weight="700">编排今晚的复习计划</text>
+    <text x="1025" y="501" fill="#91aaa9" font-size="11">读取 4 项计划 · 预计 145 min</text>
+    <rect x="1005" y="541" width="365" height="92" rx="6" fill="#111f2c" stroke="#22384a"/>
+    <circle cx="1028" cy="565" r="5" fill="#e7b85d"/><text x="1043" y="569" fill="#e7b85d" font-size="10" letter-spacing="1">APPROVAL</text>
+    <text x="1025" y="599" fill="#dbe7e7" font-size="13" font-weight="700">写入 3 项今日任务</text>
+    <text x="1025" y="619" fill="#718b98" font-size="11">需要用户确认 · R2</text>
+    <rect x="1005" y="654" width="365" height="92" rx="6" fill="#111f2c" stroke="#22384a"/>
+    <circle cx="1028" cy="678" r="5" fill="#637b89"/><text x="1043" y="682" fill="#76919f" font-size="10" letter-spacing="1">QUEUED</text>
+    <text x="1025" y="712" fill="#dbe7e7" font-size="13" font-weight="700">生成本周复盘报告</text>
+    <text x="1025" y="732" fill="#718b98" font-size="11">等待前一项完成</text>
+    <rect x="1005" y="774" width="365" height="40" rx="5" fill="#132633"/>
+    <text x="1187" y="799" fill="#6f98a4" font-size="11" text-anchor="middle">打开完整运行日志  →</text>
+  </g>
+</svg>

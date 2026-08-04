@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <rect width="1440" height="900" fill="#f4f0e8"/>
+  <rect x="0" y="0" width="214" height="900" fill="#ece7dd"/>
+  <line x1="214" y1="0" x2="214" y2="900" stroke="#d9d0c3"/>
+  <g font-family="Georgia, 'Songti SC', 'Microsoft YaHei', serif">
+    <text x="34" y="60" fill="#172736" font-size="21" font-weight="700">智研</text>
+    <text x="35" y="84" fill="#9a8a78" font-size="10" letter-spacing="2">LEARNING STUDIO</text>
+    <rect x="28" y="132" width="158" height="46" rx="23" fill="#172736"/>
+    <text x="107" y="161" fill="#f8f4ec" font-size="13" text-anchor="middle">今天的工作台</text>
+    <text x="38" y="232" fill="#9a8a78" font-size="10" letter-spacing="2">NAVIGATION</text>
+    <text x="38" y="274" fill="#172736" font-size="13">◉  今日节奏</text>
+    <text x="38" y="316" fill="#6d736f" font-size="13">○  学习计划</text>
+    <text x="38" y="358" fill="#6d736f" font-size="13">○  学习记录</text>
+    <text x="38" y="400" fill="#6d736f" font-size="13">○  错题本</text>
+    <text x="38" y="442" fill="#6d736f" font-size="13">○  数据回顾</text>
+    <line x1="38" y1="486" x2="178" y2="486" stroke="#d5ccbf"/>
+    <text x="38" y="532" fill="#9a8a78" font-size="10" letter-spacing="2">MY COACH</text>
+    <circle cx="55" cy="577" r="17" fill="#e47b61"/>
+    <text x="55" y="583" fill="#fffaf3" font-size="14" text-anchor="middle">知</text>
+    <text x="84" y="574" fill="#172736" font-size="13">知知</text>
+    <text x="84" y="594" fill="#8f8476" font-size="11">你的学习教练</text>
+    <text x="38" y="842" fill="#8f8476" font-size="11">考研数学 · 还剩 130 天</text>
+
+    <text x="258" y="68" fill="#9a8a78" font-size="10" letter-spacing="2">TUESDAY / AUGUST 04</text>
+    <text x="258" y="120" fill="#172736" font-size="32" font-weight="700">今天，不用把所有事都做完。</text>
+    <text x="258" y="162" fill="#e47b61" font-size="32" font-weight="700">只要完成下一步。</text>
+    <text x="258" y="205" fill="#6d736f" font-size="13">我看过了你最近 7 天的记录，今天给你留出一点余地。</text>
+    <rect x="258" y="250" width="666" height="176" rx="18" fill="#fffdf8" stroke="#ded5c8"/>
+    <text x="292" y="290" fill="#9a8a78" font-size="10" letter-spacing="2">YOUR MOMENTUM</text>
+    <text x="292" y="353" fill="#172736" font-size="62" font-weight="700">68</text>
+    <text x="392" y="351" fill="#9a8a78" font-size="15">/ 100</text>
+    <text x="292" y="386" fill="#6d736f" font-size="13">这周的稳定度比上周高了 12%</text>
+    <circle cx="808" cy="337" r="58" fill="none" stroke="#e9e1d6" stroke-width="11"/>
+    <circle cx="808" cy="337" r="58" fill="none" stroke="#e47b61" stroke-width="11" stroke-linecap="round" stroke-dasharray="245 365" transform="rotate(-90 808 337)"/>
+    <text x="808" y="332" fill="#172736" font-size="21" font-weight="700" text-anchor="middle">2h 05m</text>
+    <text x="808" y="354" fill="#9a8a78" font-size="11" text-anchor="middle">建议投入</text>
+    <text x="258" y="477" fill="#172736" font-size="18" font-weight="700">今天的节奏</text>
+    <text x="858" y="477" fill="#e47b61" font-size="12">由 Agent 为你排好 →</text>
+    <line x1="292" y1="525" x2="292" y2="780" stroke="#d4c9ba" stroke-width="2"/>
+    <circle cx="292" cy="549" r="7" fill="#e47b61"/>
+    <text x="324" y="554" fill="#9a8a78" font-size="11">19:00 — 19:45</text>
+    <text x="324" y="581" fill="#172736" font-size="16" font-weight="700">线代 · 特征值</text>
+    <text x="324" y="607" fill="#6d736f" font-size="12">只做 3 道典型题，找出卡住你的那一步</text>
+    <rect x="780" y="551" width="96" height="28" rx="14" fill="#f8e1d9"/>
+    <text x="828" y="570" fill="#c35e49" font-size="11" text-anchor="middle">薄弱点</text>
+    <circle cx="292" cy="666" r="7" fill="#d2a655"/>
+    <text x="324" y="671" fill="#9a8a78" font-size="11">20:00 — 21:00</text>
+    <text x="324" y="698" fill="#172736" font-size="16" font-weight="700">数学一 · 真题演练</text>
+    <text x="324" y="724" fill="#6d736f" font-size="12">完成一组，正确率不低于 70% 就算过关</text>
+    <rect x="780" y="668" width="96" height="28" rx="14" fill="#f6ecd4"/>
+    <text x="828" y="687" fill="#a27a2b" font-size="11" text-anchor="middle">验证</text>
+    <circle cx="292" cy="770" r="7" fill="#b9b4ab"/>
+    <text x="324" y="775" fill="#9a8a78" font-size="11">21:15 — 21:30</text>
+    <text x="324" y="802" fill="#172736" font-size="16" font-weight="700">写下今天的一个发现</text>
+
+    <rect x="968" y="0" width="472" height="900" fill="#172736"/>
+    <text x="1004" y="62" fill="#aeb8b3" font-size="10" letter-spacing="2">YOUR COACH IS HERE</text>
+    <text x="1004" y="108" fill="#fffaf3" font-size="24" font-weight="700">知知的建议</text>
+    <text x="1004" y="138" fill="#9daaa5" font-size="12">不替你决定，只帮你看清下一步。</text>
+    <line x1="1004" y1="176" x2="1404" y2="176" stroke="#344855"/>
+    <circle cx="1032" cy="225" r="16" fill="#e47b61"/>
+    <text x="1032" y="231" fill="#fffaf3" font-size="12" text-anchor="middle">知</text>
+    <text x="1070" y="220" fill="#f2eee6" font-size="14" font-weight="700">我看到了一个小信号</text>
+    <text x="1070" y="247" fill="#aeb8b3" font-size="12">你连续两天在 21:30 后效率下降，</text>
+    <text x="1070" y="269" fill="#aeb8b3" font-size="12">所以我把今天的量压到刚刚好。</text>
+    <rect x="1004" y="310" width="400" height="118" rx="14" fill="#223744"/>
+    <text x="1032" y="344" fill="#e7b966" font-size="11" letter-spacing="1">一条可以马上执行的建议</text>
+    <text x="1032" y="375" fill="#fffaf3" font-size="14" font-weight="700">先做 3 道题，不要打开整章。</text>
+    <text x="1032" y="402" fill="#aeb8b3" font-size="12">完成后告诉我：是概念、计算，还是粗心。</text>
+    <rect x="1004" y="466" width="400" height="96" rx="14" fill="#1e303c" stroke="#405461"/>
+    <text x="1032" y="500" fill="#9daaa5" font-size="11">你可以这样告诉我</text>
+    <text x="1032" y="531" fill="#fffaf3" font-size="14">“我卡在第二步，感觉是概念没懂。”</text>
+    <line x1="1004" y1="610" x2="1404" y2="610" stroke="#344855"/>
+    <text x="1004" y="650" fill="#71817e" font-size="10" letter-spacing="2">QUICK NOTES</text>
+    <text x="1004" y="690" fill="#dbe2dc" font-size="13">＋ 记录一个学习发现</text>
+    <text x="1004" y="730" fill="#dbe2dc" font-size="13">＋ 把今天改轻一点</text>
+    <text x="1004" y="770" fill="#dbe2dc" font-size="13">＋ 看看我的薄弱点</text>
+    <rect x="1004" y="820" width="400" height="44" rx="22" fill="#f5ede2"/>
+    <text x="1032" y="848" fill="#71817e" font-size="12">和你的教练说说今天的状态…</text>
+    <text x="1372" y="848" fill="#e47b61" font-size="18" text-anchor="middle">↗</text>
+  </g>
+</svg>
