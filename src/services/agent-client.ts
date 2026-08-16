@@ -3,10 +3,6 @@ import type {
   AgentApproval,
   AgentBrief,
   AgentContextAuditRow,
-  AgentJob,
-  AgentJobType,
-  AgentMemoryCreateInput,
-  AgentMemoryRecord,
   AgentMessage,
   AgentPlannerTurn,
   AgentRun,
@@ -49,6 +45,15 @@ export function decideAgentApproval(approvalId: string, approve: boolean): Promi
   return invoke<AgentApproval>('agent_decide_approval', { approvalId, approve })
 }
 
+/**
+ * Mandatory Task C: approve *executes* the approved tool through the Rust
+ * executor (re-checking scope/precondition/schema); reject only updates state.
+ * The confirm button must use this, never the state-only decideAgentApproval.
+ */
+export function resolveAgentApproval(approvalId: string, approve: boolean): Promise<AgentApproval> {
+  return invoke<AgentApproval>('agent_resolve_approval', { approvalId, approve })
+}
+
 export function undoAgentTool(stepId: string): Promise<AgentToolUndoResponse> {
   return invoke<AgentToolUndoResponse>('agent_undo_tool', { stepId })
 }
@@ -58,60 +63,38 @@ export function runAgentPlanner(runId: string, goal: string): Promise<AgentPlann
   return invoke<AgentPlannerTurn>('agent_run_planner', { runId, goal })
 }
 
+export interface CloudConsentStatus {
+  configured: boolean
+  consented: boolean
+  fingerprint: string | null
+}
+
+/** Cloud LLM data-export consent status for the current provider config. */
+export function cloudConsentStatus(): Promise<CloudConsentStatus> {
+  return invoke<CloudConsentStatus>('agent_cloud_consent_status')
+}
+
+/** Record explicit user consent for the current provider/base/model tuple. */
+export function confirmCloudConsent(): Promise<CloudConsentStatus> {
+  return invoke<CloudConsentStatus>('agent_confirm_cloud_consent')
+}
+
+export interface ProviderTestResult {
+  model: string
+  latency_ms: number
+  text_stream: boolean
+  tool_call: boolean
+  error_code?: string
+}
+
+/** Probe the configured cloud provider through the Rust planner (Task 6). */
+export function testAgentProvider(): Promise<ProviderTestResult> {
+  return invoke<ProviderTestResult>('agent_test_provider')
+}
+
 /** Context Inspector (M3 Part 3): every model-call audit row of a run. */
 export function listAgentContextAudit(runId: string): Promise<AgentContextAuditRow[]> {
   return invoke<AgentContextAuditRow[]>('agent_context_audit_list', { runId })
-}
-
-/** Structured long-term memory management (M3 Part 3). */
-export function listAgentMemories(
-  examId: string | null,
-  includeInactive: boolean,
-): Promise<AgentMemoryRecord[]> {
-  return invoke<AgentMemoryRecord[]>('agent_memory_list', { examId, includeInactive })
-}
-
-export function createAgentMemory(input: AgentMemoryCreateInput): Promise<AgentMemoryRecord> {
-  return invoke<AgentMemoryRecord>('agent_memory_create', {
-    examId: input.exam_id,
-    memoryType: input.memory_type,
-    content: input.content,
-    source: input.source,
-    confidence: input.confidence,
-  })
-}
-
-export function confirmAgentMemory(id: string): Promise<AgentMemoryRecord> {
-  return invoke<AgentMemoryRecord>('agent_memory_confirm', { id })
-}
-
-export function updateAgentMemory(id: string, content: string): Promise<AgentMemoryRecord> {
-  return invoke<AgentMemoryRecord>('agent_memory_update', { id, content })
-}
-
-export function deactivateAgentMemory(id: string): Promise<AgentMemoryRecord> {
-  return invoke<AgentMemoryRecord>('agent_memory_deactivate', { id })
-}
-
-export function deleteAgentMemory(id: string): Promise<void> {
-  return invoke<void>('agent_memory_delete', { id })
-}
-
-/** Background jobs (M4). */
-export function listAgentJobs(limit?: number): Promise<AgentJob[]> {
-  return invoke<AgentJob[]>('agent_job_list', { limit: limit ?? null })
-}
-
-export function scheduleAgentJob(
-  jobType: AgentJobType,
-  dedupKey: string,
-  scheduledAt: string,
-): Promise<string | null> {
-  return invoke<string | null>('agent_job_schedule', {
-    jobType,
-    dedupKey,
-    scheduledAt,
-  })
 }
 
 /** Daily brief preview (M4). */

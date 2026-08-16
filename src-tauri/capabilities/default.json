@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "智研默认权限集（Phase 1：sql/dialog/http/fs/process/opener；notification/stronghold 留到 Phase 4）",
+  "description": "智研默认权限集（Phase 1：sql/dialog/fs/process/opener；notification/stronghold 留到 Phase 4；Task 18 移除 http 插件权限）",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -12,13 +12,6 @@
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
-    {
-      "identifier": "http:default",
-      "allow": [
-        { "url": "https://*" },
-        { "url": "http://*" }
-      ]
-    },
     "fs:default",
     "fs:allow-read-file",
     "fs:allow-write-file",

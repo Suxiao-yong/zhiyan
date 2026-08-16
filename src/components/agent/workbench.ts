@@ -1,10 +1,11 @@
-// Workbench registry for the Agent OS right pane (M6 Task 4).
-export type WorkbenchKey = 'checkin' | 'plan' | 'record' | 'analysis' | 'visualization'
+// Workbench registry for the Agent OS right pane. Task 3: only the three core
+// study surfaces — Today check-in, Plan, Records. Analysis and visualization
+// are no longer page embeddings (analysis moves into the conversation; the
+// two statistics blocks live inside Plan/Records).
+export type WorkbenchKey = 'checkin' | 'plan' | 'record'
 
 export const WORKBENCHES: { key: WorkbenchKey; label: string }[] = [
-  { key: 'checkin', label: '计划打卡' },
-  { key: 'plan', label: '学习计划' },
-  { key: 'record', label: '记录与错题' },
-  { key: 'analysis', label: 'AI 分析' },
-  { key: 'visualization', label: '数据可视化' },
+  { key: 'checkin', label: '今日打卡' },
+  { key: 'plan', label: '计划' },
+  { key: 'record', label: '记录' },
 ]

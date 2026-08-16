@@ -1,0 +1,602 @@
+{
+ "input": {
+  "exam_date": "2030-01-31",
+  "start_date": "2030-01-01",
+  "daily_hours": 6.0
+ },
+ "total_days": 30,
+ "phases": [
+  {
+   "name": "基础期",
+   "start": "2030-01-01",
+   "end": "2030-01-15"
+  },
+  {
+   "name": "强化期",
+   "start": "2030-01-16",
+   "end": "2030-01-24"
+  },
+  {
+   "name": "冲刺期",
+   "start": "2030-01-25",
+   "end": "2030-01-30"
+  }
+ ],
+ "daily_plans": [
+  {
+   "date": "2030-01-01",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-02",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-03",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-04",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-05",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-06",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "复习：几何",
+     "duration_min": 135
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "复习：词汇",
+     "duration_min": 45
+    }
+   ]
+  },
+  {
+   "date": "2030-01-07",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-08",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-09",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-10",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-11",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-12",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-13",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "复习：函数",
+     "duration_min": 135
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "复习：词汇",
+     "duration_min": 45
+    }
+   ]
+  },
+  {
+   "date": "2030-01-14",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-15",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-16",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-17",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-18",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-19",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-20",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "复习：几何",
+     "duration_min": 135
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "复习：词汇",
+     "duration_min": 45
+    }
+   ]
+  },
+  {
+   "date": "2030-01-21",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-22",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-23",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-24",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-25",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-26",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-27",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "复习：函数",
+     "duration_min": 135
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "复习：词汇",
+     "duration_min": 45
+    }
+   ]
+  },
+  {
+   "date": "2030-01-28",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-29",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-func",
+     "task": "学习：函数",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  },
+  {
+   "date": "2030-01-30",
+   "tasks": [
+    {
+     "subject_id": "sub-math",
+     "subject_name": "数学",
+     "knowledge_point_id": "kp-geo",
+     "task": "学习：几何",
+     "duration_min": 270
+    },
+    {
+     "subject_id": "sub-eng",
+     "subject_name": "英语",
+     "knowledge_point_id": "kp-word",
+     "task": "学习：词汇",
+     "duration_min": 90
+    }
+   ]
+  }
+ ],
+ "summary": {
+  "total_tasks": 60,
+  "total_duration_min": 10080,
+  "avg_daily_min": 336
+ }
+}

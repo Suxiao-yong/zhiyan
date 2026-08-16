@@ -7,13 +7,17 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke }))
 import {
   agentHealth,
   cancelAgentRun,
+  cloudConsentStatus,
+  confirmCloudConsent,
   createAgentRun,
   createAgentSession,
   decideAgentApproval,
   executeAgentTool,
   listAgentTools,
+  resolveAgentApproval,
   runAgentPlanner,
   startAgentRun,
+  testAgentProvider,
   undoAgentTool,
 } from './agent-client'
 import type { AgentToolCallRequest } from '@/types'
@@ -94,7 +98,15 @@ describe('agent runtime client', () => {
   })
 
   it('invokes the hidden planner command with camelCase arguments', async () => {
-    const turn = { mode: 'local', final_text: 'ok', iterations: 0, model_calls: 0, prompt_tokens: 0, completion_tokens: 0, trace: [] }
+    const turn = {
+      mode: 'local',
+      final_text: 'ok',
+      iterations: 0,
+      model_calls: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      trace: [],
+    }
     vi.mocked(invoke).mockResolvedValue(turn)
 
     await expect(runAgentPlanner('run-1', '看今天的计划')).resolves.toBe(turn)
@@ -102,5 +114,45 @@ describe('agent runtime client', () => {
       runId: 'run-1',
       goal: '看今天的计划',
     })
+  })
+
+  it('reads and confirms the cloud LLM consent status', async () => {
+    const notConsented = { configured: true, consented: false, fingerprint: 'fp-1' }
+    const consented = { configured: true, consented: true, fingerprint: 'fp-1' }
+    vi.mocked(invoke).mockResolvedValueOnce(notConsented).mockResolvedValue(consented)
+
+    await expect(cloudConsentStatus()).resolves.toBe(notConsented)
+    expect(invoke).toHaveBeenLastCalledWith('agent_cloud_consent_status')
+    await expect(confirmCloudConsent()).resolves.toBe(consented)
+    expect(invoke).toHaveBeenLastCalledWith('agent_confirm_cloud_consent')
+  })
+
+  it('resolves an approval through the executing rust path', async () => {
+    const resolved = { id: 'approval-1', status: 'approved' }
+    vi.mocked(invoke).mockResolvedValue(resolved)
+
+    await expect(resolveAgentApproval('approval-1', true)).resolves.toBe(resolved)
+    expect(invoke).toHaveBeenLastCalledWith('agent_resolve_approval', {
+      approvalId: 'approval-1',
+      approve: true,
+    })
+    await resolveAgentApproval('approval-1', false)
+    expect(invoke).toHaveBeenLastCalledWith('agent_resolve_approval', {
+      approvalId: 'approval-1',
+      approve: false,
+    })
+  })
+
+  it('tests the provider through the rust planner', async () => {
+    const result = {
+      model: 'deepseek-chat',
+      latency_ms: 812,
+      text_stream: true,
+      tool_call: true,
+      error_code: undefined,
+    }
+    vi.mocked(invoke).mockResolvedValue(result)
+    await expect(testAgentProvider()).resolves.toBe(result)
+    expect(invoke).toHaveBeenLastCalledWith('agent_test_provider')
   })
 })

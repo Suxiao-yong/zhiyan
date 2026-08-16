@@ -102,10 +102,7 @@ describe('导入数据兼容性', () => {
     await restoreDatabase()
 
     expect(invoke).toHaveBeenCalledWith('agent_prepare_database_restore')
-    expect(fs.writeFile).toHaveBeenCalledWith(
-      '/canonical-config/zhiyan.db',
-      expect.any(Uint8Array),
-    )
+    expect(fs.writeFile).toHaveBeenCalledWith('/canonical-config/zhiyan.db', expect.any(Uint8Array))
     expect(order.indexOf('closeDb')).toBeLessThan(order.indexOf('agent_prepare_database_restore'))
     expect(order.indexOf('agent_prepare_database_restore')).toBeLessThan(order.indexOf('writeFile'))
     expect(order.indexOf('writeFile')).toBeLessThan(order.indexOf('relaunch'))

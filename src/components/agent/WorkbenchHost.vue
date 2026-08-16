@@ -2,21 +2,22 @@
 import PlanCheckinBoard from '@/components/record/PlanCheckinBoard.vue'
 import StudyPlan from '@/pages/StudyPlan.vue'
 import StudyRecord from '@/pages/StudyRecord.vue'
-import Analysis from '@/pages/Analysis.vue'
-import Visualization from '@/pages/Visualization.vue'
 import { WORKBENCHES, type WorkbenchKey } from './workbench'
 
 /**
- * Right pane of the Agent OS shell. M6 Task 4 turns it into a workbench
- * registry: each key mounts a reused page component; switching workbenches
- * never loses the conversation (the pane is isolated from the center pane).
+ * Right pane of the Agent OS shell. Task 3: only the three core study
+ * surfaces (check-in / plan / records) mount here; Analysis and Visualization
+ * are no longer page embeddings. Switching workbenches never loses the
+ * conversation (the pane is isolated from the center pane).
  */
 defineProps<{ workbench: WorkbenchKey }>()
 </script>
 
 <template>
   <section class="workbench-host" data-test="workbench-host">
-    <header class="workbench-title">{{ WORKBENCHES.find((w) => w.key === workbench)?.label }}</header>
+    <header class="workbench-title">
+      {{ WORKBENCHES.find((w) => w.key === workbench)?.label }}
+    </header>
     <div class="workbench-body">
       <PlanCheckinBoard v-if="workbench === 'checkin'" data-test="workbench-checkin" />
       <StudyPlan v-else-if="workbench === 'plan'" data-test="workbench-plan" />
@@ -25,8 +26,6 @@ defineProps<{ workbench: WorkbenchKey }>()
         data-test="workbench-record"
         initial-tab="records"
       />
-      <Analysis v-else-if="workbench === 'analysis'" data-test="workbench-analysis" />
-      <Visualization v-else-if="workbench === 'visualization'" data-test="workbench-visualization" />
     </div>
   </section>
 </template>

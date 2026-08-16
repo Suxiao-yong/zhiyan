@@ -1,78 +1,39 @@
 // 系统设置 store。
 // theme/notification 从 settings 表读写。
 // LLM 配置：provider/baseUrl/model/temperature 存 settings 表（非敏感），apiKey 存 OS 凭据管理器（keyring/DPAPI，加密）。
-// 降级策略：keyring 失败时，apiKey 以 XOR+base64 混淆后存入 settings 表（{provider}_api_key_fallback），
-//   防止明文落盘，同时保证 keyring 不可用时用户不必每次重填。
+// 密钥只允许 Rust 从 keyring 读取；前端只提交用户刚输入的 key 到 store_api_key（保存意图），
+// 从不调用 load_api_key，从不把已保存 key 放入 Pinia store、普通页面状态或消息。
+// 旧 fallback 键若存在，只用于提示用户重新输入 API Key，绝不解密、绝不发送。
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { getSetting, setSetting, deleteSetting } from '@/services/db'
+import { getSetting, setSetting, deleteSetting, hasSetting } from '@/services/db'
 import type { LLMConfig } from '@/types'
 
-// ---- API Key 混淆工具（XOR + base64，防止 SQLite 明文暴露） ----
-
-const SALT = 'zhiyan-app-salt-2024'
-
-/** 混淆：XOR 后 base64 编码（非加密，仅防明文暴露） */
-export function obfuscate(key: string): string {
-  if (!key) return ''
-  const xored = Array.from(key)
-    .map((c, i) => String.fromCharCode(c.charCodeAt(0) ^ SALT.charCodeAt(i % SALT.length)))
-    .join('')
-  return btoa(unescape(encodeURIComponent(xored)))
-}
-
-/** 解混淆：base64 解码后 XOR 还原 */
-export function deobfuscate(encoded: string): string {
-  if (!encoded) return ''
-  try {
-    const xored = decodeURIComponent(escape(atob(encoded)))
-    return Array.from(xored)
-      .map((c, i) => String.fromCharCode(c.charCodeAt(0) ^ SALT.charCodeAt(i % SALT.length)))
-      .join('')
-  } catch {
-    return ''
-  }
-}
-
-/** settings 表中 fallback key 的键名 */
+/** settings 表中旧 fallback key 的键名（仅用于检测并提示重输） */
 function fallbackKey(provider: string): string {
   return `${provider}_api_key_fallback`
 }
 
-/** 从 keyring 或 fallback 加载 apiKey */
-async function loadApiKey(provider: string): Promise<{ key: string; fromKeyring: boolean }> {
-  // 1. 首选 keyring
+/** 是否存在旧的 fallback 键（只做存在性判断，不读取其值、不解密） */
+async function hasLegacyFallback(provider: string): Promise<boolean> {
   try {
-    const k = await invoke<string | null>('load_api_key', { provider })
-    if (k) return { key: k, fromKeyring: true }
-  } catch (e) {
-    console.warn('从凭据管理器加载 apiKey 失败，尝试 fallback', e)
+    return await hasSetting(fallbackKey(provider))
+  } catch {
+    return false
   }
-  // 2. 降级：SQLite fallback
-  try {
-    const fb = await getSetting(fallbackKey(provider))
-    if (fb) {
-      const key = deobfuscate(fb)
-      if (key) return { key, fromKeyring: false }
-    }
-  } catch (e) {
-    console.warn('从 fallback 加载 apiKey 也失败', e)
-  }
-  return { key: '', fromKeyring: false }
 }
 
-/** 保存 apiKey：keyring（首选）+ SQLite fallback（兜底） */
+/** 保存用户新输入的 apiKey：只写 keyring；成功后清理旧 fallback */
 async function saveApiKey(provider: string, key: string): Promise<void> {
   if (!key) return
-  // 1. 写 fallback（始终写，确保有备份）
-  await setSetting(fallbackKey(provider), obfuscate(key), 'API Key fallback (obfuscated)')
-  // 2. 尝试 keyring
+  await invoke('store_api_key', { provider, key })
+  // 用户成功保存到 keyring 后，删除旧的 fallback 键（新代码不得创建/读取 fallback）
   try {
-    await invoke('store_api_key', { provider, key })
-  } catch (e) {
-    console.warn('保存 apiKey 到凭据管理器失败（已存入 fallback）', e)
+    await deleteSetting(fallbackKey(provider))
+  } catch {
+    /* ignore */
   }
 }
 
@@ -81,6 +42,10 @@ export const useSettingsStore = defineStore('settings', () => {
   const reminderTime = ref<string | null>(null)
   const notificationEnabled = ref(true)
   const llmConfig = ref<LLMConfig | null>(null)
+  /** keyring 中是否已有当前 provider 的 key（只读布尔，由 has_api_key 返回） */
+  const keyConfigured = ref(false)
+  /** 检测到旧 fallback 键时置 true，提示用户重新输入 API Key */
+  const legacyFallbackDetected = ref(false)
 
   async function loadSettings() {
     const t = await getSetting('theme')
@@ -90,30 +55,47 @@ export const useSettingsStore = defineStore('settings', () => {
     await loadLlmConfig()
   }
 
-  /** 从 settings 表加载非敏感配置 + 从 keyring/fallback 加载 apiKey */
+  /** 按 provider 刷新 key 状态（keyring 布尔 + 旧 fallback 键检测）。
+   *  provider 切换时表单已改但未保存，不能依赖 llm_provider 的已存值。 */
+  async function refreshKeyState(provider: string) {
+    try {
+      keyConfigured.value = await invoke<boolean>('has_api_key', { provider })
+    } catch {
+      keyConfigured.value = false
+    }
+    legacyFallbackDetected.value = await hasLegacyFallback(provider)
+  }
+
+  /** 从 settings 表加载非敏感配置；key 的存在性只通过 has_api_key 布尔结果获知 */
   async function loadLlmConfig() {
     const provider = await getSetting('llm_provider')
     if (!provider) {
       llmConfig.value = null
+      keyConfigured.value = false
+      legacyFallbackDetected.value = false
       return
     }
     const baseUrl = (await getSetting('llm_base_url')) ?? ''
     const model = (await getSetting('llm_model')) ?? ''
     const temperature = Number(await getSetting('llm_temperature')) || 0.7
-    const { key: apiKey } = await loadApiKey(provider)
-    llmConfig.value = { provider, baseUrl, model, temperature, apiKey }
+    llmConfig.value = { provider, baseUrl, model, temperature }
+    await refreshKeyState(provider)
   }
 
-  /** 保存 LLM 配置：非敏感入 settings 表，apiKey 入 keyring + fallback */
-  async function saveLlmConfig(form: LLMConfig) {
+  /** 保存 LLM 配置：用户新输入的 key 先写 keyring，成功后再写非敏感 settings；
+   *  keyring 失败时抛错，settings 与 store 的“已保存配置”快照均不更新。
+   *  空 key 表示沿用已配置的 key（仅当 keyConfigured 为 true 时才允许）。 */
+  async function saveLlmConfig(form: LLMConfig, apiKeyInput = '') {
+    if (apiKeyInput) {
+      await saveApiKey(form.provider, apiKeyInput)
+    }
     await setSetting('llm_provider', form.provider, 'LLM Provider')
     await setSetting('llm_base_url', form.baseUrl, 'LLM baseUrl')
     await setSetting('llm_model', form.model, 'LLM model')
     await setSetting('llm_temperature', String(form.temperature), 'LLM temperature')
-    if (form.apiKey) {
-      await saveApiKey(form.provider, form.apiKey)
-    }
     llmConfig.value = { ...form }
+    if (apiKeyInput) keyConfigured.value = true
+    legacyFallbackDetected.value = false
   }
 
   async function clearLlmConfig() {
@@ -124,7 +106,7 @@ export const useSettingsStore = defineStore('settings', () => {
       } catch {
         /* ignore */
       }
-      // 同时清除 fallback
+      // 同时清除旧 fallback 键
       try {
         await deleteSetting(fallbackKey(provider))
       } catch {
@@ -132,6 +114,8 @@ export const useSettingsStore = defineStore('settings', () => {
       }
     }
     llmConfig.value = null
+    keyConfigured.value = false
+    legacyFallbackDetected.value = false
   }
 
   async function setTheme(t: 'light' | 'dark') {
@@ -152,8 +136,11 @@ export const useSettingsStore = defineStore('settings', () => {
     reminderTime,
     notificationEnabled,
     llmConfig,
+    keyConfigured,
+    legacyFallbackDetected,
     loadSettings,
     loadLlmConfig,
+    refreshKeyState,
     saveLlmConfig,
     clearLlmConfig,
     setTheme,

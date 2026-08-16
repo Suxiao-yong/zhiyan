@@ -503,6 +503,9 @@ mod tests {
             .collect();
 
         assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
+        // The unpublished v11 (plan preview/apply ownership seeds) was removed
+        // after confirming no distributed database ever applied it; v10 is the
+        // current latest and v1-v10 SQL is unchanged.
         assert_eq!(versions.last(), Some(&10));
     }
 
@@ -1270,6 +1273,184 @@ mod tests {
                 .await
                 .unwrap();
                 assert_eq!(index_count, 1);
+            });
+    }
+
+    /// Task 17 Step 2: the full migration set must create every table the
+    /// current runtime and the historical data channels depend on.
+    #[test]
+    fn full_migrations_create_every_required_runtime_table() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                for migration in migrations() {
+                    sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+                }
+
+                for table in [
+                    "exams",
+                    "subjects",
+                    "knowledge_points",
+                    "study_plans",
+                    "study_records",
+                    "wrong_questions",
+                    "settings",
+                    "ai_analyses",
+                    "agent_sessions",
+                    "agent_runs",
+                    "agent_steps",
+                    "agent_approvals",
+                    "agent_messages",
+                    "agent_context_audit",
+                    "agent_memories",
+                    "agent_jobs",
+                ] {
+                    let count: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+                    )
+                    .bind(table)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                    assert_eq!(
+                        count, 1,
+                        "required table `{table}` missing after full migrations"
+                    );
+                }
+            });
+    }
+
+    /// Task 17 Step 3 / Task 7: legacy/deprecated rows (ai_analyses,
+    /// agent_memories, agent_jobs, ownership settings — including the removed
+    /// unpublished v11 seeds — consent fingerprint, API-key fallback) must
+    /// survive the migration/startup entry untouched. The rows are seeded into
+    /// the v10 schema first and the full migration set is then re-run, exactly
+    /// like a real upgrade: legacy values are never rewritten by the migration
+    /// runner and the new runtime never reads them.
+    #[test]
+    fn legacy_deprecated_rows_survive_migrations_untouched() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                // Simulate the version-tracked migration runner used by the
+                // startup entry (tauri-plugin-sql records applied versions): a
+                // migration is executed only when its version is new, so a
+                // re-run of the entry never re-applies ALTER TABLE statements.
+                let mut applied = std::collections::HashSet::new();
+                // 1. Create the v10 schema (the current latest; v11 was never
+                // distributed, so this is the production upgrade target).
+                for migration in migrations() {
+                    if applied.insert(migration.version) {
+                        sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+                    }
+                }
+
+                // 2. Seed the legacy rows the product no longer writes,
+                // including the two v11 ownership keys as pre-existing legacy
+                // rows that must survive untouched.
+                sqlx::raw_sql(
+                    r#"
+                    INSERT INTO ai_analyses (id, analysis_type, content, generated_by, user_confirmed)
+                    VALUES ('a-old', 'daily', '历史 AI 分析正文', 'ai', 1);
+                    INSERT INTO agent_memories
+                        (id, memory_type, content, source, confidence, status)
+                    VALUES ('m-old', 'daily_capacity', '旧记忆', 'user_statement', 1.0, 'confirmed');
+                    INSERT INTO agent_jobs (id, job_type, dedup_key, scheduled_at, status, runs)
+                    VALUES ('j-old', 'daily_brief', 'daily_brief:2026-01-01', '2026-01-01 08:00:00', 'completed', 1);
+                    INSERT OR REPLACE INTO settings(key, value) VALUES
+                        ('agent_tool_owner.record.checkin_plan', 'typescript'),
+                        ('agent_tool_owner.plan.preview_generate', 'rust-owned'),
+                        ('agent_tool_owner.plan.apply_preview', 'rust-owned'),
+                        ('cloud_llm_consent_fingerprint', 'old-fingerprint'),
+                        ('deepseek_api_key_fallback', 'legacy-secret');
+                    "#,
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+
+                // 3. Re-run the version-tracked startup entry — a real
+                // database sees no new versions, so nothing is re-applied and
+                // the legacy rows are untouched.
+                for migration in migrations() {
+                    if applied.insert(migration.version) {
+                        sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+                    }
+                }
+                assert_eq!(applied.len(), migrations().len());
+
+                // 4. Legacy rows survive byte-for-byte; the runtime never
+                // rewrites or clears them during startup/migrations.
+                let analyses: String =
+                    sqlx::query_scalar("SELECT content FROM ai_analyses WHERE id='a-old'")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(analyses, "历史 AI 分析正文");
+
+                let memory: (String, String) = sqlx::query_as(
+                    "SELECT content, status FROM agent_memories WHERE id='m-old'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(memory.0, "旧记忆");
+                assert_eq!(memory.1, "confirmed");
+
+                let job: (String, String) = sqlx::query_as(
+                    "SELECT job_type, status FROM agent_jobs WHERE id='j-old'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(job.0, "daily_brief");
+                assert_eq!(job.1, "completed");
+
+                // Legacy settings survive byte-for-byte; the new runtime never
+                // rewrites or clears them during startup/migrations.
+                let owner: String =
+                    sqlx::query_scalar("SELECT value FROM settings WHERE key='agent_tool_owner.record.checkin_plan'")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(owner, "typescript");
+                let fingerprint: String =
+                    sqlx::query_scalar("SELECT value FROM settings WHERE key='cloud_llm_consent_fingerprint'")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(fingerprint, "old-fingerprint");
+                let fallback: String =
+                    sqlx::query_scalar("SELECT value FROM settings WHERE key='deepseek_api_key_fallback'")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_eq!(fallback, "legacy-secret");
+
+                // Base business tables remain readable and writable.
+                sqlx::query("INSERT INTO exams (id, name, exam_date) VALUES ('exam-live','L','2030-01-01')")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                let exams: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM exams")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                assert_eq!(exams, 1);
             });
     }
 }

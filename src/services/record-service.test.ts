@@ -1,3 +1,5 @@
+/// <reference lib="es2015" />
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StudyPlan, StudyRecord } from '@/types'
 
@@ -202,8 +204,10 @@ describe('计划任务打卡', () => {
       'p1',
       expect.objectContaining({ actual_duration: 0, status: 'pending' }),
     )
-    expect(vi.mocked(db.update).mock.invocationCallOrder.at(-1)).toBeLessThan(
-      vi.mocked(db.remove).mock.invocationCallOrder[0],
-    )
+    expect(
+      vi.mocked(db.update).mock.invocationCallOrder[
+        vi.mocked(db.update).mock.invocationCallOrder.length - 1
+      ],
+    ).toBeLessThan(vi.mocked(db.remove).mock.invocationCallOrder[0])
   })
 })

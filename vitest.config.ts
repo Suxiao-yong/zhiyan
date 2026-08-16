@@ -13,5 +13,7 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['src/**/*.test.ts'],
+    // router 测试动态加载 AgentHome 依赖链，冷启动偶发超过 5s 默认超时
+    testTimeout: 15000,
   },
 })

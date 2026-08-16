@@ -1,10 +1,45 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Promotion } from '@element-plus/icons-vue'
+import { Promotion, ChatDotRound, Connection } from '@element-plus/icons-vue'
 import { useAgentStore } from '@/stores/agent'
+import { useExamStore } from '@/stores/exam'
+import { useSettingsStore } from '@/stores/settings'
 import AgentStatus from './AgentStatus.vue'
+import AgentEmptyState from './AgentEmptyState.vue'
 
 const agent = useAgentStore()
+const settings = useSettingsStore()
+const examStore = useExamStore()
+
+// Task 9 Step 5: explicit cloud-state messaging instead of pretending "local
+// mode" is a model answer.
+const cloudAvailable = computed(() => {
+  const config = settings.llmConfig
+  return !!config && config.provider !== 'ollama' && !!config.baseUrl && !!config.model
+})
+
+// Task 15 Step 4: every empty state carries an explicit next step.
+const emptyTitle = computed(() => {
+  if (!examStore.activeExamId) return '请先配置考试'
+  if (!cloudAvailable.value) return '尚未连接云端模型'
+  return '开始今天的对话'
+})
+
+const emptyDescription = computed(() => {
+  if (!examStore.activeExamId) {
+    return '前往“设置”添加考试与科目后，Agent 才能基于你的学习数据给出建议。'
+  }
+  if (!cloudAvailable.value) {
+    return '你仍可查看和编辑本地数据；连接模型后可使用对话、计划调整和智能复盘。'
+  }
+  return '发送一条消息，Agent 会结合今日计划、近期记录和错题给出建议。'
+})
+
+const emptyIcon = computed(() => {
+  if (!examStore.activeExamId) return null
+  if (!cloudAvailable.value) return Connection
+  return ChatDotRound
+})
 
 const draft = computed({
   get: () => agent.inputText,
@@ -27,9 +62,14 @@ function messageClass(role: string): string {
   <section class="conversation-pane" data-test="conversation-pane">
     <AgentStatus />
     <div class="message-stream" data-test="message-stream">
-      <p v-if="agent.messages.length === 0" class="stream-empty" data-test="messages-empty">
-        发送一条消息，Agent 会分析今日计划并给出建议。
-      </p>
+      <AgentEmptyState
+        v-if="agent.messages.length === 0"
+        class="stream-empty"
+        data-test="messages-empty"
+        :title="emptyTitle"
+        :description="emptyDescription"
+        :icon="emptyIcon"
+      />
       <article
         v-for="message in agent.messages"
         :key="message.id"

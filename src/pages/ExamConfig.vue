@@ -8,7 +8,6 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import ExamCard from '@/components/exam/ExamCard.vue'
 import ExamForm from '@/components/exam/ExamForm.vue'
 import SubjectManager from '@/components/exam/SubjectManager.vue'
-import PlanChatAssistant from '@/components/plan/PlanChatAssistant.vue'
 import type { Exam } from '@/types'
 import type { ExamInput } from '@/services/exam-service'
 
@@ -18,8 +17,6 @@ const examDialogVisible = ref(false)
 const editingExam = ref<Exam | null>(null)
 const subjectMgrExamId = ref<string | null>(null)
 const subjectMgrVisible = ref(false)
-const assistantVisible = ref(false)
-const assistantExam = ref<{ id: string; name: string } | null>(null)
 
 onMounted(() => store.loadExams())
 
@@ -38,10 +35,8 @@ async function handleSubmitExam(data: ExamInput) {
       await store.updateExam(editingExam.value.id, data)
       ElMessage.success('考试已更新')
     } else {
-      const exam = await store.createExam(data)
+      await store.createExam(data)
       ElMessage.success('考试已创建')
-      assistantExam.value = { id: exam.id, name: exam.name }
-      assistantVisible.value = true
     }
     examDialogVisible.value = false
   } catch (e) {
@@ -126,12 +121,6 @@ const subjectMgrExamName = () =>
         @close="subjectMgrVisible = false"
       />
     </el-dialog>
-
-    <PlanChatAssistant
-      v-model="assistantVisible"
-      :exam-id="assistantExam?.id ?? ''"
-      :exam-name="assistantExam?.name ?? ''"
-    />
   </div>
 </template>
 

@@ -21,12 +21,6 @@ export const useRecordStore = defineStore('record', () => {
   const wrongQuestions = ref<WrongWithNames[]>([])
   const wrongTotal = ref(0)
 
-  // 仪表盘
-  const todayMinutes = ref(0)
-  const streak = ref(0)
-  const weeklyTrend = ref<{ date: string; minutes: number; label: string }[]>([])
-  const subjectRatio = ref<{ subjectId: string; subjectName: string; minutes: number }[]>([])
-
   async function loadRecords(filter: RecordFilter) {
     const r = await recordService.getRecords(filter)
     records.value = r.rows
@@ -39,22 +33,6 @@ export const useRecordStore = defineStore('record', () => {
     const r = await recordService.getWrongQuestions(filter)
     wrongQuestions.value = r.rows
     wrongTotal.value = r.total
-  }
-  async function loadDashboardStats() {
-    const [tm, sk, wt, sr] = await Promise.all([
-      recordService.getTodayMinutes(),
-      recordService.getStreak(),
-      recordService.getWeeklyTrend(),
-      recordService.getSubjectRatioThisWeek(),
-    ])
-    todayMinutes.value = tm
-    streak.value = sk
-    weeklyTrend.value = wt
-    subjectRatio.value = sr
-  }
-  /** 趋势图按科目过滤（饼图点击筛选；null=恢复总计） */
-  async function setTrendFilter(subjectId: string | null) {
-    weeklyTrend.value = await recordService.getWeeklyTrend(subjectId ?? undefined)
   }
 
   /** 创建记录并联动写入错题 */
@@ -98,15 +76,9 @@ export const useRecordStore = defineStore('record', () => {
     calendarMonth,
     wrongQuestions,
     wrongTotal,
-    todayMinutes,
-    streak,
-    weeklyTrend,
-    subjectRatio,
     loadRecords,
     loadCalendarMonth,
     loadWrongQuestions,
-    loadDashboardStats,
-    setTrendFilter,
     createRecord,
     createPlanCheckin,
     getPlanCheckins,

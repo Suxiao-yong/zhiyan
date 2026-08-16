@@ -9,9 +9,10 @@ import {
   cancelAgentRun,
   createAgentRun,
   createAgentSession,
-  decideAgentApproval,
+  resolveAgentApproval,
   runAgentPlanner,
   startAgentRun,
+  undoAgentTool,
 } from '@/services/agent-client'
 import type {
   AgentApproval,
@@ -95,10 +96,7 @@ export const useAgentStore = defineStore('agent', () => {
     try {
       let sessionId = activeSessionId.value
       if (!sessionId) {
-        const session = await createAgentSession(
-          examStore.activeExamId,
-          goal.slice(0, 20),
-        )
+        const session = await createAgentSession(examStore.activeExamId, goal.slice(0, 20))
         sessionId = session.id
         activeSessionId.value = sessionId
         sessions.value = [session, ...sessions.value]
@@ -138,12 +136,32 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
-  async function decideApproval(approvalId: string, approve: boolean): Promise<void> {
+  /**
+   * Task 10: resolve an approval through the Rust executor. Approving really
+   * executes the approved tool (re-checking scope/precondition/schema) and
+   * then refreshes the conversation, brief, and approval list; rejecting only
+   * updates state. Never the state-only decideAgentApproval path. A
+   * per-approval claim guard makes a double click on confirm resolve exactly
+   * once.
+   */
+  const resolvingApprovals = new Set<string>()
+  function isResolving(approvalId: string): boolean {
+    return resolvingApprovals.has(approvalId)
+  }
+  async function resolveApproval(approvalId: string, approve: boolean): Promise<void> {
+    if (resolvingApprovals.has(approvalId)) return
+    resolvingApprovals.add(approvalId)
     try {
-      await decideAgentApproval(approvalId, approve)
+      await resolveAgentApproval(approvalId, approve)
       await refreshApprovals()
+      if (approve && activeSessionId.value) {
+        messages.value = await agentSessionMessages(activeSessionId.value)
+      }
+      await loadBrief()
     } catch (caught) {
       error.value = String(caught)
+    } finally {
+      resolvingApprovals.delete(approvalId)
     }
   }
 
@@ -151,6 +169,24 @@ export const useAgentStore = defineStore('agent', () => {
     if (!run.value) return
     try {
       run.value = await cancelAgentRun(run.value.id)
+    } catch (caught) {
+      error.value = String(caught)
+    }
+  }
+
+  /**
+   * Task 5: undo an executed write tool (plan.apply_preview, record.checkin_plan)
+   * through the Rust executor. Success refreshes the approval list, the
+   * conversation, and the brief so the restored state is visible.
+   */
+  async function undoTool(stepId: string): Promise<void> {
+    try {
+      await undoAgentTool(stepId)
+      await refreshApprovals()
+      if (activeSessionId.value) {
+        messages.value = await agentSessionMessages(activeSessionId.value)
+      }
+      await loadBrief()
     } catch (caught) {
       error.value = String(caught)
     }
@@ -177,7 +213,9 @@ export const useAgentStore = defineStore('agent', () => {
     loadBrief,
     acknowledgeBrief,
     refreshApprovals,
-    decideApproval,
+    resolveApproval,
+    isResolving,
     cancelRun,
+    undoTool,
   }
 })

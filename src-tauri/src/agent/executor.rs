@@ -8,13 +8,16 @@ use sha2::{Digest, Sha256};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 use uuid::Uuid;
 
+use super::tools::plan::PlanPreviewGenerateInput;
 use super::{
     error::AgentError,
     model::{ApprovalRecord, ToolCallRequest, ToolCallResponse},
     policy::{self, PolicyContext, PolicyDecision},
     tools::{
         exam,
-        plan::{self, PlanGenerateInput, PlanGetRangeInput, PlanGetTodayInput},
+        plan::{
+            self, PlanApplyPreviewInput, PlanGenerateInput, PlanGetRangeInput, PlanGetTodayInput,
+        },
         record::{
             self, RecordCheckinPlanInput, RecordCheckinPlanOutput, RecordCreateFreeInput,
             RecordGetHistoryInput,
@@ -57,10 +60,25 @@ pub struct RecordCheckinUndoOutput {
     pub status: String,
 }
 
+/// Undo result for `plan.apply_preview`: what was removed, restored, and
+/// re-attached when the draft apply was rolled back.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PlanApplyUndoOutput {
+    pub kind: String,
+    pub exam_id: String,
+    pub inserted_plan_ids: Vec<String>,
+    pub restored_plan_ids: Vec<String>,
+    pub restored_record_count: i64,
+    pub status: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolUndoResponse {
     pub step_id: String,
-    pub output: RecordCheckinUndoOutput,
+    /// Serialized undo output. `kind` discriminates the receipt type:
+    /// `record.checkin_plan.v1` (RecordCheckinUndoOutput) or
+    /// `plan.apply_preview.v1` (PlanApplyUndoOutput).
+    pub output: Value,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -128,7 +146,6 @@ pub(crate) struct DispatchResult {
 pub(crate) struct TestDispatcherConfig {
     dispatch_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     invalid_output: bool,
-    ownership_flip: Option<String>,
     rollback_before_dispatch_once: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     start_idempotency_race_once: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
@@ -180,27 +197,17 @@ impl AgentExecutor {
     }
 
     pub async fn list_tools(&self) -> Result<Vec<ListedTool>, AgentError> {
-        let mut listed = Vec::new();
-        for descriptor in self.registry.descriptors() {
-            let key = format!("agent_tool_owner.{}", descriptor.name);
-            let value: Option<String> =
-                sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
-                    .bind(key)
-                    .fetch_optional(&self.pool)
-                    .await
-                    .map_err(map_sqlx)?;
-            let ownership = match value.as_deref() {
-                Some("typescript") => ToolOwnership::Typescript,
-                Some("shadow") => ToolOwnership::Shadow,
-                Some("rust-owned") => ToolOwnership::RustOwned,
-                _ => ToolOwnership::Unavailable,
-            };
-            listed.push(ListedTool {
+        // Task 13: every registered tool is Rust-owned; the legacy
+        // `agent_tool_owner.*` settings are no longer read.
+        Ok(self
+            .registry
+            .descriptors()
+            .into_iter()
+            .map(|descriptor| ListedTool {
                 descriptor: descriptor.clone(),
-                ownership,
-            });
-        }
-        Ok(listed)
+                ownership: ToolOwnership::RustOwned,
+            })
+            .collect())
     }
 
     pub async fn execute(&self, request: ToolCallRequest) -> Result<ToolCallResponse, AgentError> {
@@ -211,7 +218,7 @@ impl AgentExecutor {
         self.registry
             .validate_input(&request.tool_name, &request.tool_version, &request.input)?;
         let normalized_input = normalize_input(&descriptor, request.input.clone())?;
-        let input_json = input_snapshot(&descriptor, &normalized_input)?.to_string();
+        let input_json = canonical_json(normalized_input.clone()).to_string();
         let first = self
             .execute_once(&request, &descriptor, normalized_input.clone(), &input_json)
             .await;
@@ -343,6 +350,194 @@ impl AgentExecutor {
         finish_transaction(tx, result).await
     }
 
+    /// Mandatory Task C: resolve an approval by *executing* the approved tool.
+    ///
+    /// - approve: reloads the step's original input, re-runs the run-scope
+    ///   guard (Rule 12), the R3 precondition-hash check, and schema
+    ///   validation, then dispatches the tool in the same transaction and
+    ///   finalizes approval/step/run states. A stale/expired approval or a
+    ///   changed precondition fails safely without any business write.
+    /// - reject: only updates approval/step/run state — no business write.
+    ///
+    /// The frontend "confirm" button must call this command, never the
+    /// state-only `agent_decide_approval`, so approving an R3 write really
+    /// performs the write through the Rust executor.
+    pub async fn resolve_approval(
+        &self,
+        approval_id: &str,
+        approve: bool,
+    ) -> Result<ApprovalRecord, AgentError> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+        let approval = load_approval(&mut tx, approval_id).await?;
+        let expires_at = chrono::DateTime::parse_from_rfc3339(&approval.expires_at)
+            .map_err(|_| AgentError::ApprovalInvalid)?
+            .with_timezone(&Utc);
+        if matches!(approval.status.as_str(), "pending" | "approved") && expires_at <= Utc::now() {
+            let (tool_name, tool_version): (String, String) = sqlx::query_as(
+                "SELECT tool_name,tool_version FROM agent_steps WHERE id=? AND run_id=?",
+            )
+            .bind(&approval.step_id)
+            .bind(&approval.run_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx)?;
+            let descriptor = self.registry.get(&tool_name, &tool_version)?.clone();
+            terminalize_expired_approval(&mut tx, &approval, &descriptor).await?;
+            tx.commit().await.map_err(map_sqlx)?;
+            return Err(AgentError::ApprovalInvalid);
+        }
+        let result = if approve {
+            // A dispatch-time failure (precondition/schema/persistence) must
+            // roll back the attempted business write (plans/records/wrong
+            // questions) while still landing the run and step in observable
+            // terminal states. The approval execution runs inside a savepoint
+            // so `finalize_approval_failure` below starts from the
+            // pre-dispatch state (step waiting_approval, approval pending)
+            // instead of committing the failed tool's writes.
+            sqlx::query("SAVEPOINT approve_dispatch")
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx)?;
+            let attempt = self.resolve_approval_approved(&mut tx, &approval).await;
+            if attempt.is_err() {
+                sqlx::query("ROLLBACK TO SAVEPOINT approve_dispatch")
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(map_sqlx)?;
+            }
+            sqlx::query("RELEASE SAVEPOINT approve_dispatch")
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx)?;
+            attempt
+        } else {
+            decide_approval_in_transaction(&mut tx, approval_id, false).await
+        };
+        match result {
+            Ok(record) => {
+                tx.commit().await.map_err(map_sqlx)?;
+                Ok(record)
+            }
+            // The failed tool never performed a committed business write: the
+            // savepoint rolled its writes back, and only the terminal state
+            // updates (step/run failed, approval rejected) are committed.
+            Err(error) => {
+                let _ = finalize_approval_failure(&mut tx, &approval, error.code()).await;
+                tx.commit().await.map_err(map_sqlx)?;
+                Err(error)
+            }
+        }
+    }
+
+    async fn resolve_approval_approved(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        approval: &StoredApproval,
+    ) -> Result<ApprovalRecord, AgentError> {
+        if approval.status != "pending" {
+            return Err(AgentError::ApprovalInvalid);
+        }
+        let (tool_name, tool_version, input_json, idempotency_key): (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        ) = sqlx::query_as(
+            "SELECT tool_name, tool_version, input_json, idempotency_key \
+             FROM agent_steps WHERE id=? AND run_id=? AND status='waiting_approval'",
+        )
+        .bind(&approval.step_id)
+        .bind(&approval.run_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(map_sqlx)?
+        .ok_or(AgentError::ApprovalInvalid)?;
+        let input: Value =
+            serde_json::from_str(input_json.as_deref().ok_or(AgentError::ApprovalInvalid)?)
+                .map_err(|_| AgentError::ApprovalInvalid)?;
+        let descriptor = self.registry.get(&tool_name, &tool_version)?.clone();
+        self.registry
+            .validate_input(&tool_name, &tool_version, &input)?;
+
+        // Rule 12: re-check the input against the run's bound exam.
+        enforce_run_scope(tx, &approval.run_id, descriptor.name, &input).await?;
+
+        // R3 precondition re-check: the state the approval was based on must
+        // still match. Tools with their own precondition (plan.apply_preview's
+        // plan-state hash) additionally re-check inside dispatch.
+        let expected = approval_precondition_hash(approval)?;
+        let current_hash = self.dispatcher.precondition_hash(tx, &input).await?;
+        if current_hash != expected {
+            let _ =
+                terminalize_failed_approval_step(tx, approval, &descriptor, "precondition_changed")
+                    .await;
+            return Err(AgentError::PreconditionChanged);
+        }
+
+        // Atomic claim: only a still-waiting step may run.
+        let lock = sqlx::query(
+            "UPDATE agent_steps SET status='running', policy_json=? \
+             WHERE id=? AND status='waiting_approval'",
+        )
+        .bind(policy_receipt(&descriptor, "approved_executing").to_string())
+        .bind(&approval.step_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(map_sqlx)?;
+        if lock.rows_affected() != 1 {
+            return Err(AgentError::Conflict);
+        }
+
+        // Execute the tool and finalize the step.
+        let dispatched = self
+            .dispatcher
+            .dispatch(tx, &descriptor, input, &approval.step_id)
+            .await?;
+        self.registry
+            .validate_output(&descriptor, &dispatched.output)?;
+        complete_dispatched_step(
+            tx,
+            &approval.run_id,
+            &approval.step_id,
+            &descriptor,
+            &dispatched,
+            policy_receipt(&descriptor, "approved_executed"),
+        )
+        .await?;
+
+        // Approval decided; run completes (the approved write is the last step).
+        sqlx::query(
+            "UPDATE agent_approvals SET status='approved', decided_at=? \
+             WHERE id=? AND status='pending'",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(&approval.id)
+        .execute(&mut **tx)
+        .await
+        .map_err(map_sqlx)?;
+        sqlx::query(
+            "UPDATE agent_runs SET status='completed', completed_at=datetime('now','localtime') \
+             WHERE id=? AND status='waiting_approval'",
+        )
+        .bind(&approval.run_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(map_sqlx)?;
+
+        insert_tool_event(
+            tx,
+            &approval.run_id,
+            &approval.step_id,
+            "tool.completed",
+            &descriptor,
+            "approved_executed",
+            None,
+        )
+        .await?;
+        let _ = idempotency_key;
+        approval_record(load_approval(tx, &approval.id).await?)
+    }
+
     async fn execute_in_transaction(
         &self,
         tx: &mut Transaction<'_, Sqlite>,
@@ -351,13 +546,16 @@ impl AgentExecutor {
         input: Value,
         input_json: &str,
     ) -> Result<CoreOutcome, AgentError> {
-        self.dispatcher
-            .before_ownership_check(tx, descriptor)
-            .await?;
-        let ownership = ownership_for_in_transaction(tx, descriptor.name).await?;
-        ensure_executable_ownership(descriptor, ownership)?;
+        // Task 13: every registered tool is Rust-owned; the legacy
+        // `agent_tool_owner.*` settings are no longer read at execution time.
 
         let run = load_run(tx, &request.run_id).await?;
+        // Rule 12: every tool call is confined to the exam bound to the run's
+        // session. Inputs carrying exam/subject/knowledge-point/plan/record/
+        // wrong-question references must all resolve to the bound exam; a run
+        // without a bound exam may not touch business data at all. Violations
+        // return the stable `tool_scope_violation` before any SQL mutation.
+        enforce_run_scope(tx, &request.run_id, descriptor.name, &input).await?;
         let stored = find_existing_step(tx, request).await?;
         if let Some(stored) = stored.as_ref() {
             validate_stored_step(stored, request, input_json)?;
@@ -406,7 +604,7 @@ impl AgentExecutor {
         let decision = match descriptor.risk {
             RiskLevel::R3 => {
                 return self
-                    .handle_r3(tx, request, descriptor, &reserved, input, ownership)
+                    .handle_r3(tx, request, descriptor, &reserved, input)
                     .await;
             }
             risk => policy::decide(PolicyContext {
@@ -418,7 +616,7 @@ impl AgentExecutor {
 
         if decision == PolicyDecision::PresentSummary {
             sqlx::query("UPDATE agent_steps SET status='pending', policy_json=? WHERE id=?")
-                .bind(policy_receipt(descriptor, "summary", ownership).to_string())
+                .bind(policy_receipt(descriptor, "summary").to_string())
                 .bind(&reserved.id)
                 .execute(&mut **tx)
                 .await
@@ -441,7 +639,7 @@ impl AgentExecutor {
                     undo: None,
                     undo_available: false,
                 },
-                policy_receipt(descriptor, "navigation", ownership),
+                policy_receipt(descriptor, "navigation"),
             )
             .await?;
             advance_run(tx, request).await?;
@@ -460,7 +658,7 @@ impl AgentExecutor {
         let dispatched = tokio::time::timeout(
             std::time::Duration::from_millis(descriptor.timeout_ms),
             self.dispatcher
-                .dispatch(tx, descriptor, input, &reserved.id, ownership),
+                .dispatch(tx, descriptor, input, &reserved.id),
         )
         .await
         .map_err(|_| AgentError::ToolTimeout)??;
@@ -477,7 +675,7 @@ impl AgentExecutor {
             &reserved.id,
             descriptor,
             &dispatched,
-            policy_receipt(descriptor, decision_name, ownership),
+            policy_receipt(descriptor, decision_name),
         )
         .await?;
         advance_run(tx, request).await?;
@@ -496,20 +694,20 @@ impl AgentExecutor {
         descriptor: &ToolDescriptor,
         reserved: &ReservedStep,
         input: Value,
-        ownership: ToolOwnership,
     ) -> Result<CoreOutcome, AgentError> {
         if reserved.existing_status.as_deref() != Some("waiting_approval") {
             if request.approval_id.is_some() {
                 return Err(AgentError::ApprovalInvalid);
             }
             let current_hash = self.dispatcher.precondition_hash(tx, &input).await?;
+            let preview = build_approval_preview(tx, descriptor.name, &input).await?;
             let approval = create_pending_approval(
                 tx,
                 request,
                 descriptor,
                 &reserved.id,
                 &current_hash,
-                ownership,
+                preview,
             )
             .await?;
             return Ok(CoreOutcome::Response(waiting_response(&approval)?));
@@ -562,7 +760,7 @@ impl AgentExecutor {
         let dispatched = tokio::time::timeout(
             std::time::Duration::from_millis(descriptor.timeout_ms),
             self.dispatcher
-                .dispatch(tx, descriptor, input, &reserved.id, ownership),
+                .dispatch(tx, descriptor, input, &reserved.id),
         )
         .await
         .map_err(|_| AgentError::ToolTimeout)??;
@@ -574,7 +772,7 @@ impl AgentExecutor {
             &reserved.id,
             descriptor,
             &dispatched,
-            policy_receipt(descriptor, "execute", ownership),
+            policy_receipt(descriptor, "execute"),
         )
         .await?;
         advance_run(tx, request).await?;
@@ -596,28 +794,33 @@ impl AgentExecutor {
             .filter(|key| !key.trim().is_empty())
             .ok_or(AgentError::IdempotencyRequired)?
             .to_owned();
-        let descriptor = record::descriptor();
         let normalized =
             serde_json::to_value(&request.input).map_err(|_| AgentError::ToolSchemaInvalid)?;
-        let input_json = input_snapshot(&descriptor, &normalized)?.to_string();
-        let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
-        let result = async {
-            let ownership = ownership_for_in_transaction(&mut tx, RECORD_CHECKIN_TOOL).await?;
-            ensure_executable_ownership(&record::descriptor(), ownership)?;
-            execute_checkin_in_transaction(&mut tx, request, &key, &input_json, false).await
+        let input_json = canonical_json(normalized.clone()).to_string();
+        // Same-key race on WAL: the loser of the step-reservation INSERT sees a
+        // unique violation (busy or reserved-by-other) and must retry a bounded
+        // number of times to replay the winner's completed step instead of
+        // surfacing a spurious conflict (mirrors the generic execute() path).
+        let mut attempt = 0_u32;
+        loop {
+            let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
+            let result = async {
+                execute_checkin_in_transaction(&mut tx, &request, &key, &input_json, false).await
+            }
+            .await;
+            match finish_transaction(tx, result).await {
+                Err(AgentError::IdempotencyConflict) if attempt < 2 => {
+                    attempt += 1;
+                    continue;
+                }
+                other => return other,
+            }
         }
-        .await;
-        finish_transaction(tx, result).await
     }
 
     pub async fn undo(&self, step_id: &str) -> Result<ToolUndoResponse, AgentError> {
         let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
-        let result = async {
-            let ownership = ownership_for_in_transaction(&mut tx, RECORD_CHECKIN_TOOL).await?;
-            ensure_executable_ownership(&record::descriptor(), ownership)?;
-            undo_in_transaction(&mut tx, step_id).await
-        }
-        .await;
+        let result = async { undo_in_transaction(&mut tx, step_id).await }.await;
         finish_transaction(tx, result).await
     }
 }
@@ -645,25 +848,6 @@ impl ToolDispatcher {
                 .is_some_and(|flag| flag.swap(false, Ordering::SeqCst))
             {
                 return Err(AgentError::IdempotencyConflict);
-            }
-        }
-        Ok(())
-    }
-
-    async fn before_ownership_check(
-        &self,
-        _tx: &mut Transaction<'_, Sqlite>,
-        _descriptor: &ToolDescriptor,
-    ) -> Result<(), AgentError> {
-        #[cfg(test)]
-        if let Self::Synthetic(config) = self {
-            if let Some(owner) = config.ownership_flip.as_deref() {
-                sqlx::query("UPDATE settings SET value=? WHERE key=?")
-                    .bind(owner)
-                    .bind(format!("agent_tool_owner.{}", _descriptor.name))
-                    .execute(&mut **_tx)
-                    .await
-                    .map_err(map_sqlx)?;
             }
         }
         Ok(())
@@ -697,7 +881,6 @@ impl ToolDispatcher {
         descriptor: &ToolDescriptor,
         input: Value,
         step_id: &str,
-        ownership: ToolOwnership,
     ) -> Result<DispatchResult, AgentError> {
         match self {
             Self::BuiltIn => match descriptor.name {
@@ -706,15 +889,10 @@ impl ToolDispatcher {
                         serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
                     let business_date = plan::business_date_at(Local::now().fixed_offset());
                     let output = plan::get_today(&mut **tx, input, &business_date).await?;
-                    let delivery = if ownership == ToolOwnership::Shadow {
-                        "shadow"
-                    } else {
-                        "rust"
-                    };
                     Ok(DispatchResult {
                         output: serde_json::to_value(output)
                             .map_err(|_| AgentError::ToolSchemaInvalid)?,
-                        receipt: Some(json!({"delivery":delivery})),
+                        receipt: Some(json!({"delivery":"rust"})),
                         undo: None,
                         undo_available: false,
                     })
@@ -741,6 +919,33 @@ impl ToolDispatcher {
                         receipt: Some(json!({"delivery":"rust"})),
                         undo: None,
                         undo_available: false,
+                    })
+                }
+                "plan.preview_generate" => {
+                    let input: PlanPreviewGenerateInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = plan::preview_generate(tx, input, step_id).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "plan.apply_preview" => {
+                    let input: PlanApplyPreviewInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let (output, undo) = plan::apply_preview(tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: Some(
+                            serde_json::to_value(&undo)
+                                .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        ),
+                        undo_available: true,
                     })
                 }
                 "record.get_history" => {
@@ -903,7 +1108,7 @@ pub(crate) async fn dispatch_record_checkin_business(
 
 pub(crate) async fn execute_checkin_in_transaction(
     tx: &mut Transaction<'_, Sqlite>,
-    request: RecordCheckinExecutionRequest,
+    request: &RecordCheckinExecutionRequest,
     idempotency_key: &str,
     input_json: &str,
     emit_requested: bool,
@@ -983,9 +1188,13 @@ pub(crate) async fn execute_checkin_in_transaction(
         return Err(AgentError::Conflict);
     }
 
-    let dispatched =
-        dispatch_record_checkin_business(tx, &step_id, request.input, &request.business_date)
-            .await?;
+    let dispatched = dispatch_record_checkin_business(
+        tx,
+        &step_id,
+        request.input.clone(),
+        &request.business_date,
+    )
+    .await?;
     let descriptor = record::descriptor();
     ToolRegistry::built_in().validate_output(&descriptor, &dispatched.output)?;
     complete_dispatched_step(
@@ -994,7 +1203,7 @@ pub(crate) async fn execute_checkin_in_transaction(
         &step_id,
         &descriptor,
         &dispatched,
-        policy_receipt(&descriptor, "execute_with_undo", ToolOwnership::RustOwned),
+        policy_receipt(&descriptor, "execute_with_undo"),
     )
     .await?;
     let output: RecordCheckinPlanOutput =
@@ -1024,15 +1233,33 @@ pub(crate) async fn undo_in_transaction(
     .map_err(map_sqlx)?
     .ok_or_else(|| AgentError::NotFound(step_id.to_owned()))?;
 
-    if step.status != "completed"
-        || step.tool_name != RECORD_CHECKIN_TOOL
-        || step.tool_version != RECORD_CHECKIN_VERSION
-        || !record::descriptor().supports_undo
-    {
+    if step.status != "completed" {
+        return Err(AgentError::ToolSchemaInvalid);
+    }
+
+    // Undo is per-tool: each write tool owns its receipt shape and restore
+    // logic. Adding a tool means adding a branch here plus its helper.
+    match (step.tool_name.as_str(), step.tool_version.as_str()) {
+        (RECORD_CHECKIN_TOOL, RECORD_CHECKIN_VERSION) => {
+            undo_checkin_in_transaction(tx, &step).await
+        }
+        ("plan.apply_preview", "1") => undo_apply_preview_in_transaction(tx, &step).await,
+        _ => Err(AgentError::ToolSchemaInvalid),
+    }
+}
+
+/// Undo for `record.checkin_plan`: remove the written record (and its wrong
+/// questions), then recompute the plan's actuals. Refuses when the record was
+/// re-attached to another plan or the plan changed underneath (conflict).
+async fn undo_checkin_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    step: &UndoStep,
+) -> Result<ToolUndoResponse, AgentError> {
+    if !record::descriptor().supports_undo {
         return Err(AgentError::ToolSchemaInvalid);
     }
     if step.undone_at.is_some() {
-        return stored_undo_response(&step);
+        return stored_undo_response(step);
     }
 
     let undo: RecordCheckinUndoReceipt = serde_json::from_str(
@@ -1196,7 +1423,7 @@ pub(crate) async fn undo_in_transaction(
     };
     let response = ToolUndoResponse {
         step_id: step.id.clone(),
-        output,
+        output: serde_json::to_value(&output).map_err(|_| AgentError::ToolSchemaInvalid)?,
     };
     receipt["undo_result"] =
         serde_json::to_value(&response).map_err(|_| AgentError::ToolSchemaInvalid)?;
@@ -1229,6 +1456,179 @@ pub(crate) async fn undo_in_transaction(
             "step_id": step.id,
             "tool_name": RECORD_CHECKIN_TOOL,
             "tool_version": RECORD_CHECKIN_VERSION,
+            "result": "undone"
+        })
+        .to_string(),
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    Ok(response)
+}
+
+/// Undo for `plan.apply_preview`: delete the inserted draft rows, restore the
+/// replaced plan rows and the detached record->plan relationships, then verify
+/// the restored state hash matches the pre-apply snapshot. Any missing
+/// snapshot, repeated undo, or external modification since apply returns
+/// `conflict` — user changes are never silently overwritten.
+async fn undo_apply_preview_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    step: &UndoStep,
+) -> Result<ToolUndoResponse, AgentError> {
+    if step.undone_at.is_some() {
+        // A repeated undo of an already-undone apply is a conflict, never a
+        // silent no-op: the UI must not pretend a second rollback happened.
+        return Err(AgentError::Conflict);
+    }
+    let undo: crate::agent::tools::plan::PlanApplyUndoReceipt = serde_json::from_str(
+        step.undo_json
+            .as_deref()
+            .ok_or(AgentError::ToolSchemaInvalid)?,
+    )
+    .map_err(|_| AgentError::ToolSchemaInvalid)?;
+    if undo.kind != crate::agent::tools::plan::PLAN_APPLY_UNDO_KIND {
+        return Err(AgentError::ToolSchemaInvalid);
+    }
+
+    // Precondition: nothing may have changed since the apply. A manual edit, a
+    // second apply, or a deleted inserted row all change the plan state hash.
+    let current_hash = plan::plan_state_hash(tx, &undo.exam_id).await?;
+    if current_hash != undo.hash_after {
+        return Err(AgentError::Conflict);
+    }
+    for id in &undo.inserted_plan_ids {
+        let exists: Option<String> = sqlx::query_scalar("SELECT id FROM study_plans WHERE id=?")
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(map_sqlx)?;
+        if exists.is_none() {
+            return Err(AgentError::Conflict);
+        }
+    }
+    // The detached records must still be detached (not re-attached or deleted).
+    for record in &undo.detached_records {
+        let current_plan: Option<Option<String>> =
+            sqlx::query_scalar("SELECT plan_id FROM study_records WHERE id=?")
+                .bind(&record.id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_sqlx)?;
+        if !matches!(current_plan, Some(None)) {
+            return Err(AgentError::Conflict);
+        }
+    }
+
+    for id in &undo.inserted_plan_ids {
+        let deleted = sqlx::query("DELETE FROM study_plans WHERE id=?")
+            .bind(id)
+            .execute(&mut **tx)
+            .await
+            .map_err(map_sqlx)?;
+        if deleted.rows_affected() != 1 {
+            return Err(AgentError::Conflict);
+        }
+    }
+
+    let mut restored_plan_ids = Vec::with_capacity(undo.replaced_plans.len());
+    for restored in &undo.replaced_plans {
+        sqlx::query(
+            "INSERT INTO study_plans \
+             (id, exam_id, subject_id, knowledge_point_id, date, planned_tasks, \
+              planned_duration, actual_duration, actual_tasks, status, generated_by, \
+              ai_suggestion, user_modified, created_at, updated_at, sort_order) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&restored.id)
+        .bind(&restored.exam_id)
+        .bind(&restored.subject_id)
+        .bind(&restored.knowledge_point_id)
+        .bind(&restored.date)
+        .bind(&restored.planned_tasks)
+        .bind(restored.planned_duration)
+        .bind(restored.actual_duration)
+        .bind(&restored.actual_tasks)
+        .bind(&restored.status)
+        .bind(&restored.generated_by)
+        .bind(&restored.ai_suggestion)
+        .bind(restored.user_modified)
+        .bind(&restored.created_at)
+        .bind(&restored.updated_at)
+        .bind(restored.sort_order)
+        .execute(&mut **tx)
+        .await
+        .map_err(map_sqlx)?;
+        restored_plan_ids.push(restored.id.clone());
+    }
+    for record in &undo.detached_records {
+        let updated =
+            sqlx::query("UPDATE study_records SET plan_id=? WHERE id=? AND plan_id IS NULL")
+                .bind(&record.plan_id)
+                .bind(&record.id)
+                .execute(&mut **tx)
+                .await
+                .map_err(map_sqlx)?;
+        if updated.rows_affected() != 1 {
+            return Err(AgentError::Conflict);
+        }
+    }
+
+    // The restored state must match the pre-apply snapshot exactly.
+    let restored_hash = plan::plan_state_hash(tx, &undo.exam_id).await?;
+    if restored_hash != undo.hash_before {
+        return Err(AgentError::Conflict);
+    }
+
+    let output = PlanApplyUndoOutput {
+        kind: undo.kind.clone(),
+        exam_id: undo.exam_id.clone(),
+        inserted_plan_ids: undo.inserted_plan_ids.clone(),
+        restored_plan_ids,
+        restored_record_count: undo.detached_records.len() as i64,
+        status: "undone".to_owned(),
+    };
+    let response = ToolUndoResponse {
+        step_id: step.id.clone(),
+        output: serde_json::to_value(&output).map_err(|_| AgentError::ToolSchemaInvalid)?,
+    };
+    let mut receipt: Value = step
+        .receipt_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|_| AgentError::ToolSchemaInvalid)?
+        .unwrap_or_else(|| json!({}));
+    receipt["undo_result"] =
+        serde_json::to_value(&response).map_err(|_| AgentError::ToolSchemaInvalid)?;
+
+    let updated = sqlx::query(
+        r#"
+        UPDATE agent_steps
+        SET undone_at=datetime('now','localtime'), receipt_json=?
+        WHERE id=? AND undone_at IS NULL
+        "#,
+    )
+    .bind(receipt.to_string())
+    .bind(&step.id)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    if updated.rows_affected() != 1 {
+        return Err(AgentError::IdempotencyConflict);
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO agent_events(run_id, step_id, event_type, payload_json)
+        VALUES(?, ?, 'tool.undone', ?)
+        "#,
+    )
+    .bind(&step.run_id)
+    .bind(&step.id)
+    .bind(
+        json!({
+            "step_id": step.id,
+            "tool_name": "plan.apply_preview",
+            "tool_version": "1",
             "result": "undone"
         })
         .to_string(),
@@ -1281,7 +1681,6 @@ async fn persist_failed_attempt(
     let mut tx = pool.begin().await.map_err(map_sqlx)?;
     let result = async {
         let step_id = Uuid::new_v4().to_string();
-        let ownership = ownership_for_in_transaction(&mut tx, descriptor.name).await?;
         sqlx::query(
             r#"
             INSERT INTO agent_steps(
@@ -1297,7 +1696,7 @@ async fn persist_failed_attempt(
         .bind(descriptor.version)
         .bind(risk_number(descriptor.risk))
         .bind(input_json)
-        .bind(policy_receipt(descriptor, "failed", ownership).to_string())
+        .bind(policy_receipt(descriptor, "failed").to_string())
         .bind(error_code)
         .bind(&request.idempotency_key)
         .execute(&mut *tx)
@@ -1391,15 +1790,6 @@ fn is_sqlite_busy(error: &sqlx::Error) -> bool {
     )
 }
 
-fn parse_ownership(value: Option<&str>) -> ToolOwnership {
-    match value {
-        Some("typescript") => ToolOwnership::Typescript,
-        Some("shadow") => ToolOwnership::Shadow,
-        Some("rust-owned") => ToolOwnership::RustOwned,
-        _ => ToolOwnership::Unavailable,
-    }
-}
-
 fn normalize_input(descriptor: &ToolDescriptor, input: Value) -> Result<Value, AgentError> {
     if descriptor.name == RECORD_CHECKIN_TOOL {
         let typed: RecordCheckinPlanInput =
@@ -1410,28 +1800,10 @@ fn normalize_input(descriptor: &ToolDescriptor, input: Value) -> Result<Value, A
     }
 }
 
-fn input_snapshot(descriptor: &ToolDescriptor, input: &Value) -> Result<Value, AgentError> {
-    if descriptor.name != RECORD_CHECKIN_TOOL {
-        return Ok(canonical_json(input.clone()));
-    }
-    let typed: RecordCheckinPlanInput =
-        serde_json::from_value(input.clone()).map_err(|_| AgentError::ToolSchemaInvalid)?;
-    Ok(canonical_json(json!({
-        "fields": {
-            "plan_id": typed.plan_id,
-            "duration_min": typed.duration_min,
-            "questions_count": typed.questions_count,
-            "correct_count": typed.correct_count,
-            "mastery_rating": typed.mastery_rating,
-            "mood": typed.mood,
-            "session_time": typed.session_time,
-            "finish": typed.finish,
-            "wrong_question_count": typed.wrong_questions.len(),
-        },
-        "fingerprint": hash_value(input),
-    })))
-}
-
+/// Stable JSON representation used for idempotency comparison and storage.
+/// Since Task 13 the check-in input is stored in this full canonical form too,
+/// so the R3 approval restore path (resolve_approval_approved) can re-dispatch
+/// it; a hash-only snapshot could not be turned back into an executable input.
 fn hash_value(value: &Value) -> String {
     let canonical = canonical_json(value.clone()).to_string();
     let digest = Sha256::digest(canonical.as_bytes());
@@ -1453,16 +1825,170 @@ fn should_persist_failure(error: &AgentError) -> bool {
     )
 }
 
-async fn ownership_for_in_transaction(
+/// Rule 12: confine every tool call to the exam bound to the run's session.
+///
+/// - `exam.get_active` has no input references and is the only tool a run
+///   without a bound exam may call (it resolves the active exam itself).
+/// - A run without a bound exam may not touch business data at all: any input
+///   carrying exam/plan/record/subject/knowledge-point/wrong-question
+///   reference is rejected with the stable `tool_scope_violation` code.
+/// - A run bound to exam A must have every input reference resolve to A; the
+///   model cannot read or write another exam's data by supplying another id.
+///
+/// This runs before any SQL mutation; all checks are read-only.
+async fn enforce_run_scope(
     tx: &mut Transaction<'_, Sqlite>,
+    run_id: &str,
     tool_name: &str,
-) -> Result<ToolOwnership, AgentError> {
-    let value: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key=?")
-        .bind(format!("agent_tool_owner.{tool_name}"))
+    input: &Value,
+) -> Result<(), AgentError> {
+    if tool_name == "exam.get_active" {
+        return Ok(());
+    }
+    let bound_exam: Option<String> =
+        sqlx::query_scalar("SELECT s.exam_id FROM agent_runs r JOIN agent_sessions s ON s.id = r.session_id WHERE r.id = ?")
+            .bind(run_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(map_sqlx)?
+            .flatten();
+
+    let scope_error = || AgentError::ToolScopeViolation;
+
+    // A run without a bound exam has no scope: any business reference is a
+    // violation (except exam.get_active handled above).
+    let Some(exam) = bound_exam else {
+        if input_references_business_data(tool_name, input) {
+            return Err(scope_error());
+        }
+        return Ok(());
+    };
+
+    if let Some(exam_id) = input.get("exam_id").and_then(Value::as_str) {
+        if exam_id != exam {
+            return Err(scope_error());
+        }
+    }
+    if let Some(plan_id) = input.get("plan_id").and_then(Value::as_str) {
+        let plan_exam: Option<String> =
+            sqlx::query_scalar("SELECT exam_id FROM study_plans WHERE id = ?")
+                .bind(plan_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_sqlx)?;
+        // A missing resource is the tool layer's not-found error; only a
+        // resource that exists outside the bound exam is a scope violation.
+        if let Some(plan_exam) = plan_exam {
+            if plan_exam != exam {
+                return Err(scope_error());
+            }
+        }
+    }
+    if let Some(record_id) = input.get("record_id").and_then(Value::as_str) {
+        let record_exam: Option<String> = sqlx::query_scalar(
+            "SELECT s.exam_id FROM study_records r JOIN subjects s ON s.id = r.subject_id \
+             WHERE r.id = ?",
+        )
+        .bind(record_id)
         .fetch_optional(&mut **tx)
         .await
         .map_err(map_sqlx)?;
-    Ok(parse_ownership(value.as_deref()))
+        if let Some(record_exam) = record_exam {
+            if record_exam != exam {
+                return Err(scope_error());
+            }
+        }
+    }
+    if let Some(subject_id) = input.get("subject_id").and_then(Value::as_str) {
+        let subject_exam: Option<String> =
+            sqlx::query_scalar("SELECT exam_id FROM subjects WHERE id = ?")
+                .bind(subject_id)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(map_sqlx)?;
+        if let Some(subject_exam) = subject_exam {
+            if subject_exam != exam {
+                return Err(scope_error());
+            }
+        }
+    }
+    if let Some(kp_id) = input.get("knowledge_point_id").and_then(Value::as_str) {
+        let kp_exam: Option<String> = sqlx::query_scalar(
+            "SELECT s.exam_id FROM knowledge_points k JOIN subjects s ON s.id = k.subject_id \
+             WHERE k.id = ?",
+        )
+        .bind(kp_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(map_sqlx)?;
+        if let Some(kp_exam) = kp_exam {
+            if kp_exam != exam {
+                return Err(scope_error());
+            }
+        }
+    }
+    if tool_name == "wrong_question.mark_mastered" {
+        if let Some(wq_id) = input.get("id").and_then(Value::as_str) {
+            let wq_exam: Option<String> = sqlx::query_scalar(
+                "SELECT s.exam_id FROM wrong_questions w JOIN subjects s ON s.id = w.subject_id \
+                 WHERE w.id = ?",
+            )
+            .bind(wq_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(map_sqlx)?;
+            if let Some(wq_exam) = wq_exam {
+                if wq_exam != exam {
+                    return Err(scope_error());
+                }
+            }
+        }
+    }
+    // `plan.apply_preview` carries no business id, but its persisted draft is
+    // exam-scoped: the draft's exam must equal the bound exam.
+    if tool_name == "plan.apply_preview" {
+        if let Some(step_id) = input.get("preview_step_id").and_then(Value::as_str) {
+            let draft_exam: Option<String> = sqlx::query_scalar(
+                "SELECT json_extract(output_json, '$.draft.exam_id') FROM agent_steps \
+                 WHERE id = ? AND tool_name = 'plan.preview_generate'",
+            )
+            .bind(step_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(map_sqlx)?;
+            if let Some(draft_exam) = draft_exam {
+                if draft_exam != exam {
+                    return Err(scope_error());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether an input carries any business-data reference field at all.
+/// `wrong_question.mark_mastered` reuses `id` as its business reference;
+/// `plan.apply_preview` applies an exam-scoped draft, so it is also a
+/// business-data touch.
+fn input_references_business_data(tool_name: &str, input: &Value) -> bool {
+    for field in [
+        "exam_id",
+        "plan_id",
+        "record_id",
+        "subject_id",
+        "knowledge_point_id",
+    ] {
+        if input.get(field).is_some() {
+            return true;
+        }
+    }
+    if tool_name == "wrong_question.mark_mastered" && input.get("id").is_some() {
+        return true;
+    }
+    if tool_name == "plan.apply_preview" {
+        return true;
+    }
+    false
 }
 
 async fn load_run(tx: &mut Transaction<'_, Sqlite>, run_id: &str) -> Result<StoredRun, AgentError> {
@@ -1572,12 +2098,12 @@ fn validate_run_gate(
     }
 }
 
-fn policy_receipt(descriptor: &ToolDescriptor, decision: &str, ownership: ToolOwnership) -> Value {
+fn policy_receipt(descriptor: &ToolDescriptor, decision: &str) -> Value {
     json!({
         "risk": descriptor.risk,
         "confirmation": descriptor.confirmation,
         "decision": decision,
-        "delivery": if ownership == ToolOwnership::Shadow { "shadow" } else { "rust" },
+        "delivery": "rust",
     })
 }
 
@@ -1646,25 +2172,6 @@ async fn advance_run(
         Ok(())
     } else {
         Err(AgentError::Conflict)
-    }
-}
-
-fn ensure_executable_ownership(
-    descriptor: &ToolDescriptor,
-    ownership: ToolOwnership,
-) -> Result<(), AgentError> {
-    if ownership == ToolOwnership::Unavailable {
-        return Err(AgentError::OwnershipUnavailable);
-    }
-    if descriptor.name == "plan.get_today"
-        && matches!(ownership, ToolOwnership::Shadow | ToolOwnership::RustOwned)
-    {
-        return Ok(());
-    }
-    if ownership == ToolOwnership::RustOwned {
-        Ok(())
-    } else {
-        Err(AgentError::OwnershipNotRust)
     }
 }
 
@@ -1930,7 +2437,7 @@ async fn terminalize_failed_approval_step(
     let step_updated = sqlx::query(
         "UPDATE agent_steps SET status='failed',policy_json=?,error='approval_invalid',completed_at=datetime('now','localtime') WHERE id=? AND status='waiting_approval'",
     )
-    .bind(policy_receipt(descriptor, "failed", ToolOwnership::RustOwned).to_string())
+    .bind(policy_receipt(descriptor, "failed").to_string())
     .bind(&approval.step_id)
     .execute(&mut **tx)
     .await
@@ -1955,6 +2462,45 @@ async fn terminalize_failed_approval_step(
         Some("approval_invalid"),
     )
     .await
+}
+
+/// Finalize a failed approval resolution: the step (running or waiting) and
+/// the run land in `failed`, the approval in `failed`, with the stable error
+/// code surfaced on the run. Used when an approved write fails at dispatch
+/// time (precondition/schema/persistence) so the run is never left
+/// `waiting_approval` or `running`.
+async fn finalize_approval_failure(
+    tx: &mut Transaction<'_, Sqlite>,
+    approval: &StoredApproval,
+    error_code: &str,
+) -> Result<(), AgentError> {
+    sqlx::query(
+        "UPDATE agent_steps SET status='failed',error=?,completed_at=datetime('now','localtime') \
+         WHERE id=? AND status IN ('running','waiting_approval')",
+    )
+    .bind(error_code)
+    .bind(&approval.step_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    sqlx::query(
+        "UPDATE agent_runs SET status='failed',error_code=?,completed_at=datetime('now','localtime') \
+         WHERE id=? AND status IN ('waiting_approval','running')",
+    )
+    .bind(error_code)
+    .bind(&approval.run_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    sqlx::query(
+        "UPDATE agent_approvals SET status='rejected',decided_at=? WHERE id=? AND status='pending'",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .bind(&approval.id)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    Ok(())
 }
 
 async fn read_bool_setting(
@@ -1998,13 +2544,242 @@ async fn load_approval_for_step(
     load_approval(tx, &approval_id).await
 }
 
+/// Build the standardized, sanitized approval preview (Task 10 Step 2). It
+/// carries the action name, affected-object count, date range, before/after
+/// summary, structured fields, conflicts, risk, and undo availability — never
+/// the API key, never raw model output, never full request bodies. For
+/// `plan.apply_preview` it includes the actual draft rows summary and the
+/// precondition hash instead of "call plan.generate".
+async fn build_approval_preview(
+    tx: &mut Transaction<'_, Sqlite>,
+    tool_name: &str,
+    input: &Value,
+) -> Result<Value, AgentError> {
+    let mut preview = serde_json::Map::new();
+    preview.insert("tool".to_owned(), Value::String(tool_name.to_owned()));
+    preview.insert("risk".to_owned(), json!(3));
+    preview.insert(
+        "undo_available".to_owned(),
+        Value::Bool(tool_name == "record.checkin_plan" || tool_name == "plan.apply_preview"),
+    );
+
+    let (action, affected_count, summary, conflicts, date_range, fields) = match tool_name {
+        "plan.apply_preview" => {
+            let step_id = input
+                .get("preview_step_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let draft_json: Option<String> = sqlx::query_scalar(
+                "SELECT output_json FROM agent_steps \
+                 WHERE id = ? AND tool_name = 'plan.preview_generate'",
+            )
+            .bind(step_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(map_sqlx)?;
+            match draft_json {
+                Some(json) => {
+                    // output_json holds PlanPreviewGenerateOutput; the draft
+                    // lives at $.draft and deserializes to the same PlanDraft
+                    // the apply will use, so preview and apply share the exact
+                    // projection (writable rows can never drift).
+                    let output: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+                    let draft: Option<crate::agent::plan_draft::PlanDraft> = output
+                        .get("draft")
+                        .cloned()
+                        .and_then(|draft| serde_json::from_value(draft).ok());
+                    if let Some(draft) = draft {
+                        let business_date = plan::business_date_at(Local::now().fixed_offset());
+                        let existing: Vec<plan::ExistingPlanRow> = sqlx::query_as(
+                            "SELECT id, date, subject_id, actual_duration \
+                             FROM study_plans WHERE exam_id = ?",
+                        )
+                        .bind(&draft.exam_id)
+                        .fetch_all(&mut **tx)
+                        .await
+                        .map_err(map_sqlx)?;
+                        let projection =
+                            plan::project_apply_rows(&draft, &existing, &business_date);
+                        let rows: Vec<Value> = projection
+                            .writable_rows
+                            .iter()
+                            .map(|row| {
+                                json!({
+                                    "date": row.date,
+                                    "subject_name": row.subject_name,
+                                    "planned_tasks": row.planned_tasks,
+                                    "planned_duration": row.planned_duration,
+                                })
+                            })
+                            .collect();
+                        let flattened = draft
+                            .daily_plans
+                            .iter()
+                            .flat_map(|day| {
+                                day.tasks.iter().map(|task| {
+                                    json!({
+                                        "date": day.date,
+                                        "subject_name": task.subject_name,
+                                        "planned_tasks": task.task,
+                                        "planned_duration": task.duration_min,
+                                    })
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        let sanitized_fields = json!({
+                            "precondition_hash": draft.precondition_hash,
+                            "draft_row_count": flattened.len(),
+                            "rows": rows,
+                            "kept_subjects": projection.kept_subjects,
+                            "conflicts": draft.conflicts,
+                        });
+                        (
+                            "应用计划草案".to_owned(),
+                            projection.writable_rows.len() as i64,
+                            format!(
+                                "将应用 {}~{} 共 {} 天的本地生成计划：{} 项任务；可写入 {} 行",
+                                draft.start_date,
+                                draft
+                                    .daily_plans
+                                    .last()
+                                    .map(|day| day.date.as_str())
+                                    .unwrap_or(""),
+                                draft.total_days,
+                                flattened.len(),
+                                projection.writable_rows.len(),
+                            ),
+                            serde_json::to_value(&draft.conflicts).unwrap_or_else(|_| json!([])),
+                            format!(
+                                "{}~{}",
+                                draft.start_date,
+                                draft
+                                    .daily_plans
+                                    .last()
+                                    .map(|day| day.date.as_str())
+                                    .unwrap_or("")
+                            ),
+                            sanitized_fields,
+                        )
+                    } else {
+                        (
+                            "应用计划草案".to_owned(),
+                            0_i64,
+                            "计划草案已失效，请重新生成".to_owned(),
+                            json!([]),
+                            String::new(),
+                            Value::Null,
+                        )
+                    }
+                }
+                None => (
+                    "应用计划草案".to_owned(),
+                    0_i64,
+                    "计划草案已失效，请重新生成".to_owned(),
+                    json!([]),
+                    String::new(),
+                    Value::Null,
+                ),
+            }
+        }
+        "record.checkin_plan" => {
+            let plan_id = input.get("plan_id").and_then(Value::as_str).unwrap_or("");
+            let duration = input
+                .get("duration_min")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let finish = input
+                .get("finish")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let date = input.get("date").and_then(Value::as_str).unwrap_or("");
+            (
+                if finish {
+                    "完成计划打卡".to_owned()
+                } else {
+                    "记录计划学习进度".to_owned()
+                },
+                1_i64,
+                format!(
+                    "计划 {plan_id} 学习 {duration} 分钟{}",
+                    if finish { "（完成）" } else { "" }
+                ),
+                json!([]),
+                date.to_owned(),
+                json!({"plan_id": plan_id, "duration_min": duration, "finish": finish}),
+            )
+        }
+        "record.create_free" => {
+            let subject_id = input
+                .get("subject_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let duration = input
+                .get("duration_min")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let date = input.get("date").and_then(Value::as_str).unwrap_or("");
+            (
+                "记录自由学习".to_owned(),
+                1_i64,
+                format!("科目 {subject_id} 学习 {duration} 分钟"),
+                json!([]),
+                date.to_owned(),
+                json!({"subject_id": subject_id, "duration_min": duration, "date": date}),
+            )
+        }
+        "wrong_question.create" => {
+            let subject_id = input
+                .get("subject_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            (
+                "记录错题".to_owned(),
+                1_i64,
+                format!("新增一条 {subject_id} 的错题"),
+                json!([]),
+                String::new(),
+                json!({"subject_id": subject_id}),
+            )
+        }
+        "wrong_question.mark_mastered" => {
+            let id = input.get("id").and_then(Value::as_str).unwrap_or("");
+            (
+                "标记错题已掌握".to_owned(),
+                1_i64,
+                format!("将错题 {id} 标记为已掌握"),
+                json!([]),
+                String::new(),
+                json!({"id": id}),
+            )
+        }
+        _ => (
+            "执行操作".to_owned(),
+            0_i64,
+            String::new(),
+            json!([]),
+            String::new(),
+            Value::Null,
+        ),
+    };
+
+    preview.insert("action".to_owned(), Value::String(action));
+    preview.insert("affected_count".to_owned(), json!(affected_count));
+    preview.insert("summary".to_owned(), Value::String(summary));
+    preview.insert("conflicts".to_owned(), conflicts);
+    preview.insert("date_range".to_owned(), Value::String(date_range));
+    // Sanitized structured fields: only whitelisted scalars (or the projected
+    // draft rows). The raw request body, API key, and model output never appear.
+    preview.insert("fields".to_owned(), fields);
+    Ok(Value::Object(preview))
+}
+
 async fn create_pending_approval(
     tx: &mut Transaction<'_, Sqlite>,
     request: &ToolCallRequest,
     descriptor: &ToolDescriptor,
     step_id: &str,
     precondition_hash: &str,
-    ownership: ToolOwnership,
+    preview: Value,
 ) -> Result<StoredApproval, AgentError> {
     let approval_id = Uuid::new_v4().to_string();
     let expires_at = (Utc::now() + ChronoDuration::minutes(10)).to_rfc3339();
@@ -2019,14 +2794,14 @@ async fn create_pending_approval(
     .bind(&request.run_id)
     .bind(step_id)
     .bind(3_i64)
-    .bind(request.input.to_string())
+    .bind(preview.to_string())
     .bind(json!({"hash":precondition_hash}).to_string())
     .bind(&expires_at)
     .execute(&mut **tx)
     .await
     .map_err(map_sqlx)?;
     sqlx::query("UPDATE agent_steps SET status='waiting_approval', policy_json=? WHERE id=? AND status='running'")
-        .bind(policy_receipt(descriptor, "waiting_approval", ownership).to_string())
+        .bind(policy_receipt(descriptor, "waiting_approval").to_string())
         .bind(step_id)
         .execute(&mut **tx)
         .await
@@ -2121,15 +2896,13 @@ mod policy_executor_tests {
     async fn setup_with(
         risk: RiskLevel,
         invalid_output: bool,
-        ownership_flip: Option<&str>,
     ) -> (AgentExecutor, sqlx::SqlitePool, Arc<AtomicUsize>, String) {
-        setup_with_hooks(risk, invalid_output, ownership_flip, None, None).await
+        setup_with_hooks(risk, invalid_output, None, None).await
     }
 
     async fn setup_with_hooks(
         risk: RiskLevel,
         invalid_output: bool,
-        ownership_flip: Option<&str>,
         rollback_before_dispatch_once: Option<Arc<std::sync::atomic::AtomicBool>>,
         start_idempotency_race_once: Option<Arc<std::sync::atomic::AtomicBool>>,
     ) -> (AgentExecutor, sqlx::SqlitePool, Arc<AtomicUsize>, String) {
@@ -2173,7 +2946,6 @@ mod policy_executor_tests {
             TestDispatcherConfig {
                 dispatch_count: counter.clone(),
                 invalid_output,
-                ownership_flip: ownership_flip.map(str::to_owned),
                 rollback_before_dispatch_once,
                 start_idempotency_race_once,
             },
@@ -2182,7 +2954,7 @@ mod policy_executor_tests {
     }
 
     async fn setup(risk: RiskLevel) -> (AgentExecutor, sqlx::SqlitePool, Arc<AtomicUsize>, String) {
-        setup_with(risk, false, None).await
+        setup_with(risk, false).await
     }
 
     fn request(name: &str, approval_id: Option<String>) -> ToolCallRequest {
@@ -2216,7 +2988,7 @@ mod policy_executor_tests {
     async fn r1_first_transaction_rollback_is_retried_to_one_completion() {
         let rollback_once = Arc::new(AtomicBool::new(true));
         let (executor, pool, counter, name) =
-            setup_with_hooks(RiskLevel::R1, false, None, Some(rollback_once), None).await;
+            setup_with_hooks(RiskLevel::R1, false, Some(rollback_once), None).await;
 
         let response = executor
             .execute(r1_request(&name, "synthetic/r1/rollback"))
@@ -2258,7 +3030,7 @@ mod policy_executor_tests {
     async fn r1_unresolved_key_stops_after_three_reads_without_dispatch_or_audit() {
         let race_once = Arc::new(AtomicBool::new(true));
         let (executor, pool, counter, name) =
-            setup_with_hooks(RiskLevel::R1, false, None, None, Some(race_once)).await;
+            setup_with_hooks(RiskLevel::R1, false, None, Some(race_once)).await;
         sqlx::query(
             r#"
             INSERT INTO agent_steps(
@@ -2301,33 +3073,33 @@ mod policy_executor_tests {
     }
 
     #[tokio::test]
-    async fn r1_dispatch_counter_stays_zero_until_rust_owns_the_write() {
-        let (executor, pool, counter, name) = setup(RiskLevel::R1).await;
+    async fn legacy_ownership_settings_do_not_block_or_rewrite_execution() {
         for owner in ["typescript", "shadow"] {
+            let (executor, pool, counter, name) = setup(RiskLevel::R1).await;
             sqlx::query("UPDATE settings SET value=? WHERE key=?")
                 .bind(owner)
                 .bind(format!("agent_tool_owner.{name}"))
                 .execute(&pool)
                 .await
                 .unwrap();
-            let error = executor
+            // Task 13: legacy ownership values are inert — the tool still
+            // executes as Rust-owned and the setting is never rewritten.
+            executor
                 .execute(r1_request(&name, &format!("synthetic/r1/{owner}")))
                 .await
-                .unwrap_err();
-            assert_eq!(error.code(), "ownership_not_rust");
-            assert_eq!(counter.load(Ordering::SeqCst), 0);
+                .unwrap();
+            assert_eq!(counter.load(Ordering::SeqCst), 1);
+            let stored: String = sqlx::query_scalar("SELECT value FROM settings WHERE key=?")
+                .bind(format!("agent_tool_owner.{name}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                stored.as_str(),
+                owner,
+                "legacy setting must not be rewritten"
+            );
         }
-
-        sqlx::query("UPDATE settings SET value='rust-owned' WHERE key=?")
-            .bind(format!("agent_tool_owner.{name}"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        executor
-            .execute(r1_request(&name, "synthetic/r1/rust-owned"))
-            .await
-            .unwrap();
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -2500,30 +3272,28 @@ mod policy_executor_tests {
     }
 
     #[tokio::test]
-    async fn ownership_flip_before_reservation_fails_closed_in_the_same_core() {
-        let (executor, pool, counter, name) =
-            setup_with(RiskLevel::R2, false, Some("typescript")).await;
+    async fn legacy_ownership_never_blocks_reservation_in_the_same_core() {
+        let (executor, pool, counter, name) = setup(RiskLevel::R2).await;
+        sqlx::query("UPDATE settings SET value='typescript' WHERE key=?")
+            .bind(format!("agent_tool_owner.{name}"))
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO settings(key,value) VALUES('agent_r2_auto_execute','true')")
             .execute(&pool)
             .await
             .unwrap();
 
-        let error = executor.execute(request(&name, None)).await.unwrap_err();
-
-        assert_eq!(error.code(), "ownership_not_rust");
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM agent_steps")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            0
-        );
+        // Task 13: the legacy `typescript` value no longer makes the tool
+        // unavailable; the write executes through the Rust core.
+        let response = executor.execute(request(&name, None)).await.unwrap();
+        assert!(matches!(response, ToolCallResponse::Completed { .. }));
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn output_schema_failure_rolls_back_business_and_never_completes_step() {
-        let (executor, pool, counter, name) = setup_with(RiskLevel::R2, true, None).await;
+        let (executor, pool, counter, name) = setup_with(RiskLevel::R2, true).await;
         sqlx::query("INSERT INTO settings(key,value) VALUES('agent_r2_auto_execute','true')")
             .execute(&pool)
             .await

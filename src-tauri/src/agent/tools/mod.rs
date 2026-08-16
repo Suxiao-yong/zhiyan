@@ -56,13 +56,13 @@ pub struct ToolDescriptor {
     pub data_permissions: Vec<&'static str>,
 }
 
+/// Execution ownership of a registered Agent tool. Since Task 13 every tool is
+/// executed by the Rust runtime; the legacy Typescript/Shadow/Unavailable
+/// states and the `agent_tool_owner.*` settings that produced them are gone.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ToolOwnership {
-    Typescript,
-    Shadow,
     RustOwned,
-    Unavailable,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -83,6 +83,8 @@ impl ToolRegistry {
             plan::descriptor(),
             plan::get_range_descriptor(),
             plan::generate_descriptor(),
+            plan::preview_generate_descriptor(),
+            plan::apply_preview_descriptor(),
             record::descriptor(),
             record::get_history_descriptor(),
             record::create_free_descriptor(),
@@ -159,9 +161,11 @@ mod tests {
             names,
             [
                 "exam.get_active",
+                "plan.apply_preview",
                 "plan.generate",
                 "plan.get_range",
                 "plan.get_today",
+                "plan.preview_generate",
                 "record.checkin_plan",
                 "record.create_free",
                 "record.get_history",

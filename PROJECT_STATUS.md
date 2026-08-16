@@ -1,10 +1,88 @@
 # 项目进度状态
 
-更新时间：2026-07-18（M6 完成后更新）
-工作区：`D:\智研\zhiyan`（main 分支）
+更新时间：2026-08-16（Cloud LLM Agent 简化修复完成 + 发布前全面检查修复）
+工作区：`D:\智研\zhiyan`（main 分支，未提交，等待用户验收后作为全新版本提交）
 分支：`main`
 
-## 当前结论
+## 当前结论（2026-08-16：Cloud LLM Agent 简化改造修复）
+
+在 `2026-08-11-cloud-llm-agent-simplification-fix.md` 的 9 个 Task 基础上完成了全部修复
+（本工作树未提交，等待用户验收后提交）：
+
+- **run 终态（Task 3）**：`agent_run_planner` 的 consent/provider/settings 失败通过原子
+  `fail_run` 写入 `failed` 与稳定 `error_code`，不再遗留 `running`；终止失败返回 `conflict`。
+- **API Key 边界（Task 4）**：`LLMConfig` 不再含 apiKey；前端只通过 `has_api_key` 获取布尔
+  状态；`load_api_key` command 已删除；key 只经 `store_api_key` 一次性提交给 Rust。
+- **Draft 审批闭环（Task 5）**：`plan.apply_preview` 预览展示真实脱敏 Draft 行与
+  precondition；确认/取消/重复确认有 per-approval 守卫；apply 支持事务级 undo（恢复被替换
+  计划与记录关联，外部修改后拒绝撤销）。
+- **字节上限与 provider 协议（Task 6）**：ContextSnapshot 字段/快照、tool output、累计
+  prompt、序列化请求体均有 UTF-8 字节上限；capability 探测失败返回稳定的
+  `provider_protocol_error`。
+- **迁移一致性（Task 7）**：确认 v11 从未被任何数据库应用后移除；v1–v10 SQL 逐字未改，
+  v10 为当前最新。
+- **死代码清理（Task 8）**：删除未路由的 Dashboard 页面/图表组件、`memory.rs`、公开
+  job/memory command 与 client/类型。
+- **旧架构集成测试重写（2026-08-16）**：`src-tauri/tests/agent_tools.rs` 中 12 个
+  Shadow/Typescript 所有权与 checkin 直写的旧架构测试已全部按新架构重写（R3 审批流、
+  专用 exactly-once 路径、ownership inert 契约），42/42 通过。重写过程暴露并修复了
+  两个真实生产 bug：
+  - `resolve_approval` 失败时业务写入未回滚（savepoint 包裹审批执行，失败先
+    ROLLBACK TO 再 finalize，保证“failed tool 无已提交业务写入”）。
+  - 专用 checkin 路径并发同 key 竞争返回 spurious `IdempotencyConflict`（增加有界
+    重试，输家重放胜者的 completed step）。
+- **唯一 LLM provider**：单一 OpenAI-compatible provider（Settings 统一入口），Rust
+  `OpenAiCompatibleProvider`（reqwest）为唯一 HTTP 客户端；TypeScript LLM adapter、
+  `@tauri-apps/plugin-http` / `tauri-plugin-http` 与 AnySearch 已全部删除。
+- **删除的 TypeScript AI 链路**：`plan-generator.ts`、`plan-chat-agent.ts`、`agent-engine.ts`、
+  `prompts.ts`、`stores/analysis.ts`、`Analysis.vue`、`agent-memory` 相关模块全部移除；
+  `marked`/`highlight.js` 依赖移除。
+- **保留的本地事实层**：`analyzer.ts` 只保留确定性统计聚合；`daily_brief` 为纯本地
+  按需读取（`mode=local`）；ContextSnapshot（v6 audit）继续记录调用来源 ID 与字段名。
+- **Agent 是唯一 AI 入口**：计划生成、调整、学习记录、错题、复盘全部通过 Agent 对话
+  （R3 审批 + 标准预览）；今日简报与提醒为本地确定性能力；`ai_analyses` 等历史表只读弃用
+  （见 `docs/agent/cloud-llm-cutover-migration.md`）。
+- **当前导航**：Today(/agent)、Plan、Records、Setup/Settings 四个心智入口；`/dashboard`、
+  `/analysis`、`/visualization` 重定向到 /agent；`/agent-debug` 仅在开发构建注册。
+- **生产 Debug 策略**：AgentDebug 只保留 provider health、当前 run、tool schema、上下文审计
+  与 planner loop；业务写入、job 调度、记忆管理按钮已删除。
+- **Scheduler 收缩**：只调度/执行 `task_reminder` 与 `overdue_check`；daily_brief 等为
+  deprecated job 类型（历史行可列出、dispatch 一律 skip）；托盘暂停/恢复保留。
+- **长期记忆降级**：七类记忆不再自动读取/管理（`agent_memories` 表保留、新代码不读），
+  明确用户偏好走 Settings 键。
+- **发布前全面检查修复（2026-08-16）**：全量验证（typecheck/build/vitest 79 用例/cargo 165+42+12/
+  clippy/fmt/eslint）后修复跨层契约与边界问题：
+  - 提醒时间键名统一：Rust 调度器改读 `reminder_time`（原误读 `agent_reminder_time`，
+    前端设置永不生效）；调度提醒新增 `notification_enabled` 开关检查（关闭时 skip 且不发通知），
+    新增对应测试（lib 165 用例）。
+  - Settings 切换 provider 立即刷新 keyring 状态（`refreshKeyState`），避免未配 key 的新
+    provider 被误判为已配置。
+  - 引导完成跳转 `/agent`（与 Task 2 单一入口契约一致），并更新过时文案。
+  - exam store 切换活跃考试时同步 `agent_active_exam_id`，供调度器提醒使用。
+  - `vitest.config` 默认超时提高至 15s（消除 router 测试冷启动偶发超时）；`@types/node`
+    纳入 devDependencies（vite/vitest 配置文件类型）。
+  - 导出非全量范围不再携带已弃用的 `ai_analyses` 表；`db.insert` 增加空字段防御。
+  - 发布清理：README 重写为当前架构（Agent 工作台/审批/撤销、四入口导航、当前测试基线）；
+    CHANGELOG 补充 Unreleased 条目；`.gitignore` 补 `.playwright-cli/.playwright-mcp/.ruff_cache`；
+    敏感信息扫描 0 命中。
+- **测试基线（2026-08-16 实际命令输出）**：
+  - `cargo test --manifest-path src-tauri/Cargo.toml --lib`：**165 passed, 0 failed**
+    （含新增通知开关测试；测试总数以本次输出为准）。
+  - `cargo test --manifest-path src-tauri/Cargo.toml --test agent_tools`：**42 passed, 0 failed**。
+  - `cargo test --manifest-path src-tauri/Cargo.toml --test agent_repository`：**12 passed, 0 failed**。
+  - `npm.cmd test -- --run`：**13 个测试文件、79 个用例全部通过**。
+  - `npm.cmd run typecheck`：exit 0。
+  - `npm.cmd run build`：exit 0（仅已有 chunk size 与动态导入 warning）。
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`：通过。
+  - `cargo clippy --manifest-path src-tauri/Cargo.toml --lib -- -D warnings`：通过。
+  - `git diff --check`：通过。
+
+验证证据：`docs/agent/cloud-llm-cutover-baseline.md`、`docs/agent/cloud-llm-cutover-migration.md`、
+`docs/agent/cloud-llm-cutover-test-matrix.md`。
+
+---
+
+## 历史：M6 时代状态（2026-07-18，供追溯）
 
 纯 agent 改造的 M3（模型、上下文与记忆）、M4（托盘、调度与简报）、M5（Agent OS 界面）、M6（全面迁移与生产化）全部完成并提交：
 

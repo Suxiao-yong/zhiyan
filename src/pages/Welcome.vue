@@ -134,8 +134,8 @@ async function finish() {
     await setSetting('onboarding_completed', '1', '是否完成首次使用引导')
     markOnboardingDone()
     ElMessage.success('考试配置完成！')
-    // 4. 进入学习计划（计划生成 Agent 在 Phase 3 实现）
-    router.push('/study-plan')
+    // 4. 进入 Agent 主界面（Task 2 单一入口契约；计划生成/调整在对话中完成）
+    router.push('/agent')
   } catch (e) {
     ElMessage.error((e as Error).message ?? '保存失败，请重试')
   } finally {
@@ -165,7 +165,7 @@ async function finish() {
         <!-- 步骤 0：欢迎 -->
         <div v-show="current === 0" class="step step-intro">
           <h2>欢迎使用智研</h2>
-          <p>用 4 步完成你的考试配置：建立考试 → 添加科目 → 评估当前水平 → 生成学习计划。</p>
+          <p>用 4 步完成你的考试配置：建立考试 → 添加科目 → 评估当前水平 → 进入智研主界面。</p>
           <ul class="features">
             <li>
               <el-icon class="features__icon"><Aim /></el-icon>
@@ -308,7 +308,7 @@ async function finish() {
           <el-alert
             type="info"
             :closable="false"
-            title="完成配置后将进入学习计划页面。AI 计划生成将在 Phase 3 实现。"
+            title="完成配置后将进入智研主界面，可随时在对话中让 Agent 生成学习计划。"
             class="finish-alert"
           />
         </div>

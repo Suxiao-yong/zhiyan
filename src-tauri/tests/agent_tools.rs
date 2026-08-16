@@ -862,9 +862,9 @@ fn checkin_undo_is_exactly_once_and_restores_aggregate_from_remaining_records() 
         let first = executor.undo(&completed.step_id).await.unwrap();
         let second = executor.undo(&completed.step_id).await.unwrap();
         assert_eq!(first, second);
-        assert_eq!(first.output.actual_duration, 20);
-        assert_eq!(first.output.actual_tasks.as_deref(), Some("热身"));
-        assert_eq!(first.output.status, "in_progress");
+        assert_eq!(first.output["actual_duration"].as_i64().unwrap(), 20);
+        assert_eq!(first.output["actual_tasks"].as_str(), Some("热身"));
+        assert_eq!(first.output["status"].as_str().unwrap(), "in_progress");
 
         let new_record_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM study_records WHERE id = ?")
@@ -920,12 +920,12 @@ fn checkin_undo_without_remaining_records_restores_planned_pending_aggregate() {
             .unwrap();
 
         let undone = executor.undo(&completed.step_id).await.unwrap();
-        assert_eq!(undone.output.actual_duration, 0);
+        assert_eq!(undone.output["actual_duration"].as_i64().unwrap(), 0);
         assert_eq!(
-            undone.output.actual_tasks.as_deref(),
+            undone.output["actual_tasks"].as_str(),
             fixture["plan"]["planned_tasks"].as_str()
         );
-        assert_eq!(undone.output.status, "pending");
+        assert_eq!(undone.output["status"].as_str().unwrap(), "pending");
     });
 }
 
@@ -993,12 +993,15 @@ fn checkin_undo_removes_receipted_orphans_after_external_record_deletion() {
         let undone = executor.undo(&completed.step_id).await.unwrap();
 
         assert_eq!(
-            undone.output.removed_wrong_question_ids,
+            serde_json::from_value::<Vec<String>>(
+                undone.output["removed_wrong_question_ids"].clone()
+            )
+            .unwrap(),
             completed.output.wrong_question_ids
         );
-        assert_eq!(undone.output.actual_duration, 20);
-        assert_eq!(undone.output.actual_tasks.as_deref(), Some("热身"));
-        assert_eq!(undone.output.status, "in_progress");
+        assert_eq!(undone.output["actual_duration"].as_i64().unwrap(), 20);
+        assert_eq!(undone.output["actual_tasks"].as_str(), Some("热身"));
+        assert_eq!(undone.output["status"].as_str().unwrap(), "in_progress");
         let wrong_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM wrong_questions WHERE id = ?")
                 .bind(&completed.output.wrong_question_ids[0])
@@ -1127,14 +1130,14 @@ fn checkin_undo_preserves_other_finish_receipts_and_recalculates_after_they_are_
 
         let undo_a = executor.undo(&a.step_id).await.unwrap();
 
-        assert_eq!(undo_a.output.actual_duration, 50);
-        assert_eq!(undo_a.output.actual_tasks.as_deref(), Some("B task"));
-        assert_eq!(undo_a.output.status, "completed");
+        assert_eq!(undo_a.output["actual_duration"].as_i64().unwrap(), 50);
+        assert_eq!(undo_a.output["actual_tasks"].as_str(), Some("B task"));
+        assert_eq!(undo_a.output["status"].as_str().unwrap(), "completed");
 
         let undo_b = executor.undo(&b.step_id).await.unwrap();
-        assert_eq!(undo_b.output.actual_duration, 20);
-        assert_eq!(undo_b.output.actual_tasks.as_deref(), Some("热身"));
-        assert_eq!(undo_b.output.status, "in_progress");
+        assert_eq!(undo_b.output["actual_duration"].as_i64().unwrap(), 20);
+        assert_eq!(undo_b.output["actual_tasks"].as_str(), Some("热身"));
+        assert_eq!(undo_b.output["status"].as_str().unwrap(), "in_progress");
     });
 }
 
@@ -1187,11 +1190,11 @@ fn checkin_undo_does_not_promote_a_prior_agent_finish_to_legacy_completed_baseli
             );
 
             let undo_a = executor.undo(&a.step_id).await.unwrap();
-            assert_eq!(undo_a.output.status, "in_progress");
+            assert_eq!(undo_a.output["status"].as_str().unwrap(), "in_progress");
 
             let undo_b = executor.undo(&b.step_id).await.unwrap();
             assert_eq!(
-                undo_b.output.status,
+                undo_b.output["status"].as_str().unwrap(),
                 if keep_old_record {
                     "in_progress"
                 } else {
@@ -1231,9 +1234,9 @@ fn checkin_undo_ignores_stale_finish_receipts_whose_record_no_longer_exists() {
 
         let undone_b = executor.undo(&b.step_id).await.unwrap();
 
-        assert_eq!(undone_b.output.actual_duration, 20);
-        assert_eq!(undone_b.output.actual_tasks.as_deref(), Some("热身"));
-        assert_eq!(undone_b.output.status, "in_progress");
+        assert_eq!(undone_b.output["actual_duration"].as_i64().unwrap(), 20);
+        assert_eq!(undone_b.output["actual_tasks"].as_str(), Some("热身"));
+        assert_eq!(undone_b.output["status"].as_str().unwrap(), "in_progress");
     });
 }
 
@@ -1274,7 +1277,7 @@ fn checkin_undo_treats_missing_receipt_metadata_as_false_and_still_replays_resul
         let replay = executor.undo(&completed.step_id).await.unwrap();
 
         assert_eq!(first, replay);
-        assert_eq!(first.output.status, "in_progress");
+        assert_eq!(first.output["status"].as_str().unwrap(), "in_progress");
         let receipt_json: String =
             sqlx::query_scalar("SELECT receipt_json FROM agent_steps WHERE id = ?")
                 .bind(&completed.step_id)
@@ -1307,9 +1310,9 @@ fn checkin_undo_preserves_a_plan_that_was_already_completed_before_execution() {
 
         let undone = executor.undo(&completed.step_id).await.unwrap();
 
-        assert_eq!(undone.output.actual_duration, 20);
-        assert_eq!(undone.output.actual_tasks.as_deref(), Some("热身"));
-        assert_eq!(undone.output.status, "completed");
+        assert_eq!(undone.output["actual_duration"].as_i64().unwrap(), 20);
+        assert_eq!(undone.output["actual_tasks"].as_str(), Some("热身"));
+        assert_eq!(undone.output["status"].as_str().unwrap(), "completed");
     });
 }
 
@@ -1340,12 +1343,12 @@ fn checkin_undo_propagates_legacy_completed_baseline_through_active_finish_recei
             .unwrap();
 
         let undo_a = executor.undo(&a.step_id).await.unwrap();
-        assert_eq!(undo_a.output.status, "completed");
+        assert_eq!(undo_a.output["status"].as_str().unwrap(), "completed");
         let undo_b = executor.undo(&b.step_id).await.unwrap();
 
-        assert_eq!(undo_b.output.actual_duration, 20);
-        assert_eq!(undo_b.output.actual_tasks.as_deref(), Some("热身"));
-        assert_eq!(undo_b.output.status, "completed");
+        assert_eq!(undo_b.output["actual_duration"].as_i64().unwrap(), 20);
+        assert_eq!(undo_b.output["actual_tasks"].as_str(), Some("热身"));
+        assert_eq!(undo_b.output["status"].as_str().unwrap(), "completed");
     });
 }
 
@@ -1852,11 +1855,13 @@ fn executor_rejects_request_policy_fields_as_tool_input() {
 }
 
 #[test]
-fn executor_lists_dynamic_ownership_and_fails_closed() {
+fn executor_lists_static_rust_ownership_and_ignores_legacy_settings() {
     block_on(async {
         let pool = migrated_pool().await;
         let executor = AgentExecutor::new(pool.clone());
 
+        // Every tool is Rust-owned by the static registry; the legacy
+        // `agent_tool_owner.*` settings are inert and never rewrite it.
         let listed = executor.list_tools().await.unwrap();
         let ownership = |name: &str| {
             listed
@@ -1865,15 +1870,21 @@ fn executor_lists_dynamic_ownership_and_fails_closed() {
                 .unwrap()
                 .ownership
         };
-        assert_eq!(
-            ownership("plan.get_today"),
-            zhiyan_lib::agent::tools::ToolOwnership::Shadow
-        );
-        assert_eq!(
-            ownership("record.checkin_plan"),
-            zhiyan_lib::agent::tools::ToolOwnership::Typescript
-        );
+        for name in [
+            "plan.get_today",
+            "record.checkin_plan",
+            "exam.get_active",
+            "plan.get_range",
+            "record.get_history",
+        ] {
+            assert_eq!(
+                ownership(name),
+                zhiyan_lib::agent::tools::ToolOwnership::RustOwned
+            );
+        }
 
+        // Legacy ownership settings are inert: deleting or rewriting them must
+        // not change the static ownership, and list_tools stays healthy.
         sqlx::query("DELETE FROM settings WHERE key = ?")
             .bind("agent_tool_owner.plan.get_today")
             .execute(&pool)
@@ -1884,39 +1895,26 @@ fn executor_lists_dynamic_ownership_and_fails_closed() {
             .execute(&pool)
             .await
             .unwrap();
-
         let listed = executor.list_tools().await.unwrap();
-        // Missing (plan.get_today) and invalid (record.checkin_plan) ownership
-        // values fail closed; the three M6 query tools stay rust-owned.
         assert!(listed
             .iter()
-            .filter(|tool| {
-                tool.descriptor.name == "plan.get_today"
-                    || tool.descriptor.name == "record.checkin_plan"
-            })
-            .all(|tool| tool.ownership == zhiyan_lib::agent::tools::ToolOwnership::Unavailable));
-        assert!(listed
-            .iter()
-            .filter(|tool| {
-                tool.descriptor.name == "exam.get_active"
-                    || tool.descriptor.name == "plan.get_range"
-                    || tool.descriptor.name == "record.get_history"
-            })
-            .all(|tool| tool.ownership == zhiyan_lib::agent::tools::ToolOwnership::RustOwned));
+            .all(|tool| { tool.ownership == zhiyan_lib::agent::tools::ToolOwnership::RustOwned }));
 
+        // The registry never reads the settings table for ownership, so a
+        // dropped settings table cannot break listing.
         sqlx::query("DROP TABLE settings")
             .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(
-            executor.list_tools().await.unwrap_err().code(),
-            "persistence_error"
-        );
+        let listed = executor.list_tools().await.unwrap();
+        assert!(listed
+            .iter()
+            .all(|tool| { tool.ownership == zhiyan_lib::agent::tools::ToolOwnership::RustOwned }));
     });
 }
 
 #[test]
-fn executor_runs_shadow_read_with_trusted_local_business_date() {
+fn executor_runs_rust_read_with_trusted_local_business_date() {
     block_on(async {
         let pool = migrated_pool().await;
         seed_exam_tree(&pool).await;
@@ -1965,11 +1963,11 @@ fn executor_runs_shadow_read_with_trusted_local_business_date() {
         .unwrap();
         assert_eq!(risk, 0);
         let policy: Value = serde_json::from_str(&policy_json).unwrap();
-        assert_eq!(policy["delivery"], "shadow");
+        assert_eq!(policy["delivery"], "rust");
         assert_eq!(policy["decision"], "execute");
         assert_eq!(
             serde_json::from_str::<Value>(&receipt_json).unwrap()["delivery"],
-            "shadow"
+            "rust"
         );
         let events: Vec<String> = sqlx::query_scalar(
             "SELECT event_type FROM agent_events WHERE run_id='run-checkin' ORDER BY id",
@@ -1982,8 +1980,12 @@ fn executor_runs_shadow_read_with_trusted_local_business_date() {
 }
 
 #[test]
-fn executor_never_dispatches_write_until_explicitly_rust_owned() {
+fn executor_legacy_ownership_values_are_inert_and_never_gate_writes() {
     block_on(async {
+        // Legacy ownership settings no longer gate execution: every value
+        // (typescript/shadow/invalid) is inert, the write is gated by the R3
+        // approval flow exactly the same way, and the setting is never
+        // rewritten by the runtime.
         for owner in ["typescript", "shadow", "invalid"] {
             let pool = migrated_pool().await;
             let fixture = seed_checkin_fixture(&pool).await;
@@ -1995,88 +1997,84 @@ fn executor_never_dispatches_write_until_explicitly_rust_owned() {
             .execute(&pool)
             .await
             .unwrap();
-            let records_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+            let executor = AgentExecutor::new(pool.clone());
+            let request = ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "record.checkin_plan".to_owned(),
+                tool_version: "1".to_owned(),
+                input: fixture["input"].clone(),
+                idempotency_key: Some(format!("owner/{owner}")),
+                approval_id: None,
+            };
+
+            // The write waits for approval — never an ownership error, and no
+            // business row is written before the user confirms.
+            let ToolCallResponse::WaitingApproval { approval_id, .. } =
+                executor.execute(request.clone()).await.unwrap()
+            else {
+                panic!("check-in must request approval, owner={owner}")
+            };
+            let records: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-            let error = AgentExecutor::new(pool.clone())
-                .execute(ToolCallRequest {
-                    run_id: "run-checkin".to_owned(),
-                    step_index: 0,
-                    tool_name: "record.checkin_plan".to_owned(),
-                    tool_version: "1".to_owned(),
-                    input: fixture["input"].clone(),
-                    idempotency_key: Some(format!("owner/{owner}")),
-                    approval_id: None,
-                })
-                .await
-                .unwrap_err();
-            assert_eq!(
-                error.code(),
-                if owner == "invalid" {
-                    "ownership_unavailable"
-                } else {
-                    "ownership_not_rust"
-                }
-            );
-            let business_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+            assert_eq!(records, 1, "owner={owner}: no write before approval");
+
+            // Approval dispatches the write regardless of the legacy value.
+            let approved = executor.resolve_approval(&approval_id, true).await.unwrap();
+            assert_eq!(approved.status, "approved");
+            let records: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-            let steps: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agent_steps")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-            assert_eq!((business_rows, steps), (records_before, 0), "owner={owner}");
+            assert_eq!(records, 2, "owner={owner}: approved write lands");
+
+            // The legacy setting survives untouched (inert, never rewritten).
+            let stored: String = sqlx::query_scalar(
+                "SELECT value FROM settings WHERE key='agent_tool_owner.record.checkin_plan'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(stored, owner, "owner={owner}: setting stays inert");
         }
     });
 }
 
 #[test]
-fn executor_generic_r1_reuses_exactly_once_transaction_and_undo_receipt() {
+fn executor_r3_write_dispatches_once_after_approval_and_undo_restores() {
     block_on(async {
         let pool = migrated_pool().await;
         let fixture = seed_checkin_fixture(&pool).await;
         seed_agent_run(&pool).await;
-        sqlx::query(
-            "UPDATE settings SET value='rust-owned' WHERE key='agent_tool_owner.record.checkin_plan'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
         let request = ToolCallRequest {
             run_id: "run-checkin".to_owned(),
             step_index: 0,
             tool_name: "record.checkin_plan".to_owned(),
             tool_version: "1".to_owned(),
             input: fixture["input"].clone(),
-            idempotency_key: Some("generic/r1/once".to_owned()),
+            idempotency_key: Some("generic/r3/once".to_owned()),
             approval_id: None,
         };
         let executor = AgentExecutor::new(pool.clone());
 
-        let first = executor.execute(request.clone()).await.unwrap();
-        let replay = executor.execute(request).await.unwrap();
+        // The R3 write waits for approval and performs no business write yet.
+        let ToolCallResponse::WaitingApproval { approval_id, .. } =
+            executor.execute(request).await.unwrap()
+        else {
+            panic!("check-in must request approval")
+        };
+        let records: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(records, 1);
 
-        let ToolCallResponse::Completed {
-            step_id,
-            replayed: false,
-            undo_available: true,
-            ..
-        } = first
-        else {
-            panic!("first R1 call must complete with undo")
-        };
-        let ToolCallResponse::Completed {
-            step_id: replay_step,
-            replayed: true,
-            undo_available: true,
-            ..
-        } = replay
-        else {
-            panic!("duplicate R1 call must replay")
-        };
-        assert_eq!(replay_step, step_id);
+        // Approving dispatches exactly once with the undo receipt.
+        let approved = executor.resolve_approval(&approval_id, true).await.unwrap();
+        assert_eq!(approved.status, "approved");
+        let step_id = approved.step_id;
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
                 .fetch_one(&pool)
@@ -2084,6 +2082,22 @@ fn executor_generic_r1_reuses_exactly_once_transaction_and_undo_receipt() {
                 .unwrap(),
             2
         );
+
+        // Re-confirming the consumed approval is rejected; no second write.
+        let error = executor
+            .resolve_approval(&approval_id, true)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "approval_invalid");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2
+        );
+
+        // Undo restores the pre-write state.
         executor.undo(&step_id).await.unwrap();
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
@@ -2096,21 +2110,14 @@ fn executor_generic_r1_reuses_exactly_once_transaction_and_undo_receipt() {
 }
 
 #[test]
-fn concurrent_generic_r1_duplicate_on_wal_completes_once_and_replays_once() {
+fn concurrent_checkin_same_key_on_wal_completes_once_and_replays_once() {
     block_on(async {
         let database = WalDatabase::new();
         let pool = database.migrated_pool().await;
         let fixture = seed_checkin_fixture(&pool).await;
         seed_agent_run(&pool).await;
-        let request = ToolCallRequest {
-            run_id: "run-checkin".to_owned(),
-            step_index: 0,
-            tool_name: "record.checkin_plan".to_owned(),
-            tool_version: "1".to_owned(),
-            input: fixture["input"].clone(),
-            idempotency_key: Some("generic/r1/wal-barrier".to_owned()),
-            approval_id: None,
-        };
+        let request =
+            execution_request(fixture_checkin_input(&fixture), "generic/r1/wal-barrier", 0);
         let executor = AgentExecutor::new(pool.clone());
         let barrier = Arc::new(Barrier::new(2));
         let left = {
@@ -2119,15 +2126,16 @@ fn concurrent_generic_r1_duplicate_on_wal_completes_once_and_replays_once() {
             let request = request.clone();
             tokio::spawn(async move {
                 barrier.wait().await;
-                executor.execute(request).await
+                executor.execute_record_checkin_plan(request).await
             })
         };
         let right = {
             let barrier = barrier.clone();
             let executor = executor.clone();
+            let request = request.clone();
             tokio::spawn(async move {
                 barrier.wait().await;
-                executor.execute(request).await
+                executor.execute_record_checkin_plan(request).await
             })
         };
 
@@ -2136,23 +2144,14 @@ fn concurrent_generic_r1_duplicate_on_wal_completes_once_and_replays_once() {
         assert_eq!(
             responses
                 .iter()
-                .filter(|response| matches!(
-                    response,
-                    ToolCallResponse::Completed { replayed: true, .. }
-                ))
+                .filter(|response| response.replayed)
                 .count(),
             1
         );
         assert_eq!(
             responses
                 .iter()
-                .filter(|response| matches!(
-                    response,
-                    ToolCallResponse::Completed {
-                        replayed: false,
-                        ..
-                    }
-                ))
+                .filter(|response| !response.replayed)
                 .count(),
             1
         );
@@ -2191,25 +2190,26 @@ fn concurrent_generic_r1_duplicate_on_wal_completes_once_and_replays_once() {
 }
 
 #[test]
-fn generic_r1_does_not_treat_run_step_uniqueness_as_idempotency_replay() {
+fn checkin_same_run_step_with_different_key_is_a_conflict() {
     block_on(async {
         let pool = migrated_pool().await;
         let fixture = seed_checkin_fixture(&pool).await;
         seed_agent_run(&pool).await;
         let executor = AgentExecutor::new(pool.clone());
-        let mut request = ToolCallRequest {
-            run_id: "run-checkin".to_owned(),
-            step_index: 0,
-            tool_name: "record.checkin_plan".to_owned(),
-            tool_version: "1".to_owned(),
-            input: fixture["input"].clone(),
-            idempotency_key: Some("generic/r1/run-step-first".to_owned()),
-            approval_id: None,
-        };
+        let input = fixture_checkin_input(&fixture);
 
-        executor.execute(request.clone()).await.unwrap();
-        request.idempotency_key = Some("generic/r1/run-step-second".to_owned());
-        let error = executor.execute(request).await.unwrap_err();
+        executor
+            .execute_record_checkin_plan(execution_request(
+                input.clone(),
+                "generic/r1/run-step-first",
+                0,
+            ))
+            .await
+            .unwrap();
+        let error = executor
+            .execute_record_checkin_plan(execution_request(input, "generic/r1/run-step-second", 0))
+            .await
+            .unwrap_err();
 
         assert_eq!(error.code(), "conflict");
         assert_eq!(
@@ -2230,7 +2230,7 @@ fn generic_r1_does_not_treat_run_step_uniqueness_as_idempotency_replay() {
 }
 
 #[test]
-fn generic_r1_receipts_redact_free_text_and_list_descriptor_permissions() {
+fn executor_receipts_list_descriptor_permissions_and_events_redact_free_text() {
     block_on(async {
         const SECRET: &str = "SECRET_MARKER";
         let pool = migrated_pool().await;
@@ -2242,7 +2242,8 @@ fn generic_r1_receipts_redact_free_text_and_list_descriptor_permissions() {
         input["wrong_questions"][0]["error_reason"] =
             serde_json::json!(format!("{SECRET} private answer notes"));
 
-        AgentExecutor::new(pool.clone())
+        let executor = AgentExecutor::new(pool.clone());
+        let ToolCallResponse::WaitingApproval { approval_id, .. } = executor
             .execute(ToolCallRequest {
                 run_id: "run-checkin".to_owned(),
                 step_index: 0,
@@ -2253,33 +2254,25 @@ fn generic_r1_receipts_redact_free_text_and_list_descriptor_permissions() {
                 approval_id: None,
             })
             .await
-            .unwrap();
+            .unwrap()
+        else {
+            panic!("check-in must request approval")
+        };
+        executor.resolve_approval(&approval_id, true).await.unwrap();
 
+        // The step keeps the full canonical input (free text included) so the
+        // approval replay can re-dispatch the exact same write.
         let (input_json, receipt_json): (String, String) = sqlx::query_as(
             "SELECT input_json,receipt_json FROM agent_steps WHERE idempotency_key='generic/r1/privacy'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert!(!input_json.contains(SECRET));
+        assert!(input_json.contains(SECRET));
         let snapshot: Value = serde_json::from_str(&input_json).unwrap();
-        assert_eq!(
-            snapshot["fields"],
-            serde_json::json!({
-                "plan_id":"plan-1",
-                "duration_min":30,
-                "questions_count":10,
-                "correct_count":8,
-                "mastery_rating":4,
-                "mood":5,
-                "session_time":"evening",
-                "finish":false,
-                "wrong_question_count":1
-            })
-        );
-        assert!(snapshot["fingerprint"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("sha256:")));
+        assert_eq!(snapshot["plan_id"], "plan-1");
+        assert_eq!(snapshot["duration_min"], 30);
+        assert_eq!(snapshot["finish"], false);
         let receipt: Value = serde_json::from_str(&receipt_json).unwrap();
         assert_eq!(
             receipt["permissions"],
@@ -2290,6 +2283,7 @@ fn generic_r1_receipts_redact_free_text_and_list_descriptor_permissions() {
                 "agent_audit:write"
             ])
         );
+        // Event payloads stay structured and never carry the free text.
         let events: Vec<String> =
             sqlx::query_scalar("SELECT payload_json FROM agent_events ORDER BY id")
                 .fetch_all(&pool)
@@ -2300,46 +2294,37 @@ fn generic_r1_receipts_redact_free_text_and_list_descriptor_permissions() {
 }
 
 #[test]
-fn record_fingerprint_replays_after_pool_reopen_and_conflicts_on_free_text_change() {
+fn record_replays_after_pool_reopen_and_conflicts_on_free_text_change() {
     block_on(async {
         let database = WalDatabase::new();
         let pool = database.migrated_pool().await;
         let fixture = seed_checkin_fixture(&pool).await;
         seed_agent_run(&pool).await;
-        let request = ToolCallRequest {
-            run_id: "run-checkin".to_owned(),
-            step_index: 0,
-            tool_name: "record.checkin_plan".to_owned(),
-            tool_version: "1".to_owned(),
-            input: fixture["input"].clone(),
-            idempotency_key: Some("generic/r1/reopen-fingerprint".to_owned()),
-            approval_id: None,
-        };
+        let request = execution_request(
+            fixture_checkin_input(&fixture),
+            "generic/r1/reopen-fingerprint",
+            0,
+        );
         let first = AgentExecutor::new(pool.clone())
-            .execute(request.clone())
+            .execute_record_checkin_plan(request.clone())
             .await
             .unwrap();
+        assert!(!first.replayed);
         pool.close().await;
         drop(pool);
 
         let reopened = database.open_pool().await;
         let replay = AgentExecutor::new(reopened.clone())
-            .execute(request.clone())
+            .execute_record_checkin_plan(request.clone())
             .await
             .unwrap();
-        assert!(matches!(
-            replay,
-            ToolCallResponse::Completed { replayed: true, .. }
-        ));
-        assert_eq!(
-            serde_json::to_value(first).unwrap()["output"],
-            serde_json::to_value(replay).unwrap()["output"]
-        );
+        assert!(replay.replayed);
+        assert_eq!(first.output, replay.output);
 
         let mut changed = request;
-        changed.input["difficulty_notes"] = serde_json::json!("different private free text");
+        changed.input.difficulty_notes = Some("different private free text".to_owned());
         let error = AgentExecutor::new(reopened.clone())
-            .execute(changed)
+            .execute_record_checkin_plan(changed)
             .await
             .unwrap_err();
         assert_eq!(error.code(), "idempotency_conflict");
@@ -2392,14 +2377,22 @@ fn sql_failures_and_command_errors_never_expose_private_diagnostics() {
                 approval_id: None,
             })
             .await
+            .unwrap();
+        let ToolCallResponse::WaitingApproval { approval_id, .. } = error else {
+            panic!("check-in must request approval")
+        };
+        let error = AgentExecutor::new(pool.clone())
+            .resolve_approval(&approval_id, true)
+            .await
             .unwrap_err();
         let command_error = CommandError::from(AgentError::Persistence(format!(
             "{SECRET} {SQL_TEXT} %APPDATA% {ABSOLUTE_PATH}"
         )));
         let stored: Vec<String> = sqlx::query_scalar(
             r#"
-            SELECT input_json FROM agent_steps
-            UNION ALL SELECT policy_json FROM agent_steps
+            SELECT policy_json FROM agent_steps
+            UNION ALL SELECT error FROM agent_steps
+            UNION ALL SELECT receipt_json FROM agent_steps
             UNION ALL SELECT payload_json FROM agent_events
             "#,
         )
@@ -2416,6 +2409,22 @@ fn sql_failures_and_command_errors_never_expose_private_diagnostics() {
             assert!(!serialized.contains("%APPDATA%"));
             assert!(!serialized.contains(ABSOLUTE_PATH));
         }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        let (status, error_code): (String, String) =
+            sqlx::query_as("SELECT status, error FROM agent_steps")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            (status.as_str(), error_code.as_str()),
+            ("failed", "persistence_error")
+        );
         let conflict = CommandError::from(AgentError::IdempotencyConflict);
         assert_eq!(conflict.code, "idempotency_conflict");
         assert_eq!(
@@ -2545,17 +2554,11 @@ fn prepared_restore_replaces_with_v4_backup_and_relaunch_upgrades_it_once() {
 }
 
 #[test]
-fn executor_completion_event_failure_rolls_back_generic_business_and_step() {
+fn executor_approval_dispatch_failure_rolls_back_business_and_step() {
     block_on(async {
         let pool = migrated_pool().await;
         let fixture = seed_checkin_fixture(&pool).await;
         seed_agent_run(&pool).await;
-        sqlx::query(
-            "UPDATE settings SET value='rust-owned' WHERE key='agent_tool_owner.record.checkin_plan'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
         sqlx::raw_sql(
             r#"
             CREATE TRIGGER reject_generic_completed BEFORE INSERT ON agent_events
@@ -2567,7 +2570,8 @@ fn executor_completion_event_failure_rolls_back_generic_business_and_step() {
         .await
         .unwrap();
 
-        let error = AgentExecutor::new(pool.clone())
+        let executor = AgentExecutor::new(pool.clone());
+        let ToolCallResponse::WaitingApproval { approval_id, .. } = executor
             .execute(ToolCallRequest {
                 run_id: "run-checkin".to_owned(),
                 step_index: 0,
@@ -2578,6 +2582,13 @@ fn executor_completion_event_failure_rolls_back_generic_business_and_step() {
                 approval_id: None,
             })
             .await
+            .unwrap()
+        else {
+            panic!("check-in must request approval")
+        };
+        let error = executor
+            .resolve_approval(&approval_id, true)
+            .await
             .unwrap_err();
         assert_eq!(error.code(), "persistence_error");
         assert_eq!(
@@ -2587,8 +2598,8 @@ fn executor_completion_event_failure_rolls_back_generic_business_and_step() {
                 .unwrap(),
             1
         );
-        let (status, error_code, policy_json): (String, String, String) =
-            sqlx::query_as("SELECT status, error, policy_json FROM agent_steps")
+        let (status, error_code): (String, String) =
+            sqlx::query_as("SELECT status, error FROM agent_steps")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -2596,26 +2607,18 @@ fn executor_completion_event_failure_rolls_back_generic_business_and_step() {
             (status.as_str(), error_code.as_str()),
             ("failed", "persistence_error")
         );
-        let policy: Value = serde_json::from_str(&policy_json).unwrap();
-        assert_eq!(policy["decision"], "failed");
-        assert_eq!(policy["delivery"], "rust");
         let events: Vec<(String, String)> =
             sqlx::query_as("SELECT event_type, payload_json FROM agent_events ORDER BY id")
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-        assert_eq!(
-            events
-                .iter()
-                .map(|event| event.0.as_str())
-                .collect::<Vec<_>>(),
-            ["tool.requested", "tool.failed"]
+        assert!(
+            !events.iter().any(|event| event.0 == "tool.completed"),
+            "the aborted completion event must never land"
         );
-        assert_eq!(
-            serde_json::from_str::<Value>(&events[1].1).unwrap()["error_code"],
-            "persistence_error"
-        );
-        assert!(!events[1].1.contains("generic audit failure"));
+        assert!(events
+            .iter()
+            .all(|event| !event.1.contains("generic audit failure")));
     });
 }
 
@@ -2681,17 +2684,11 @@ fn executor_run_gate_blocks_non_running_or_wrong_current_step_before_business() 
 }
 
 #[test]
-fn executor_completion_advances_run_once_and_replay_does_not_advance_again() {
+fn executor_approval_dispatch_advances_run_once_and_repeat_wait_does_not_advance_again() {
     block_on(async {
         let pool = migrated_pool().await;
         let fixture = seed_checkin_fixture(&pool).await;
         seed_agent_run(&pool).await;
-        sqlx::query(
-            "UPDATE settings SET value='rust-owned' WHERE key='agent_tool_owner.record.checkin_plan'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
         let request = ToolCallRequest {
             run_id: "run-checkin".to_owned(),
             step_index: 0,
@@ -2703,77 +2700,85 @@ fn executor_completion_advances_run_once_and_replay_does_not_advance_again() {
         };
         let executor = AgentExecutor::new(pool.clone());
 
-        executor.execute(request.clone()).await.unwrap();
-        executor.execute(request).await.unwrap();
+        // Waiting for approval never executes the step or advances the run.
+        let ToolCallResponse::WaitingApproval { approval_id, .. } =
+            executor.execute(request.clone()).await.unwrap()
+        else {
+            panic!("check-in must request approval")
+        };
+        let (run_status, current_step): (String, i64) =
+            sqlx::query_as("SELECT status, current_step FROM agent_runs WHERE id='run-checkin'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!((run_status.as_str(), current_step), ("waiting_approval", 0));
 
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT current_step FROM agent_runs WHERE id='run-checkin'",
-            )
-            .fetch_one(&pool)
+        // Approving dispatches the write and completes the run exactly once.
+        // The approved write is the run's last step: the run transitions
+        // waiting_approval -> completed (current_step is not advanced).
+        let approved = executor.resolve_approval(&approval_id, true).await.unwrap();
+        assert_eq!(approved.status, "approved");
+        let (run_status, current_step): (String, i64) =
+            sqlx::query_as("SELECT status, current_step FROM agent_runs WHERE id='run-checkin'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!((run_status.as_str(), current_step), ("completed", 0));
+
+        // Re-sending the same key replays the completed step and never
+        // changes the run state a second time.
+        let ToolCallResponse::Completed { replayed, .. } =
+            executor.execute(request.clone()).await.unwrap()
+        else {
+            panic!("completed check-in must replay")
+        };
+        assert!(replayed);
+        let (run_status, current_step): (String, i64) =
+            sqlx::query_as("SELECT status, current_step FROM agent_runs WHERE id='run-checkin'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!((run_status.as_str(), current_step), ("completed", 0));
+    });
+}
+
+#[test]
+fn executor_undo_ignores_inert_legacy_ownership() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        let fixture = seed_checkin_fixture(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let completed = executor
+            .execute_record_checkin_plan(execution_request(
+                fixture_checkin_input(&fixture),
+                "undo/owner-gate",
+                0,
+            ))
             .await
-            .unwrap(),
+            .unwrap();
+        sqlx::query(
+            "UPDATE settings SET value='typescript' WHERE key='agent_tool_owner.record.checkin_plan'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Ownership is static now: the legacy setting is never re-checked
+        // inside the compensation transaction.
+        executor.undo(&completed.step_id).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
             1
         );
     });
 }
 
 #[test]
-fn executor_undo_rechecks_write_ownership_inside_compensation_transaction() {
-    block_on(async {
-        let pool = migrated_pool().await;
-        let fixture = seed_checkin_fixture(&pool).await;
-        seed_agent_run(&pool).await;
-        sqlx::query(
-            "UPDATE settings SET value='rust-owned' WHERE key='agent_tool_owner.record.checkin_plan'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        let ToolCallResponse::Completed { step_id, .. } = AgentExecutor::new(pool.clone())
-            .execute(ToolCallRequest {
-                run_id: "run-checkin".to_owned(),
-                step_index: 0,
-                tool_name: "record.checkin_plan".to_owned(),
-                tool_version: "1".to_owned(),
-                input: fixture["input"].clone(),
-                idempotency_key: Some("undo/owner-gate".to_owned()),
-                approval_id: None,
-            })
-            .await
-            .unwrap()
-        else {
-            panic!("check-in must complete")
-        };
-        sqlx::query(
-            "UPDATE settings SET value='typescript' WHERE key='agent_tool_owner.record.checkin_plan'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        let records_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-
-        let error = AgentExecutor::new(pool.clone())
-            .undo(&step_id)
-            .await
-            .unwrap_err();
-
-        assert_eq!(error.code(), "ownership_not_rust");
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
-                .fetch_one(&pool)
-                .await
-                .unwrap(),
-            records_before
-        );
-    });
-}
-
-#[test]
-fn legacy_specialized_write_api_cannot_bypass_ownership() {
+fn legacy_specialized_write_api_is_rust_owned_with_inert_legacy_settings() {
     block_on(async {
         let pool = migrated_pool().await;
         let fixture = seed_checkin_fixture(&pool).await;
@@ -2784,27 +2789,42 @@ fn legacy_specialized_write_api_cannot_bypass_ownership() {
         .execute(&pool)
         .await
         .unwrap();
-        let records_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_records")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let executor = AgentExecutor::new(pool.clone());
 
-        let error = AgentExecutor::new(pool.clone())
+        // The dedicated write API is Rust-owned regardless of the legacy
+        // setting, which is never read or rewritten.
+        let completed = executor
             .execute_record_checkin_plan(execution_request(
                 fixture_checkin_input(&fixture),
                 "legacy/ownership/gate",
                 0,
             ))
             .await
-            .unwrap_err();
-
-        assert_eq!(error.code(), "ownership_not_rust");
+            .unwrap();
+        assert!(!completed.replayed);
+        assert!(completed.undo_available);
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
                 .fetch_one(&pool)
                 .await
                 .unwrap(),
-            records_before
+            2
+        );
+        let stored: String = sqlx::query_scalar(
+            "SELECT value FROM settings WHERE key='agent_tool_owner.record.checkin_plan'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, "typescript");
+
+        executor.undo(&completed.step_id).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_records")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
         );
     });
 }

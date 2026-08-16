@@ -2,8 +2,8 @@
 // 核心业务规则：跨天 04:00 归一化（实时记录在 00:00-03:59 提交→归属前一天；补记=用户手动选日期→不归一化）。
 // 严格在此专属函数处理，不污染 db.ts 通用 insert。本地时间，与 DB datetime('now','localtime') 一致。
 
-import { count, execute, getAll, getById, insert, query, remove, setSetting, update } from './db'
-import type { StudyPlan, StudyRecord, Subject, WrongQuestion } from '@/types'
+import { count, execute, getById, insert, query, remove, setSetting, update } from './db'
+import type { StudyPlan, StudyRecord, WrongQuestion } from '@/types'
 
 // ---------------- 工具 ----------------
 
@@ -331,93 +331,6 @@ export async function getCalendarMonth(
      FROM study_records WHERE date LIKE ? GROUP BY date`,
     [`${yearMonth}-%`],
   )
-}
-
-// ---------------- 仪表盘 stats ----------------
-
-export async function getTodayMinutes(): Promise<number> {
-  const rows = await query<{ s: number }>(
-    'SELECT COALESCE(SUM(duration_min),0) AS s FROM study_records WHERE date = ?',
-    [businessToday()],
-  )
-  return rows[0]?.s ?? 0
-}
-
-/** 连续打卡天数（按归一化 date 逐日比对；今日暂无记录不算断，从昨日起算） */
-export async function getStreak(): Promise<number> {
-  let streak = 0
-  const cursor = new Date()
-  if (cursor.getHours() < 4) cursor.setDate(cursor.getDate() - 1)
-  cursor.setHours(0, 0, 0, 0)
-  for (let i = 0; i < 366; i++) {
-    const ds = fmtDate(cursor)
-    const c = await count('study_records', 'date = ?', [ds])
-    if (c > 0) {
-      streak++
-    } else if (i === 0) {
-      // 今日暂无记录，不算断，继续看昨天
-    } else {
-      break
-    }
-    cursor.setDate(cursor.getDate() - 1)
-  }
-  return streak
-}
-
-/** 本周（周一至周日）每日时长；可选按科目过滤（饼图点击筛选用） */
-export async function getWeeklyTrend(
-  subjectId?: string,
-): Promise<{ date: string; minutes: number; label: string }[]> {
-  const now = new Date()
-  now.setHours(0, 0, 0, 0)
-  const day = now.getDay() // 0=周日..6=周六
-  const cursor = new Date(now)
-  cursor.setDate(cursor.getDate() - (day === 0 ? 6 : day - 1)) // 回到周一
-  const labels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
-  const out: { date: string; minutes: number; label: string }[] = []
-  for (let i = 0; i < 7; i++) {
-    const ds = fmtDate(cursor)
-    const sql = subjectId
-      ? 'SELECT COALESCE(SUM(duration_min),0) AS s FROM study_records WHERE date = ? AND subject_id = ?'
-      : 'SELECT COALESCE(SUM(duration_min),0) AS s FROM study_records WHERE date = ?'
-    const rows = await query<{ s: number }>(sql, subjectId ? [ds, subjectId] : [ds])
-    out.push({ date: ds, minutes: rows[0]?.s ?? 0, label: labels[i] })
-    cursor.setDate(cursor.getDate() + 1)
-  }
-  return out
-}
-
-/** 本周各科时长占比 */
-export async function getSubjectRatioThisWeek(): Promise<
-  { subjectId: string; subjectName: string; minutes: number }[]
-> {
-  const now = new Date()
-  now.setHours(0, 0, 0, 0)
-  const day = now.getDay()
-  const mon = new Date(now)
-  mon.setDate(mon.getDate() - (day === 0 ? 6 : day - 1))
-  const sun = new Date(mon)
-  sun.setDate(sun.getDate() + 6)
-  const rows = await query<{ subject_id: string; minutes: number }>(
-    `SELECT subject_id, SUM(duration_min) AS minutes FROM study_records
-     WHERE date >= ? AND date <= ? GROUP BY subject_id`,
-    [fmtDate(mon), fmtDate(sun)],
-  )
-  const subjects = await getAll<Subject>('subjects')
-  const nameMap = new Map(subjects.map((s) => [s.id, s.name]))
-  return rows.map((r) => ({
-    subjectId: r.subject_id,
-    subjectName: nameMap.get(r.subject_id) ?? '未知科目',
-    minutes: r.minutes,
-  }))
-}
-
-/** 今日计划完成率分母（今日 plan 数）—— Phase 2 计划为空，Phase 3 填充 */
-export async function getTodayPlanCount(): Promise<number> {
-  const rows = await query<{ c: number }>('SELECT COUNT(*) AS c FROM study_plans WHERE date = ?', [
-    businessToday(),
-  ])
-  return rows[0]?.c ?? 0
 }
 
 // ---------------- 错题 ----------------

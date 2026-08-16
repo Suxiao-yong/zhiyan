@@ -22,6 +22,8 @@ pub enum AgentError {
     ApprovalRequired,
     #[error("approval is invalid")]
     ApprovalInvalid,
+    #[error("plan precondition changed since the preview was generated")]
+    PreconditionChanged,
     #[error("tool timed out")]
     ToolTimeout,
     #[error("idempotency key is required")]
@@ -30,10 +32,22 @@ pub enum AgentError {
     IdempotencyConflict,
     #[error("tool ownership is unavailable")]
     OwnershipUnavailable,
+    #[error("tool input references data outside the run's exam scope")]
+    ToolScopeViolation,
     #[error("llm provider is unavailable")]
     ProviderUnavailable,
     #[error("llm provider request failed")]
     ProviderRequestFailed,
+    #[error("llm provider authentication failed")]
+    ProviderAuthFailed,
+    #[error("llm provider is rate limited")]
+    ProviderRateLimited,
+    #[error("llm provider request timed out")]
+    ProviderTimeout,
+    #[error("llm provider protocol error")]
+    ProviderProtocolError,
+    #[error("cloud llm data consent is required")]
+    ConsentRequired,
     #[error("llm token budget exhausted")]
     BudgetExhausted,
     #[error("planner reached the maximum tool iterations")]
@@ -53,12 +67,19 @@ impl AgentError {
             Self::OwnershipNotRust => "ownership_not_rust",
             Self::ApprovalRequired => "approval_required",
             Self::ApprovalInvalid => "approval_invalid",
+            Self::PreconditionChanged => "precondition_changed",
             Self::ToolTimeout => "tool_timeout",
             Self::IdempotencyRequired => "idempotency_required",
             Self::IdempotencyConflict => "idempotency_conflict",
             Self::OwnershipUnavailable => "ownership_unavailable",
+            Self::ToolScopeViolation => "tool_scope_violation",
             Self::ProviderUnavailable => "provider_unavailable",
             Self::ProviderRequestFailed => "provider_request_failed",
+            Self::ProviderAuthFailed => "provider_auth_failed",
+            Self::ProviderRateLimited => "provider_rate_limited",
+            Self::ProviderTimeout => "provider_timeout",
+            Self::ProviderProtocolError => "provider_protocol_error",
+            Self::ConsentRequired => "consent_required",
             Self::BudgetExhausted => "budget_exhausted",
             Self::MaxIterations => "max_iterations",
         }

@@ -37,12 +37,14 @@ pub fn store_api_key(provider: String, key: String) -> Result<(), String> {
     entry.set_password(&key).map_err(|e| e.to_string())
 }
 
+/// Whether a key is already stored for the provider. Returns a boolean only;
+/// the key content itself never leaves Rust (Task 4 boundary).
 #[tauri::command]
-pub fn load_api_key(provider: String) -> Result<Option<String>, String> {
+pub fn has_api_key(provider: String) -> Result<bool, String> {
     let entry = entry_for(&provider).map_err(|e| e.to_string())?;
     match entry.get_password() {
-        Ok(p) => Ok(Some(p)),
-        Err(keyring::Error::NoEntry) => Ok(None),
+        Ok(_) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
         Err(e) => Err(e.to_string()),
     }
 }

@@ -2,13 +2,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type {
-  AgentRun,
-  AgentSession,
-  AgentToolCallResponse,
-  AgentToolUndoResponse,
-  ListedAgentTool,
-} from '@/types'
+import type { AgentRun, AgentSession, ListedAgentTool } from '@/types'
 import { useExamStore } from '@/stores/exam'
 
 const client = vi.hoisted(() => ({
@@ -18,19 +12,8 @@ const client = vi.hoisted(() => ({
   startAgentRun: vi.fn(),
   cancelAgentRun: vi.fn(),
   listAgentTools: vi.fn(),
-  executeAgentTool: vi.fn(),
-  undoAgentTool: vi.fn(),
   runAgentPlanner: vi.fn(),
   listAgentContextAudit: vi.fn(),
-  listAgentMemories: vi.fn(),
-  createAgentMemory: vi.fn(),
-  confirmAgentMemory: vi.fn(),
-  updateAgentMemory: vi.fn(),
-  deactivateAgentMemory: vi.fn(),
-  deleteAgentMemory: vi.fn(),
-  listAgentJobs: vi.fn(),
-  scheduleAgentJob: vi.fn(),
-  agentBriefPreview: vi.fn(),
 }))
 
 vi.mock('@/services/agent-client', () => client)
@@ -65,10 +48,7 @@ const queuedRun: AgentRun = {
 
 const runningRun: AgentRun = { ...queuedRun, status: 'running', started_at: '2026-07-18T00:01:00Z' }
 
-function listedTool(
-  name: 'plan.get_today' | 'record.checkin_plan',
-  ownership: ListedAgentTool['ownership'],
-): ListedAgentTool {
+function listedTool(name: 'plan.get_today' | 'record.checkin_plan'): ListedAgentTool {
   return {
     descriptor: {
       name,
@@ -82,13 +62,13 @@ function listedTool(
       input_schema: {},
       output_schema: {},
     },
-    ownership,
+    ownership: 'rust-owned',
   }
 }
 
 const defaultTools: ListedAgentTool[] = [
-  listedTool('plan.get_today', 'shadow'),
-  listedTool('record.checkin_plan', 'typescript'),
+  listedTool('plan.get_today'),
+  listedTool('record.checkin_plan'),
 ]
 
 function deferred<T>() {
@@ -115,8 +95,6 @@ describe('AgentDebug', () => {
     client.startAgentRun.mockResolvedValue(runningRun)
     client.cancelAgentRun.mockResolvedValue({ ...runningRun, status: 'cancelled' })
     client.listAgentTools.mockResolvedValue(defaultTools)
-    client.executeAgentTool.mockResolvedValue(undefined)
-    client.undoAgentTool.mockResolvedValue(undefined)
     client.runAgentPlanner.mockResolvedValue({
       mode: 'local',
       final_text: '（本地模式）no llm provider configured，跳过模型推理。',
@@ -127,27 +105,6 @@ describe('AgentDebug', () => {
       trace: [{ kind: 'local_fallback', reason: 'no llm provider configured' }],
     })
     client.listAgentContextAudit.mockResolvedValue([])
-    client.listAgentMemories.mockResolvedValue([])
-    client.createAgentMemory.mockResolvedValue(undefined)
-    client.confirmAgentMemory.mockResolvedValue(undefined)
-    client.updateAgentMemory.mockResolvedValue(undefined)
-    client.deactivateAgentMemory.mockResolvedValue(undefined)
-    client.deleteAgentMemory.mockResolvedValue(undefined)
-    client.listAgentJobs.mockResolvedValue([])
-    client.scheduleAgentJob.mockResolvedValue(null)
-    client.agentBriefPreview.mockResolvedValue({
-      date: '2026-07-18',
-      mode: 'local',
-      summary: '今日计划 2 项，已完成 1 项（完成率 50%）。',
-      explanation: null,
-      today_planned: 2,
-      today_completed: 1,
-      today_duration_min: 120,
-      overdue_count: 0,
-      week_completion_rate: 0.5,
-      due_wrong_questions: 0,
-      weak_areas: [],
-    })
   })
 
   it('shows health and creates then starts a runtime run', async () => {
@@ -217,306 +174,17 @@ describe('AgentDebug', () => {
     expect(wrapper.get('[role=alert]').text()).toContain('agent unavailable')
   })
 
-  it('executes a shadow plan read and keeps a TypeScript-owned check-in disabled', async () => {
-    const response: AgentToolCallResponse = {
-      state: 'completed',
-      step_id: 'step-plan',
-      output: { business_date: '2026-07-18', plans: [{ id: 'plan-1' }] },
-      replayed: false,
-      undo_available: false,
-    }
-    client.executeAgentTool.mockResolvedValue(response)
+  it('lists every tool as rust-owned with its descriptor', async () => {
     const wrapper = mountPage()
     await flushPromises()
 
+    expect(client.listAgentTools).toHaveBeenCalledTimes(1)
     expect(wrapper.get('[data-test=tool-plan-descriptor]').text()).toContain('plan.get_today')
-    expect(wrapper.get('[data-test=tool-plan-descriptor]').text()).toContain('v1')
-    expect(wrapper.get('[data-test=tool-plan-descriptor]').text()).toContain('R0')
-    expect(wrapper.get('[data-test=tool-plan-ownership]').text()).toContain('shadow')
-    expect(wrapper.get('[data-test=tool-checkin-ownership]').text()).toContain('typescript')
-    expect(wrapper.get('[data-test=tool-checkin-execute]').attributes('disabled')).toBeDefined()
-
-    await wrapper.get('[data-test=create-session]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=start-run]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=tool-plan-exam-id]').setValue('exam-shadow')
-    await wrapper.get('[data-test=tool-plan-execute]').trigger('click')
-    await flushPromises()
-
-    expect(client.executeAgentTool).toHaveBeenCalledWith({
-      run_id: 'run-1',
-      step_index: 0,
-      tool_name: 'plan.get_today',
-      tool_version: '1',
-      input: { exam_id: 'exam-shadow' },
-      idempotency_key: null,
-      approval_id: null,
-    })
-    expect(wrapper.get('[data-test=tool-plan-output]').text()).toContain('business_date')
-    expect(wrapper.get('[data-test=tool-plan-output]').text()).toContain('plan-1')
-  })
-
-  it('executes a rust-owned check-in exactly once and enables undo from its receipt', async () => {
-    client.listAgentTools.mockResolvedValue([
-      listedTool('plan.get_today', 'shadow'),
-      listedTool('record.checkin_plan', 'rust-owned'),
-    ])
-    const response: AgentToolCallResponse = {
-      state: 'completed',
-      step_id: 'step-checkin',
-      output: { record_id: 'record-1' },
-      replayed: false,
-      undo_available: true,
-    }
-    const undo: AgentToolUndoResponse = {
-      step_id: 'step-checkin',
-      output: {
-        record_id: 'record-1',
-        plan_id: 'plan-1',
-        removed_wrong_question_ids: [],
-        actual_duration: 0,
-        actual_tasks: null,
-        status: 'pending',
-      },
-    }
-    client.executeAgentTool.mockResolvedValue(response)
-    client.undoAgentTool.mockResolvedValue(undo)
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await wrapper.get('[data-test=create-session]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=start-run]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
-    await wrapper.get('[data-test=tool-checkin-execute]').trigger('click')
-    await flushPromises()
-
-    expect(client.executeAgentTool).toHaveBeenCalledTimes(1)
-    expect(wrapper.get('[data-test=tool-checkin-receipt]').text()).toContain('step-checkin')
-    expect(wrapper.get('[data-test=tool-checkin-receipt]').text()).toContain('false')
-    expect(wrapper.get('[data-test=tool-checkin-receipt]').text()).toContain('true')
-    expect(wrapper.get('[data-test=tool-checkin-undo]').attributes('disabled')).toBeUndefined()
-
-    await wrapper.get('[data-test=tool-checkin-undo]').trigger('click')
-    await flushPromises()
-
-    expect(client.undoAgentTool).toHaveBeenCalledWith('step-checkin')
-  })
-
-  it('advances the local step between a fresh plan read and check-in in the same run', async () => {
-    client.listAgentTools.mockResolvedValue([
-      listedTool('plan.get_today', 'shadow'),
-      listedTool('record.checkin_plan', 'rust-owned'),
-    ])
-    client.executeAgentTool
-      .mockResolvedValueOnce({
-        state: 'completed',
-        step_id: 'step-plan',
-        output: { business_date: '2026-07-18', plans: [] },
-        replayed: false,
-        undo_available: false,
-      } satisfies AgentToolCallResponse)
-      .mockResolvedValueOnce({
-        state: 'completed',
-        step_id: 'step-checkin',
-        output: { record_id: 'record-1' },
-        replayed: false,
-        undo_available: true,
-      } satisfies AgentToolCallResponse)
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await wrapper.get('[data-test=create-session]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=start-run]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=tool-plan-execute]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
-    await wrapper.get('[data-test=tool-checkin-execute]').trigger('click')
-    await flushPromises()
-
-    expect(client.executeAgentTool).toHaveBeenCalledTimes(2)
-    expect(client.executeAgentTool).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ tool_name: 'plan.get_today', step_index: 0 }),
+    expect(wrapper.get('[data-test=tool-plan-ownership]').text()).toContain('rust-owned')
+    expect(wrapper.get('[data-test=tool-checkin-descriptor]').text()).toContain(
+      'record.checkin_plan',
     )
-    expect(client.executeAgentTool).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        tool_name: 'record.checkin_plan',
-        step_index: 1,
-        idempotency_key: 'agent-debug:run-1:1',
-      }),
-    )
-  })
-
-  it('synchronizes past the submitted step when a completed call is replayed', async () => {
-    client.listAgentTools.mockResolvedValue([
-      listedTool('plan.get_today', 'shadow'),
-      listedTool('record.checkin_plan', 'rust-owned'),
-    ])
-    client.executeAgentTool
-      .mockResolvedValueOnce({
-        state: 'completed',
-        step_id: 'step-plan',
-        output: { business_date: '2026-07-18', plans: [] },
-        replayed: true,
-        undo_available: false,
-      } satisfies AgentToolCallResponse)
-      .mockResolvedValueOnce({
-        state: 'completed',
-        step_id: 'step-checkin',
-        output: { record_id: 'record-1' },
-        replayed: false,
-        undo_available: true,
-      } satisfies AgentToolCallResponse)
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await wrapper.get('[data-test=create-session]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=start-run]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=tool-plan-execute]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
-    await wrapper.get('[data-test=tool-checkin-execute]').trigger('click')
-    await flushPromises()
-
-    expect(client.executeAgentTool).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ step_index: 1, idempotency_key: 'agent-debug:run-1:1' }),
-    )
-  })
-
-  it('does not move a newer local step backward for an old replay response', async () => {
-    client.listAgentTools.mockResolvedValue([
-      listedTool('plan.get_today', 'shadow'),
-      listedTool('record.checkin_plan', 'rust-owned'),
-    ])
-    const oldReplay = deferred<AgentToolCallResponse>()
-    client.executeAgentTool.mockReturnValueOnce(oldReplay.promise).mockResolvedValueOnce({
-      state: 'completed',
-      step_id: 'step-checkin',
-      output: { record_id: 'record-1' },
-      replayed: false,
-      undo_available: true,
-    } satisfies AgentToolCallResponse)
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await wrapper.get('[data-test=create-session]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=start-run]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=tool-plan-execute]').trigger('click')
-
-    const vm = wrapper.vm as unknown as { state: { run: AgentRun | null } }
-    vm.state.run = { ...vm.state.run!, current_step: 2 }
-    oldReplay.resolve({
-      state: 'completed',
-      step_id: 'step-plan-old',
-      output: { business_date: '2026-07-18', plans: [] },
-      replayed: true,
-      undo_available: false,
-    })
-    await flushPromises()
-    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
-    await wrapper.get('[data-test=tool-checkin-execute]').trigger('click')
-    await flushPromises()
-
-    expect(client.executeAgentTool).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ step_index: 2, idempotency_key: 'agent-debug:run-1:2' }),
-    )
-  })
-
-  it('disables plan and check-in execution when run start leaves it queued', async () => {
-    client.listAgentTools.mockResolvedValue([
-      listedTool('plan.get_today', 'shadow'),
-      listedTool('record.checkin_plan', 'rust-owned'),
-    ])
-    client.startAgentRun.mockRejectedValue({ message: 'start rejected' })
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
-    await wrapper.get('[data-test=create-session]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=start-run]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.get('[data-test=run-status]').text()).toContain('queued')
-    expect(wrapper.get('[data-test=tool-plan-execute]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-test=tool-checkin-execute]').attributes('disabled')).toBeDefined()
-  })
-
-  it('disables plan and check-in execution after the run is cancelled', async () => {
-    client.listAgentTools.mockResolvedValue([
-      listedTool('plan.get_today', 'shadow'),
-      listedTool('record.checkin_plan', 'rust-owned'),
-    ])
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
-    await wrapper.get('[data-test=create-session]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=start-run]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=cancel-run]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.get('[data-test=run-status]').text()).toContain('cancelled')
-    expect(wrapper.get('[data-test=tool-plan-execute]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-test=tool-checkin-execute]').attributes('disabled')).toBeDefined()
-  })
-
-  it('rejects a fractional check-in duration in the debug gate', async () => {
-    client.listAgentTools.mockResolvedValue([
-      listedTool('plan.get_today', 'shadow'),
-      listedTool('record.checkin_plan', 'rust-owned'),
-    ])
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await wrapper.get('[data-test=create-session]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=start-run]').trigger('click')
-    await flushPromises()
-    await wrapper.get('[data-test=tool-checkin-plan-id]').setValue('plan-1')
-    const duration = wrapper.get('[data-test=tool-checkin-duration]')
-    await duration.setValue('1.5')
-
-    expect(duration.attributes('step')).toBe('1')
-    expect(wrapper.get('[data-test=tool-checkin-execute]').attributes('disabled')).toBeDefined()
-  })
-
-  it('shows a redacted persistence list error and disables every write control', async () => {
-    client.listAgentTools.mockRejectedValue({
-      code: 'persistence_error',
-      message: 'agent persistence failed',
-    })
-    const wrapper = mountPage()
-    await flushPromises()
-
-    expect(wrapper.get('[role=alert]').text()).toContain('agent persistence failed')
-    for (const selector of [
-      '[data-test=create-session]',
-      '[data-test=start-run]',
-      '[data-test=cancel-run]',
-      '[data-test=tool-plan-execute]',
-      '[data-test=tool-checkin-execute]',
-      '[data-test=tool-checkin-undo]',
-      '[data-test=planner-run]',
-    ]) {
-      expect(wrapper.get(selector).attributes('disabled')).toBeDefined()
-    }
-    expect(client.executeAgentTool).not.toHaveBeenCalled()
-    expect(client.undoAgentTool).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-test=tool-checkin-ownership]').text()).toContain('rust-owned')
   })
 
   it('runs a planner turn and renders the trace when a run is active', async () => {
@@ -597,222 +265,5 @@ describe('AgentDebug', () => {
     expect(json).toContain('field_sets')
     // No raw business content is shown.
     expect(json).not.toContain('今天复习数学')
-  })
-
-  it('loads memories on mount and renders their type, status, and source', async () => {
-    client.listAgentMemories.mockResolvedValue([
-      {
-        id: 'memory-1',
-        exam_id: null,
-        memory_type: 'daily_capacity',
-        content: '每天最多学习两小时',
-        source: 'user_statement',
-        confidence: 1,
-        status: 'confirmed',
-        created_at: '2026-07-18T00:00:00',
-        updated_at: '2026-07-18T00:00:00',
-        last_used_at: null,
-      },
-      {
-        id: 'memory-2',
-        exam_id: null,
-        memory_type: 'confirmed_weakness',
-        content: '二次函数压轴题',
-        source: 'model_candidate',
-        confidence: 0.5,
-        status: 'candidate',
-        created_at: '2026-07-18T00:00:00',
-        updated_at: '2026-07-18T00:00:00',
-        last_used_at: null,
-      },
-    ])
-    const wrapper = mountPage()
-    await flushPromises()
-
-    expect(client.listAgentMemories).toHaveBeenCalledWith(null, true)
-    expect(wrapper.get('[data-test=memory-meta-memory-1]').text()).toContain('daily_capacity')
-    expect(wrapper.get('[data-test=memory-meta-memory-1]').text()).toContain('confirmed')
-    expect(wrapper.get('[data-test=memory-content-memory-1]').text()).toContain('每天最多学习两小时')
-    // A candidate memory shows a confirm action; a confirmed one does not.
-    expect(wrapper.get('[data-test=memory-confirm-memory-2]').exists()).toBe(true)
-    expect(wrapper.find('[data-test=memory-confirm-memory-1]').exists()).toBe(false)
-  })
-
-  it('creates a memory from the form and prepends it to the list', async () => {
-    client.createAgentMemory.mockResolvedValue({
-      id: 'memory-new',
-      exam_id: null,
-      memory_type: 'schedule_preference',
-      content: '周末上午学习',
-      source: 'user_statement',
-      confidence: 0.7,
-      status: 'confirmed',
-      created_at: '2026-07-18T00:00:00',
-      updated_at: '2026-07-18T00:00:00',
-      last_used_at: null,
-    })
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await wrapper.get('[data-test=memory-create-content]').setValue('周末上午学习')
-    await wrapper.find('form.memory-create').trigger('submit')
-    await flushPromises()
-
-    expect(client.createAgentMemory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        exam_id: 'exam-1',
-        memory_type: 'schedule_preference',
-        content: '周末上午学习',
-        source: 'user_statement',
-        confidence: 0.7,
-      }),
-    )
-    expect(wrapper.get('[data-test=memory-meta-memory-new]').text()).toContain('confirmed')
-  })
-
-  it('confirms a candidate memory in place', async () => {
-    client.listAgentMemories.mockResolvedValue([
-      {
-        id: 'memory-2',
-        exam_id: null,
-        memory_type: 'confirmed_weakness',
-        content: '二次函数压轴题',
-        source: 'model_candidate',
-        confidence: 0.5,
-        status: 'candidate',
-        created_at: '2026-07-18T00:00:00',
-        updated_at: '2026-07-18T00:00:00',
-        last_used_at: null,
-      },
-    ])
-    client.confirmAgentMemory.mockResolvedValue({
-      id: 'memory-2',
-      exam_id: null,
-      memory_type: 'confirmed_weakness',
-      content: '二次函数压轴题',
-      source: 'model_candidate',
-      confidence: 0.5,
-      status: 'confirmed',
-      created_at: '2026-07-18T00:00:00',
-      updated_at: '2026-07-18T00:00:00',
-      last_used_at: null,
-    })
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await wrapper.get('[data-test=memory-confirm-memory-2]').trigger('click')
-    await flushPromises()
-
-    expect(client.confirmAgentMemory).toHaveBeenCalledWith('memory-2')
-    expect(wrapper.get('[data-test=memory-meta-memory-2]').text()).toContain('confirmed')
-    expect(wrapper.find('[data-test=memory-confirm-memory-2]').exists()).toBe(false)
-  })
-
-  it('edits a memory inline and deactivates and deletes it', async () => {
-    client.listAgentMemories.mockResolvedValue([
-      {
-        id: 'memory-1',
-        exam_id: null,
-        memory_type: 'daily_capacity',
-        content: '每天两小时',
-        source: 'user_statement',
-        confidence: 1,
-        status: 'confirmed',
-        created_at: '2026-07-18T00:00:00',
-        updated_at: '2026-07-18T00:00:00',
-        last_used_at: null,
-      },
-    ])
-    client.updateAgentMemory.mockResolvedValue({
-      id: 'memory-1',
-      exam_id: null,
-      memory_type: 'daily_capacity',
-      content: '每天三小时',
-      source: 'user_statement',
-      confidence: 1,
-      status: 'confirmed',
-      created_at: '2026-07-18T00:00:00',
-      updated_at: '2026-07-18T00:00:00',
-      last_used_at: null,
-    })
-    client.deactivateAgentMemory.mockResolvedValue({
-      id: 'memory-1',
-      exam_id: null,
-      memory_type: 'daily_capacity',
-      content: '每天三小时',
-      source: 'user_statement',
-      confidence: 1,
-      status: 'inactive',
-      created_at: '2026-07-18T00:00:00',
-      updated_at: '2026-07-18T00:00:00',
-      last_used_at: null,
-    })
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await wrapper.get('[data-test=memory-edit-memory-1]').trigger('click')
-    await wrapper.get('[data-test=memory-edit-input-memory-1]').setValue('每天三小时')
-    await wrapper.get('[data-test=memory-edit-save]').trigger('click')
-    await flushPromises()
-    expect(client.updateAgentMemory).toHaveBeenCalledWith('memory-1', '每天三小时')
-    expect(wrapper.get('[data-test=memory-content-memory-1]').text()).toContain('每天三小时')
-
-    await wrapper.get('[data-test=memory-deactivate-memory-1]').trigger('click')
-    await flushPromises()
-    expect(client.deactivateAgentMemory).toHaveBeenCalledWith('memory-1')
-    expect(wrapper.get('[data-test=memory-meta-memory-1]').text()).toContain('inactive')
-
-    await wrapper.get('[data-test=memory-delete-memory-1]').trigger('click')
-    await flushPromises()
-    expect(client.deleteAgentMemory).toHaveBeenCalledWith('memory-1')
-    expect(wrapper.find('[data-test=memory-row-memory-1]').exists()).toBe(false)
-  })
-
-  it('loads background jobs on mount and schedules a new one', async () => {
-    client.listAgentJobs.mockResolvedValue([
-      {
-        id: 'job-1',
-        job_type: 'daily_brief',
-        dedup_key: 'daily_brief:2026-07-18',
-        scheduled_at: '2026-07-18 08:00:00',
-        status: 'completed',
-        last_result: { mode: 'local', overdue_count: 0 },
-        retry_at: null,
-        runs: 1,
-        last_run_at: '2026-07-18 08:00:00',
-        created_at: '2026-07-18 00:00:00',
-      },
-    ])
-    const wrapper = mountPage()
-    await flushPromises()
-
-    expect(client.listAgentJobs).toHaveBeenCalledWith(50)
-    expect(wrapper.get('[data-test=job-meta-job-1]').text()).toContain('daily_brief')
-    expect(wrapper.get('[data-test=job-meta-job-1]').text()).toContain('completed')
-    expect(wrapper.get('[data-test=job-result-job-1]').text()).toContain('overdue_count')
-
-    await wrapper.get('[data-test=job-create-key]').setValue('overdue_check:2026-07-19')
-    await wrapper.get('[data-test=job-create-at]').setValue('2026-07-19 09:00:00')
-    await wrapper.find('form.job-create').trigger('submit')
-    await flushPromises()
-
-    expect(client.scheduleAgentJob).toHaveBeenCalledWith(
-      'daily_brief',
-      'overdue_check:2026-07-19',
-      '2026-07-19 09:00:00',
-    )
-  })
-
-  it('previews the daily brief', async () => {
-    const wrapper = mountPage()
-    await flushPromises()
-
-    await wrapper.get('[data-test=brief-preview]').trigger('click')
-    await flushPromises()
-
-    expect(client.agentBriefPreview).toHaveBeenCalledWith('exam-1')
-    expect(wrapper.get('[data-test=brief-mode]').text()).toContain('local')
-    expect(wrapper.get('[data-test=brief-summary]').text()).toContain('今日计划 2 项')
-    expect(wrapper.get('[data-test=brief-output]').text()).toContain('week_completion_rate')
   })
 })

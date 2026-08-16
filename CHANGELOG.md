@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `record.checkin_plan` 对 skipped/future 计划的拒绝从 `tool_schema_invalid` 改为 `conflict`（业务状态冲突而非输入畸形），不再因此将整个 Run 标记为失败。
+- **Cloud LLM Agent 简化改造（2026-08-16）**：唯一 AI 入口收敛为 Agent 对话（Rust `OpenAiCompatibleProvider`，reqwest）；删除 TypeScript LLM 适配、AnySearch 联网搜索与本地降级链路；计划生成/调整、学习记录、错题、复盘全部通过 Agent 工具（R3 审批 + 脱敏预览 + 事务级 undo）；`plan.preview_generate`/`plan.apply_preview` 落地为生产工具。
+  - 导航收敛为四个心智入口（Today `/agent`、Plan、Records、Settings），`/dashboard`、`/analysis`、`/visualization` 重定向到 `/agent`；`/agent-debug` 仅开发构建注册。
+  - 调度器只保留 `task_reminder` 与 `overdue_check`；每日简报改为本地确定性按需读取；长期记忆表保留但新代码不再读取。
+  - 跨层设置契约修复：提醒时间统一读写 `reminder_time`（原 Rust 侧误读 `agent_reminder_time`，设置永不生效）；调度提醒尊重 `notification_enabled` 开关；切换 provider 时刷新 keyring 状态；活跃考试同步 `agent_active_exam_id` 供提醒使用。
+  - 引导完成后跳转 `/agent`（单一入口契约）；`vitest` 默认超时提高至 15s 消除冷启动偶发超时；`@types/node` 纳入 devDependencies。
 
 ## [0.1.0] - 2026-07-02
 

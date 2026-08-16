@@ -118,7 +118,10 @@ export async function exportData(range: {
   }
   const wrong_questions = await queryChunked<any>(wqSql, wqParams)
 
-  const ai_analyses = await queryChunked<any>('SELECT * FROM ai_analyses')
+  // ai_analyses 为已弃用历史表（只读），非全量导出范围时不再携带；
+  // 该表无 exam_id 列，无法按范围过滤，全量导入也不会被新代码读取。
+  const ai_analyses =
+    range.scope === 'all' ? await queryChunked<any>('SELECT * FROM ai_analyses') : []
 
   return {
     version: 1,

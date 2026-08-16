@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import VChart from 'vue-echarts'
+import VueECharts from 'vue-echarts'
 import { Grid } from '@element-plus/icons-vue'
 import { SEMANTIC, useChartTheme } from '@/services/theme'
+import { ensureECharts } from '@/services/echarts-setup'
+
+ensureECharts()
 
 const props = defineProps<{ data: { kpName: string; date: string; mastery: number }[] }>()
 const { theme } = useChartTheme()
@@ -49,7 +52,7 @@ const option = computed(
         <span class="card-head__title">知识点掌握热力图</span>
       </div>
     </template>
-    <v-chart v-if="cells.length" class="chart" :option="option" :theme="theme" autoresize />
+    <VueECharts v-if="cells.length" class="chart" :option="option" :theme="theme" autoresize />
     <el-empty v-else description="无数据（需记录知识点掌握度）" :image-size="50" />
   </el-card>
 </template>

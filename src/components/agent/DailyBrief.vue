@@ -1,23 +1,25 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { onMounted, computed } from 'vue'
 import { Calendar, Check } from '@element-plus/icons-vue'
 import { useAgentStore } from '@/stores/agent'
+import { useSettingsStore } from '@/stores/settings'
 
 const agent = useAgentStore()
-let unlisten: UnlistenFn | undefined
+const settings = useSettingsStore()
 
-onMounted(async () => {
-  await agent.loadBrief()
-  await agent.refreshApprovals()
-  // Command-layer push (agent_brief_preview emits this) refreshes the card.
-  unlisten = await listen('agent-daily-brief', () => {
-    void agent.loadBrief()
-  })
+// Task 9 Step 5: a cloud provider must be configured before the user can rely
+// on model-generated content. Without one we show the explicit state instead
+// of pretending "local mode" is a model answer.
+const cloudAvailable = computed(() => {
+  const config = settings.llmConfig
+  return !!config && config.provider !== 'ollama' && !!config.baseUrl && !!config.model
 })
 
-onUnmounted(() => {
-  unlisten?.()
+onMounted(async () => {
+  // settings 由 App.vue 统一加载；这里只读取已加载的配置状态。
+  await agent.loadBrief()
+  await agent.refreshApprovals()
+  // Task 12: the brief is a pure on-demand local read — no event listener.
 })
 
 function formatRate(value: number): string {
@@ -29,17 +31,29 @@ function formatRate(value: number): string {
   <section class="brief-section">
     <h2 class="section-title">每日简报</h2>
 
+    <el-alert
+      v-if="!cloudAvailable"
+      data-test="brief-no-cloud"
+      class="brief-no-cloud"
+      type="info"
+      :closable="false"
+      show-icon
+      title="尚未连接云端模型。你仍可查看和编辑本地数据；连接模型后可使用对话、计划调整和智能复盘。"
+    />
+
     <article v-if="agent.brief" class="brief-card" data-test="brief-card">
       <p class="brief-date">
         <el-icon><Calendar /></el-icon>
-        {{ agent.brief.date }} · {{ agent.brief.mode === 'model' ? '模型增强' : '本地' }}
+        {{ agent.brief.date }} · 本地统计
       </p>
       <p class="brief-summary" data-test="brief-summary">{{ agent.brief.summary }}</p>
       <p v-if="agent.brief.explanation" class="brief-explanation" data-test="brief-explanation">
         {{ agent.brief.explanation }}
       </p>
       <div class="brief-stats">
-        <span data-test="brief-today">今日 {{ agent.brief.today_completed }}/{{ agent.brief.today_planned }}</span>
+        <span data-test="brief-today">
+          今日 {{ agent.brief.today_completed }}/{{ agent.brief.today_planned }}
+        </span>
         <span data-test="brief-overdue">逾期 {{ agent.brief.overdue_count }}</span>
         <span data-test="brief-week">本周 {{ formatRate(agent.brief.week_completion_rate) }}</span>
         <span v-if="agent.brief.due_wrong_questions > 0" data-test="brief-wrong">

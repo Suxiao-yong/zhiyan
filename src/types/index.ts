@@ -104,30 +104,10 @@ export interface WrongQuestion {
   last_review_at: string | null
 }
 
-/** AI 分析 */
-export type AnalysisType = 'daily' | 'weekly' | 'phase' | 'prediction' | 'adjustment'
-export type UserConfirmed = 0 | 1 | 2 // 未处理/确认/拒绝
-
-export interface AiAnalysis {
-  id: string
-  analysis_type: AnalysisType
-  period_start: string | null
-  period_end: string | null
-  subjects_analyzed: string | null // JSON
-  content: string | null
-  suggestions: string | null // JSON
-  scores_prediction: string | null // JSON
-  generated_by: GeneratedBy
-  user_confirmed: UserConfirmed
-  applied: number // 0/1
-  applied_at: string | null
-  created_at: string
-}
-
-/** LLM 配置（apiKey 为解密后明文，仅存内存，绝不进入持久化 store） */
+/** LLM 非敏感配置（保存于 settings 表）。API Key 只存在于 OS 凭据管理器，
+ * 由 Rust 内部读取，永不进入前端 store / 页面状态 / 消息。 */
 export interface LLMConfig {
-  provider: string // openai/deepseek/qwen/kimi/ollama/custom
-  apiKey: string
+  provider: string // openai/deepseek/qwen/kimi/custom
   baseUrl: string
   model: string
   temperature: number
@@ -190,8 +170,9 @@ export interface AgentRun {
   completed_at: string | null
 }
 
-/** Dynamic execution ownership for a registered Agent tool. */
-export type AgentToolOwnership = 'typescript' | 'shadow' | 'rust-owned' | 'unavailable'
+/** Execution ownership of a registered Agent tool. Task 13: every tool is
+ * Rust-owned; the legacy typescript/shadow/unavailable states are gone. */
+export type AgentToolOwnership = 'rust-owned'
 export type AgentToolRisk = 'R0' | 'R1' | 'R2' | 'R3' | 'R4'
 export type AgentToolConfirmation =
   'automatic' | 'summary_or_setting' | 'required' | 'navigation_only'
@@ -211,7 +192,7 @@ export interface AgentToolDescriptor {
   data_permissions: string[]
 }
 
-/** Static descriptor paired with its current persistence-backed ownership. */
+/** Static descriptor paired with its Rust execution ownership (Task 13). */
 export interface ListedAgentTool {
   descriptor: AgentToolDescriptor
   ownership: AgentToolOwnership
@@ -256,12 +237,35 @@ export type AgentToolCallResponse =
       reason: string
     }
 
+export interface AgentActionPreviewConflict {
+  kind: string
+  affected_count?: number
+  detail: string
+}
+
+/**
+ * 标准化的审批预览（Task 10）:由 Rust 生成并脱敏,包含动作名称、影响
+ * 对象数量、日期范围、前后摘要、结构化字段、冲突、风险与 undo 可用性。
+ * 绝不包含 API Key、模型原始输出或完整请求体。
+ */
+export interface AgentActionPreview {
+  tool: string
+  risk: number
+  undo_available: boolean
+  action: string
+  affected_count: number
+  summary: string
+  conflicts: AgentActionPreviewConflict[]
+  date_range: string
+  fields?: Record<string, unknown>
+}
+
 export interface AgentApproval {
   id: string
   run_id: string
   step_id: string
   risk: number
-  preview: unknown
+  preview: AgentActionPreview | null
   precondition_hash: string
   status: string
   expires_at: string
@@ -273,14 +277,24 @@ export type AgentApprovalRecord = AgentApproval
 
 export interface AgentToolUndoResponse {
   step_id: string
-  output: {
-    record_id: string
-    plan_id: string
-    removed_wrong_question_ids: string[]
-    actual_duration: number
-    actual_tasks: string | null
-    status: string
-  }
+  output:
+    | {
+        kind: 'record.checkin_plan.v1'
+        record_id: string
+        plan_id: string
+        removed_wrong_question_ids: string[]
+        actual_duration: number
+        actual_tasks: string | null
+        status: string
+      }
+    | {
+        kind: 'plan.apply_preview.v1'
+        exam_id: string
+        inserted_plan_ids: string[]
+        restored_plan_ids: string[]
+        restored_record_count: number
+        status: string
+      }
 }
 
 export type AgentPlannerTraceEntry =
@@ -303,28 +317,6 @@ export interface AgentPlannerTurn {
 }
 
 /** M4 background job types. */
-export type AgentJobType =
-  | 'daily_brief'
-  | 'task_reminder'
-  | 'overdue_check'
-  | 'weekly_report'
-  | 'retry_failed'
-  | 'cleanup_failed'
-
-/** One agent_jobs row from the hidden debug page. */
-export interface AgentJob {
-  id: string
-  job_type: AgentJobType
-  dedup_key: string
-  scheduled_at: string
-  status: string
-  last_result: unknown
-  retry_at: string | null
-  runs: number
-  last_run_at: string | null
-  created_at: string
-}
-
 /** The daily brief (local skeleton, optionally with an LLM explanation). */
 export interface AgentBrief {
   date: string
@@ -361,41 +353,4 @@ export interface AgentContextAuditRow {
   record_ids: Record<string, string[]>
   field_sets: Record<string, string[]>
   created_at: string
-}
-
-/** The seven spec §11 structured long-term memory types. */
-export type AgentMemoryType =
-  | 'schedule_preference'
-  | 'daily_capacity'
-  | 'subject_preference'
-  | 'learning_constraint'
-  | 'reminder_preference'
-  | 'strategy_preference'
-  | 'confirmed_weakness'
-
-/** Where a memory came from; user statements auto-confirm. */
-export type AgentMemorySource = 'user_statement' | 'behavior_inferred' | 'model_candidate'
-
-/** candidate → confirmed → inactive. */
-export type AgentMemoryStatus = 'candidate' | 'confirmed' | 'inactive'
-
-export interface AgentMemoryRecord {
-  id: string
-  exam_id: string | null
-  memory_type: AgentMemoryType
-  content: string
-  source: AgentMemorySource
-  confidence: number
-  status: AgentMemoryStatus
-  created_at: string
-  updated_at: string
-  last_used_at: string | null
-}
-
-export interface AgentMemoryCreateInput {
-  exam_id: string | null
-  memory_type: AgentMemoryType
-  content: string
-  source: AgentMemorySource
-  confidence: number
 }

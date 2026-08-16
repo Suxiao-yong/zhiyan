@@ -1,15 +1,8 @@
 <script setup lang="ts">
 import { useAgentStore } from '@/stores/agent'
+import AgentActionPreview from './AgentActionPreview.vue'
 
 const agent = useAgentStore()
-
-function previewSummary(preview: unknown): string {
-  if (!preview || typeof preview !== 'object') return '—'
-  const entries = Object.entries(preview as Record<string, unknown>)
-  return entries
-    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.length : String(value)}`)
-    .join('，')
-}
 </script>
 
 <template>
@@ -29,28 +22,44 @@ function previewSummary(preview: unknown): string {
         <span class="approval-status">{{ approval.status }}</span>
         <span class="approval-expiry">截止 {{ approval.expires_at.slice(11, 16) }}</span>
       </div>
-      <p class="approval-preview" data-test="approval-preview">
-        {{ previewSummary(approval.preview) }}
-      </p>
+      <!-- Task 10: render the standardized, sanitized preview instead of raw
+           request fields. -->
+      <AgentActionPreview :preview="approval.preview" />
       <div v-if="approval.status === 'pending'" class="approval-actions">
         <el-button
           :data-test="`approval-approve-${approval.id}`"
           size="small"
           type="success"
-          :disabled="agent.busy"
-          @click="agent.decideApproval(approval.id, true)"
+          :disabled="agent.busy || agent.isResolving(approval.id)"
+          @click="agent.resolveApproval(approval.id, true)"
         >
-          批准
+          确认执行
         </el-button>
         <el-button
           :data-test="`approval-reject-${approval.id}`"
           size="small"
           type="danger"
           plain
-          :disabled="agent.busy"
-          @click="agent.decideApproval(approval.id, false)"
+          :disabled="agent.busy || agent.isResolving(approval.id)"
+          @click="agent.resolveApproval(approval.id, false)"
         >
-          拒绝
+          取消
+        </el-button>
+      </div>
+      <!-- Task 5: an executed write tool that supports undo offers a real
+           revert through the Rust executor (never a state-only refresh). -->
+      <div
+        v-else-if="approval.status === 'approved' && approval.preview?.undo_available"
+        class="approval-actions"
+      >
+        <el-button
+          :data-test="`approval-undo-${approval.id}`"
+          size="small"
+          plain
+          :disabled="agent.busy"
+          @click="agent.undoTool(approval.step_id)"
+        >
+          撤销本次执行
         </el-button>
       </div>
     </article>

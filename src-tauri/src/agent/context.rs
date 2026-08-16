@@ -15,15 +15,12 @@ use crate::agent::llm::ProviderUsage;
 use crate::agent::tools::plan;
 
 /// The in-scope business data for a run, gathered once and reused on every
-/// audit row of that run. `memory_ids` is filled by the Planner from the
-/// confirmed memories it offers to the model; the audit records only IDs and
-/// field names, never memory content.
+/// audit row of that run. Records only IDs and field names, never content.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContextScope {
     pub exam_id: Option<String>,
     pub plan_ids: Vec<String>,
     pub subject_ids: Vec<String>,
-    pub memory_ids: Vec<String>,
 }
 
 impl ContextScope {
@@ -38,9 +35,6 @@ impl ContextScope {
         if !self.subject_ids.is_empty() {
             categories.push("subject");
         }
-        if !self.memory_ids.is_empty() {
-            categories.push("memory");
-        }
         categories
     }
 
@@ -54,9 +48,6 @@ impl ContextScope {
         }
         if !self.subject_ids.is_empty() {
             map.insert("subject".into(), json!(self.subject_ids));
-        }
-        if !self.memory_ids.is_empty() {
-            map.insert("memory".into(), json!(self.memory_ids));
         }
         Value::Object(map)
     }
@@ -86,12 +77,6 @@ impl ContextScope {
             map.insert(
                 "subject".into(),
                 json!(["id", "name", "weight", "current_level"]),
-            );
-        }
-        if !self.memory_ids.is_empty() {
-            map.insert(
-                "memory".into(),
-                json!(["id", "memory_type", "content", "status"]),
             );
         }
         Value::Object(map)
@@ -159,7 +144,6 @@ impl ContextAudit {
             exam_id: Some(exam_id),
             plan_ids,
             subject_ids,
-            memory_ids: Vec::new(),
         })
     }
 

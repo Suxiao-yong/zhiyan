@@ -2,16 +2,12 @@
 import { onMounted, ref, watch } from 'vue'
 import { useExamStore } from '@/stores/exam'
 import * as vizService from '@/services/viz-service'
-import { query } from '@/services/db'
 import PageHeader from '@/components/common/PageHeader.vue'
-import { Odometer } from '@element-plus/icons-vue'
 import DurationTrendChart from '@/components/viz/DurationTrendChart.vue'
-import SubjectPieChart from '@/components/viz/SubjectPieChart.vue'
-import CorrectRateChart from '@/components/viz/CorrectRateChart.vue'
-import SubjectRadarChart from '@/components/viz/SubjectRadarChart.vue'
 import KpHeatmapChart from '@/components/viz/KpHeatmapChart.vue'
-import ScoreGauge from '@/components/analysis/ScoreGauge.vue'
-import type { PredictionResult } from '@/services/analyzer'
+
+// Task 16: 只保留两个核心统计视图（学习时长趋势、知识点掌握热力图）；
+// 其余图表（科目占比/正确率/雷达/分数预测）不再提供入口。
 
 const examStore = useExamStore()
 const range = ref('30') // 7/30/90/all/custom
@@ -20,11 +16,7 @@ const subjectIds = ref<string[]>([])
 const loading = ref(false)
 
 const trend = ref<{ date: string; minutes: number }[]>([])
-const subjectDur = ref<{ subjectName: string; minutes: number }[]>([])
-const correctRate = ref<{ date: string; subjectName: string; rate: number }[]>([])
-const radar = ref<{ subject: string; duration: number; correctRate: number; mastery: number }[]>([])
 const heatmap = ref<{ kpName: string; date: string; mastery: number }[]>([])
-const prediction = ref<PredictionResult | null>(null)
 
 function fmt(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
@@ -50,25 +42,12 @@ async function load() {
   try {
     const { from, to } = computeFromTo()
     const filter = { from, to, subjectIds: subjectIds.value }
-    const [t, sd, cr, rd, hm] = await Promise.all([
+    const [t, hm] = await Promise.all([
       vizService.getDurationTrend(filter),
-      vizService.getSubjectDuration(filter),
-      vizService.getCorrectRateTrend(filter),
-      vizService.getSubjectRadar(filter),
       vizService.getKpHeatmap(filter),
     ])
     trend.value = t
-    subjectDur.value = sd
-    correctRate.value = cr
-    radar.value = rd
     heatmap.value = hm
-    // 最新预测
-    const rows = await query<{ scores_prediction: string | null }>(
-      'SELECT scores_prediction FROM ai_analyses WHERE scores_prediction IS NOT NULL ORDER BY created_at DESC LIMIT 1',
-    )
-    prediction.value = rows[0]?.scores_prediction
-      ? (JSON.parse(rows[0].scores_prediction) as PredictionResult)
-      : null
   } finally {
     loading.value = false
   }
@@ -118,30 +97,7 @@ watch([range, customRange, subjectIds], load, { deep: true })
 
     <el-row :gutter="16" class="grid">
       <el-col :xs="24" :md="12"><DurationTrendChart :data="trend" /></el-col>
-      <el-col :xs="24" :md="12"><SubjectPieChart :data="subjectDur" /></el-col>
-      <el-col :xs="24" :md="12"><CorrectRateChart :data="correctRate" /></el-col>
-      <el-col :xs="24" :md="12"><SubjectRadarChart :data="radar" /></el-col>
       <el-col :xs="24" :md="12"><KpHeatmapChart :data="heatmap" /></el-col>
-      <el-col :xs="24" :md="12">
-        <el-card shadow="never" class="gauge-card">
-          <template #header>
-            <div class="card-head">
-              <el-icon class="card-head__icon"><Odometer /></el-icon>
-              <span class="card-head__title">分数预测仪表</span>
-            </div>
-          </template>
-          <div v-if="prediction && prediction.predictions.length" class="gauges">
-            <ScoreGauge
-              v-for="p in prediction.predictions"
-              :key="p.subject"
-              :subject="p.subject"
-              :predicted="p.predicted_score"
-              :target="p.target_score"
-            />
-          </div>
-          <el-empty v-else description="暂无预测（去「AI 分析」生成阶段预测）" :image-size="50" />
-        </el-card>
-      </el-col>
     </el-row>
   </div>
 </template>

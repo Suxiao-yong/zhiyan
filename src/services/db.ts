@@ -205,6 +205,7 @@ export async function insert(table: string, data: Record<string, unknown>): Prom
   const colList = entries.map(([k]) => k).join(', ')
   const placeholders = entries.map(() => '?').join(', ')
   const params = entries.map(([, v]) => v)
+  if (!entries.length) throw new Error(`insert(${table}): 无有效字段可写`)
   await execute(`INSERT INTO ${table} (${colList}) VALUES (${placeholders})`, params)
   return id ?? ''
 }
@@ -252,6 +253,14 @@ export async function getSetting(key: string): Promise<string | null> {
     key,
   ])
   return rows[0]?.value ?? null
+}
+
+/** 只判断设置项是否存在（SELECT 1 LIMIT 1），不读取值 —— 用于 fallback 键存在性检测 */
+export async function hasSetting(key: string): Promise<boolean> {
+  const rows = await query<{ one: number }>('SELECT 1 AS one FROM settings WHERE key = ? LIMIT 1', [
+    key,
+  ])
+  return rows.length > 0
 }
 
 export async function setSetting(key: string, value: string, description?: string): Promise<void> {

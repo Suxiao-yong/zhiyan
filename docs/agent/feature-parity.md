@@ -1,35 +1,33 @@
-# Agent OS Feature Parity
+# Agent Feature Parity（2026-08-16 Cloud LLM 简化修复后）
 
-| Capability | Current owner | Target owner | Migration state | Regression command |
-|---|---|---|---|---|
-| Exam and subject configuration | TypeScript services | Rust tools | legacy | `npm.cmd test` |
-| Plan generation and editing | TypeScript services | Rust tools | legacy | `npm.cmd test -- src/services/plan-generator.test.ts src/services/plan-service.test.ts` |
-| Plan check-in and free record | TypeScript services | Rust tools | legacy | `npm.cmd test -- src/services/record-service.test.ts` |
-| Wrong questions | TypeScript services | Rust tools | legacy | `npm.cmd test` |
-| Analysis and prediction | TypeScript services | Rust tools | legacy | `npm.cmd test -- src/services/analyzer.test.ts` |
-| Visualization datasets | TypeScript services | Rust tools | legacy | `npm.cmd test` |
-| Import, export, backup and restore | TypeScript services plus Tauri plugins | Rust tools | legacy | `npm.cmd test -- src/services/export.test.ts` |
-| Agent session and run state | Rust Runtime | Rust Runtime | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` |
-| `plan.get_today@1` (R0 read) | Rust tool | Rust tool | shadow | `cargo test --manifest-path src-tauri/Cargo.toml --test agent_tools plan_get_today -- --test-threads=1` |
-| `record.checkin_plan@1` (R1 write + undo) | Rust tool | Rust tool | typescript | `cargo test --manifest-path src-tauri/Cargo.toml --test agent_tools checkin -- --test-threads=1` |
-| `exam.get_active@1` (R0 read) | Rust tool | Rust tool | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml --lib agent::runtime::tests::query_tools -- --test-threads=1` |
-| `plan.get_range@1` (R0 read) | Rust tool | Rust tool | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml --lib agent::runtime::tests::query_tools -- --test-threads=1` |
-| `record.get_history@1` (R0 read) | Rust tool | Rust tool | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml --lib agent::runtime::tests::query_tools -- --test-threads=1` |
-| `record.create_free@1` (R1 write) | Rust tool | Rust tool | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml --lib agent::runtime::tests::write_tools -- --test-threads=1` |
-| `wrong_question.create@1` (R1 write) | Rust tool | Rust tool | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml --lib agent::runtime::tests::write_tools -- --test-threads=1` |
-| `wrong_question.mark_mastered@1` (R1 write) | Rust tool | Rust tool | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml --lib agent::runtime::tests::write_tools -- --test-threads=1` |
-| `plan.generate@1` (R2 draft) | Rust tool | Rust tool | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml --lib agent::runtime::tests::plan_generate -- --test-threads=1` |
-| Model adapter and tool loop (non-streaming) | Rust Runtime | Rust Runtime | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml --lib agent::planner -- --test-threads=1` |
-| Context audit + inspector (M3 Part 3) | Rust Context Builder | Rust Context Builder | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml --lib agent::context -- --test-threads=1` |
-| Structured long-term memory (M3 Part 3) | Rust MemoryRepository | Rust MemoryRepository | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml --lib agent::memory -- --test-threads=1` |
-| Tray lifecycle + background jobs + daily brief (M4) | Rust Scheduler/Tray | Rust Scheduler/Tray | rust-owned | `cargo test --manifest-path src-tauri/Cargo.toml --lib scheduler -- --test-threads=1` |
-| Agent OS shell + conversation (M5) | Rust messages + Vue shell | Rust message layer, Vue UI | rust-owned | `npx vitest run src/pages/AgentHome.test.ts` |
+| Capability                           | Current owner                                         | Status     | Notes                                                                                                           |
+| ------------------------------------ | ----------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------- |
+| Exam/subject configuration           | TypeScript services + Setup UI                        | local      | 未进入 Agent 工具面（保持本地确定性）                                                                           |
+| Plan generation & adjustment         | Agent (Rust Planner) + R3 approval                    | rust-owned | 对话内预览（真实 Draft 行/冲突/precondition）→ 确认提交；`plan.generate`/`plan.get_today` 等工具全部 Rust-owned |
+| Plan check-in & free record          | Agent (Rust tool)                                     | rust-owned | `record.checkin_plan` 即使存在旧 `agent_tool_owner.*=typescript` 设置仍按 Rust-owned 执行（Task 13）            |
+| Wrong questions                      | Agent (Rust tool)                                     | rust-owned | `wrong_question.create` / `wrong_question.mark_mastered`                                                        |
+| Daily brief                          | Rust `brief.rs`                                       | local      | 纯按需本地摘要（`mode=local`，无 LLM 调用）；模型解释只在 Agent 对话中显式请求                                  |
+| Analysis & prediction                | 并入 Agent 对话                                       | retired    | TS 链路（agent-engine/analysis store/prompts）已删；`ai_analyses` 历史表只读弃用                                |
+| Visualization datasets               | 仅存两个核心统计（时长趋势/知识点热力图）             | retired    | `/visualization` 重定向；ECharts 惰性加载                                                                       |
+| Import/export/backup/restore         | TypeScript services + Rust fs plugin                  | local      | `ai_analyses` 仍保留在 ALLOWED_TABLES 与导出中（兼容历史）                                                      |
+| Agent session/run/messages/approvals | Rust Runtime + Planner                                | rust-owned | v9 `agent_messages` 持久化；run 终态机                                                                          |
+| Structured long-term memory          | 无（降级为 Settings 键）                              | retired    | `agent_memories` 表保留、新代码不读（Task 11）                                                                  |
+| Background jobs                      | Rust Scheduler                                        | rust-owned | 仅 `task_reminder`/`overdue_check`；其余 job 类型 deprecated（Task 12）                                         |
+| Tray lifecycle / reminders           | Rust Tray/Scheduler/notify                            | rust-owned | 暂停/恢复、任务与逾期通知（正文仅计数/日期）                                                                    |
+| LLM provider                         | Rust `OpenAiCompatibleProvider` (reqwest)             | rust-owned | 唯一 provider；TS adapter 与 plugin-http 已删                                                                   |
+| Agent OS shell + conversation        | Vue AgentHome（Sidebar/Brief/Conversation/Workbench） | rust-owned | 工作台仅 check-in/plan/record 三栏                                                                              |
+| Debug surface                        | `/agent-debug`（dev-only 路由）                       | rust-owned | 仅 health/run/tool schema/审计/planner loop                                                                     |
 
-Notes:
+States: `rust-owned`、`local`、`retired`（不再有 `legacy`/`shadow`/`typescript` 所有权状态；
+ToolOwnership 收敛为单一 `RustOwned`，`agent_tool_owner.*` settings 只读弃用）。
 
-- `plan.get_today` may be promoted `shadow -> rust-owned` after packaged read parity sign-off (read-only; no write-owner conflict).
-- `record.checkin_plan` stays `typescript` until the packaged manual vertical slice in `MANUAL_TEST.md` is signed off.
-- M6 ships the remaining §8.2 tool set: three R0 query tools (`exam.get_active`, `plan.get_range`, `record.get_history`), three R1 write tools (`record.create_free`, `wrong_question.create`, `wrong_question.mark_mastered`), and the R2 weekly draft tool `plan.generate` (local rule-based weighted slotting, `agent_r2_auto_execute` gate, per-week idempotency). New tools default to `rust-owned` via the v5 settings seed; unconfigured tools stay fail-closed. The Agent OS right pane is now a five-workbench registry (check-in, study plan, records/wrong questions, AI analysis, visualization). `agent_os_enabled` (default on) routes `/` to `/agent` and disables the legacy TS LLM analysis catch-up; flipping it to `0` restores the dashboard-first screen and the legacy analysis path. Production hardening: forward-only migration test (v1→v9, no destructive statements), date/KP cross-field validation with positive and negative tests, and an M6 packaged acceptance checklist in `MANUAL_TEST.md`. Still deferred: `data.*` agent tools, `exam.update`, `plan.reorder`, `record.update/delete`, `visualization.get_dataset`, and full TypeScript planner removal (`plan-chat-agent.ts` stays as the fallback chat UI).
-- The model adapter and tool loop (M3 Part 1) is Rust-owned runtime code reachable only through the hidden `agent_run_planner` command. Streaming is shipped (M3 Part 2): the provider streams `chat/completions` SSE, the Planner forwards content deltas through an `on_chunk` callback, and `agent_run_planner` emits `agent-planner-chunk` events rendered live on `/agent-debug`. It does not yet replace the TypeScript planner (`plan-chat-agent.ts`) or the TypeScript LLM adapter; that cutover is M6. M3 Part 3 ships the Context Inspector (dedicated `agent_context_audit` table + `agent_context_audit_list` command + `/agent-debug` view) and structured long-term memory (`agent_memories`, seven spec §11 types, candidate→confirmed flow, management UI). M4 ships the tray lifecycle (close-to-hide, pause toggle, quit), the background scheduler (`agent_jobs` v8, deduped daily brief/overdue/reminder jobs with restart/day-rollover self-heal), local aggregation, the daily brief (local skeleton + optional LLM explanation), task/overdue notifications (counts and dates only), and cost accounting (`PlannerTurn.estimated_cost_usd`). Still deferred: the full Fallback Engine (overdue/stats/weakness/notifications) as a composed product surface and the weekly report (M5), and push-style brief events (M5 command layer). **Ollama tool support is excluded by product decision (cloud LLMs only for the agent loop)**; Ollama stays on the TypeScript plain-chat path and degrades to local mode in the Rust planner. M5 ships the Agent OS three-column shell at `/agent`: session sidebar (new/recent sessions, workbench deep links), conversation center (persisted `agent_messages` per planner turn, composer, run status, approval cards, daily brief card with command-layer push), and the plan check-in workbench embedded in the right pane. The TypeScript planner/LLM adapter and the full workbench set remain M6.
+## 回归命令（2026-08-16 实际输出）
 
-States: `legacy`, `shadow`, `rust-owned`, `retired`.
+- `cargo test --manifest-path src-tauri/Cargo.toml --lib`：**164 passed, 0 failed**
+  （db/executor/planner/runtime/scheduler/brief/llm 等；测试总数以本次输出为准）。
+- `npm.cmd test -- --run`：**13 个测试文件、79 个用例通过**（AgentHome/AgentDebug/router/export/analyzer/settings 等）。
+- `npm.cmd run typecheck`：exit 0。
+- `npm.cmd run build`：exit 0（仅已有 chunk size 与动态导入 warning）。
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`：通过。
+- `cargo clippy --manifest-path src-tauri/Cargo.toml --lib -- -D warnings`：通过。
+- 手工验收：`docs/agent/cloud-llm-cutover-test-matrix.md`

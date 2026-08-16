@@ -53,10 +53,16 @@ const activeWorkbench = ref<WorkbenchKey>('checkin')
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  /* Task 15: cap the reading width of the conversation column. */
+  max-width: 920px;
+  margin: 0 auto;
+  width: 100%;
 }
 .agent-workbench {
-  width: 46%;
+  /* Task 15: the workbench never exceeds 36% of the window width. */
+  width: 36%;
   min-width: 380px;
+  max-width: 520px;
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--el-border-color);

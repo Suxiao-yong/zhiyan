@@ -1,29 +1,29 @@
 // Rust Scheduler (M4): background job lifecycle.
 //
 // Task 1 added the pause/state surface used by the tray. Task 2 adds the
-// agent_jobs table (v8 migration), the tick loop with atomic claim, retry with
-// backoff, startup bootstrap catch-up, and per-type dispatch. Job handlers
-// land in later M4 tasks: daily brief (Task 4), reminders/overdue (Task 5);
-// weekly_report / retry_failed / cleanup_failed remain placeholder outcomes
-// until M5, as planned in `2026-07-17-agent-tray-scheduler.md`.
+// agent_jobs table (v8 migration), the tick loop with atomic claim, and
+// per-type dispatch. Task 12 shrinks the runtime to the retained local
+// reminders only (task_reminder, overdue_check); the daily_brief,
+// weekly_report, retry_failed and cleanup_failed job types are deprecated —
+// legacy rows still parse and list, but new code never schedules them and
+// their dispatch is a no-op skip. The daily brief itself is an on-demand
+// local read (see brief.rs), independent of the Scheduler.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
 
 use crate::agent::error::AgentError;
-use crate::agent::memory::MemoryRepository;
-use crate::agent::planner::Planner;
 use crate::analytics::Analytics;
-use crate::brief::{brief_payload, Brief, BriefBuilder};
 use crate::notify::NotificationBus;
 
 /// Reminder jobs are suppressed while `agent_reminders_paused` is `1`.
 pub const REMINDERS_PAUSED_KEY: &str = "agent_reminders_paused";
 
-/// Retry a failed job after this many minutes.
-const RETRY_AFTER_MINUTES: i64 = 5;
-
+/// Background job types. Since Task 12 only `task_reminder` and `overdue_check`
+/// are scheduled and dispatched; the other variants are retained so legacy
+/// `agent_jobs` rows (migration 8, never dropped) still parse and list. New
+/// code must not schedule the deprecated types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobType {
@@ -62,8 +62,9 @@ impl JobType {
             .find(|job_type| job_type.as_str() == value)
     }
 
-    /// Whether the job is suppressed by the reminders pause.
-    fn is_reminder(self) -> bool {
+    /// Whether the job is suppressed by the reminders pause. Task 12 also uses
+    /// this to allow only reminder types through the schedule command.
+    pub fn is_reminder(self) -> bool {
         matches!(self, JobType::TaskReminder | JobType::OverdueCheck)
     }
 }
@@ -83,11 +84,11 @@ pub struct JobRecord {
     pub created_at: String,
 }
 
-/// What a job handler produced: a completed run, a failed run that should
-/// retry, or a deliberately skipped run (e.g. reminders paused).
+/// What a job handler produced: a completed run or a deliberately skipped run
+/// (e.g. reminders paused, deprecated job type). No handler retries since
+/// Task 12; the failed/retry path is gone.
 enum JobOutcome {
     Done(Value),
-    Retry(Value),
     Skipped(Value),
 }
 
@@ -195,7 +196,7 @@ impl Scheduler {
                 continue;
             }
             let outcome = self.dispatch(&job_type, now).await;
-            self.record_outcome(&id, now, outcome).await?;
+            self.record_outcome(&id, outcome).await?;
             ran += 1;
         }
         Ok(ran)
@@ -209,20 +210,16 @@ impl Scheduler {
         self.ensure_today_jobs(now).await
     }
 
-    /// Ensure today's daily jobs exist (daily brief at 08:00, overdue check at
-    /// 09:00, task reminder at the configured reminder time). Called on every
-    /// tick, so a restart or a day rollover re-creates the day's jobs exactly
-    /// once (dedup keys are date-scoped). Returns how many were created.
+    /// Ensure today's reminder jobs exist (overdue check at 09:00, task
+    /// reminder at the configured reminder time). Called on every tick, so a
+    /// restart or a day rollover re-creates the day's jobs exactly once
+    /// (dedup keys are date-scoped). Task 12: daily_brief / weekly_report are
+    /// no longer scheduled. Returns how many were created.
     async fn ensure_today_jobs(&self, now: &str) -> Result<usize, AgentError> {
         let today = &now[..10];
         let reminder_time = self.reminder_time().await?;
         let mut created = 0;
         for (job_type, dedup, scheduled_at) in [
-            (
-                JobType::DailyBrief,
-                format!("daily_brief:{today}"),
-                format!("{today} 08:00:00"),
-            ),
             (
                 JobType::OverdueCheck,
                 format!("overdue_check:{today}"),
@@ -246,16 +243,30 @@ impl Scheduler {
     }
 
     /// The daily task-reminder clock time (`HH:MM`), from the
-    /// `agent_reminder_time` setting, defaulting to `19:00`.
+    /// `reminder_time` setting (the key the frontend Settings store writes),
+    /// defaulting to `19:00`.
     async fn reminder_time(&self) -> Result<String, AgentError> {
         let value: Option<String> =
-            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'agent_reminder_time'")
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'reminder_time'")
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(map_sqlx)?;
         Ok(value
             .filter(|raw| raw.len() == 5 && raw.as_bytes()[2] == b':')
             .unwrap_or_else(|| "19:00".to_owned()))
+    }
+
+    /// The user-facing notification switch (`notification_enabled`, default
+    /// on, same semantics as the frontend: anything except `"false"` is on).
+    /// Reminders stay scheduled but never notify when the user turned
+    /// notifications off in Settings.
+    async fn notifications_enabled(&self) -> Result<bool, AgentError> {
+        let value: Option<String> =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'notification_enabled'")
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx)?;
+        Ok(value.map(|raw| raw != "false").unwrap_or(true))
     }
 
     /// Every job on record, newest first, for the hidden debug page.
@@ -272,36 +283,19 @@ impl Scheduler {
     }
 
     async fn dispatch(&self, job_type: &JobType, now: &str) -> JobOutcome {
-        if job_type.is_reminder() && self.reminders_paused().await.unwrap_or(false) {
-            return JobOutcome::Skipped(json!({ "reason": "reminders paused" }));
+        if job_type.is_reminder() {
+            if self.reminders_paused().await.unwrap_or(false) {
+                return JobOutcome::Skipped(json!({ "reason": "reminders paused" }));
+            }
+            if !self.notifications_enabled().await.unwrap_or(true) {
+                return JobOutcome::Skipped(json!({ "reason": "notifications disabled" }));
+            }
         }
         match job_type {
+            // Task 12: the daily brief is an on-demand read; legacy scheduled
+            // daily_brief rows are skipped, never executed.
             JobType::DailyBrief => {
-                let today = &now[..10];
-                let exam_id = self.active_exam_id().await.unwrap_or(None);
-                let builder = BriefBuilder::new(
-                    self.pool.clone(),
-                    Analytics::new(self.pool.clone()),
-                    MemoryRepository::new(self.pool.clone()),
-                );
-                let provider = Planner::build_provider_from(&self.pool)
-                    .await
-                    .ok()
-                    .flatten();
-                match builder
-                    .build(exam_id.as_deref(), today, provider.as_ref())
-                    .await
-                {
-                    Ok(brief) => {
-                        let payload = brief_payload(&brief);
-                        // The brief result is stored in last_result; pushing a
-                        // UI event needs an AppHandle, which M4 deliberately
-                        // avoids holding in Scheduler (see plan: event push is
-                        // deferred to M5 via the command layer).
-                        JobOutcome::Done(payload)
-                    }
-                    Err(_) => JobOutcome::Retry(json!({ "error": "brief build failed" })),
-                }
+                JobOutcome::Skipped(json!({ "note": "daily brief is on-demand" }))
             }
             JobType::TaskReminder => {
                 let today = &now[..10];
@@ -356,46 +350,9 @@ impl Scheduler {
                     JobOutcome::Done(json!({ "overdue_count": 0, "note": "none overdue" }))
                 }
             }
+            // Task 12: weekly reports are removed; legacy rows are skipped.
             JobType::WeeklyReport => {
-                let today = &now[..10];
-                let exam_id: Option<String> = self.active_exam_id().await.unwrap_or(None);
-                let Some(exam_id) = exam_id else {
-                    return JobOutcome::Skipped(json!({ "reason": "no exam" }));
-                };
-                let analytics = Analytics::new(self.pool.clone());
-                let monday = crate::brief::monday_of(today);
-                let week = analytics
-                    .week_stats(&exam_id, &monday)
-                    .await
-                    .unwrap_or_default();
-                let weak = analytics
-                    .weak_areas(&exam_id, 0.6, 5)
-                    .await
-                    .unwrap_or_default();
-                let weak_names: Vec<String> = weak
-                    .iter()
-                    .filter_map(|area| area.knowledge_point_name.clone())
-                    .collect();
-                let summary = format!(
-                    "本周完成率 {:.0}%（{}/{} 项），已记录 {} 分钟。薄弱点：{}。",
-                    week.completion_rate * 100.0,
-                    week.completed,
-                    week.planned,
-                    week.actual_duration_min,
-                    if weak_names.is_empty() {
-                        "无".to_owned()
-                    } else {
-                        weak_names.join("、")
-                    },
-                );
-                JobOutcome::Done(json!({
-                    "monday": monday,
-                    "summary": summary,
-                    "planned": week.planned,
-                    "completed": week.completed,
-                    "duration_min": week.actual_duration_min,
-                    "weak_areas": weak,
-                }))
+                JobOutcome::Skipped(json!({ "note": "weekly report removed" }))
             }
             JobType::RetryFailed | JobType::CleanupFailed => {
                 let _ = now;
@@ -404,7 +361,7 @@ impl Scheduler {
         }
     }
 
-    /// The exam the brief targets: the persisted `agent_active_exam_id`, or the
+    /// The exam reminders target: the persisted `agent_active_exam_id`, or the
     /// most recently active exam as a fallback.
     async fn active_exam_id(&self) -> Result<Option<String>, AgentError> {
         let configured: Option<String> =
@@ -423,38 +380,7 @@ impl Scheduler {
         Ok(latest)
     }
 
-    /// On-demand brief for the hidden debug page. Resolves the exam (explicit
-    /// id or active fallback), builds the brief with or without an LLM
-    /// explanation, and returns it without touching the job table.
-    pub(crate) async fn brief_preview(
-        &self,
-        exam_id: Option<&str>,
-        today: &str,
-    ) -> Result<Brief, AgentError> {
-        let exam_id = match exam_id.map(str::trim).filter(|value| !value.is_empty()) {
-            Some(id) => Some(id.to_owned()),
-            None => self.active_exam_id().await?,
-        };
-        let builder = BriefBuilder::new(
-            self.pool.clone(),
-            Analytics::new(self.pool.clone()),
-            MemoryRepository::new(self.pool.clone()),
-        );
-        let provider = Planner::build_provider_from(&self.pool)
-            .await
-            .ok()
-            .flatten();
-        builder
-            .build(exam_id.as_deref(), today, provider.as_ref())
-            .await
-    }
-
-    async fn record_outcome(
-        &self,
-        id: &str,
-        now: &str,
-        outcome: JobOutcome,
-    ) -> Result<(), AgentError> {
+    async fn record_outcome(&self, id: &str, outcome: JobOutcome) -> Result<(), AgentError> {
         match outcome {
             JobOutcome::Done(payload) => {
                 sqlx::query(
@@ -462,19 +388,6 @@ impl Scheduler {
                      retry_at = NULL WHERE id = ?",
                 )
                 .bind(payload.to_string())
-                .bind(id)
-                .execute(&self.pool)
-                .await
-                .map_err(map_sqlx)?;
-            }
-            JobOutcome::Retry(payload) => {
-                sqlx::query(
-                    "UPDATE agent_jobs SET status = 'failed', last_result = ?, runs = runs + 1, \
-                     retry_at = datetime(?, '+' || ? || ' minutes') WHERE id = ?",
-                )
-                .bind(payload.to_string())
-                .bind(now)
-                .bind(RETRY_AFTER_MINUTES)
                 .bind(id)
                 .execute(&self.pool)
                 .await
@@ -583,24 +496,24 @@ mod tests {
         let scheduler = scheduler().await;
         let first = scheduler
             .schedule(
-                JobType::DailyBrief,
-                "daily_brief:2026-07-18",
-                "2026-07-18 08:00:00",
+                JobType::TaskReminder,
+                "task_reminder:2026-07-18",
+                "2026-07-18 19:00:00",
             )
             .await
             .unwrap();
         assert!(first.is_some());
         let duplicate = scheduler
             .schedule(
-                JobType::DailyBrief,
-                "daily_brief:2026-07-18",
-                "2026-07-18 08:00:00",
+                JobType::TaskReminder,
+                "task_reminder:2026-07-18",
+                "2026-07-18 19:00:00",
             )
             .await
             .unwrap();
         assert!(duplicate.is_none());
         let rows: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM agent_jobs WHERE dedup_key='daily_brief:2026-07-18'",
+            "SELECT COUNT(*) FROM agent_jobs WHERE dedup_key='task_reminder:2026-07-18'",
         )
         .fetch_one(&scheduler.pool)
         .await
@@ -621,8 +534,8 @@ mod tests {
             .unwrap();
         scheduler
             .schedule(
-                JobType::DailyBrief,
-                "daily_brief:2026-07-18",
+                JobType::TaskReminder,
+                "task_reminder:2026-07-18",
                 "2026-07-18 08:00:00",
             )
             .await
@@ -652,7 +565,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn paused_reminders_are_skipped_but_other_jobs_run() {
+    async fn paused_and_deprecated_jobs_are_skipped() {
         let scheduler = scheduler().await;
         scheduler.set_reminders_paused(true).await.unwrap();
         scheduler
@@ -669,7 +582,8 @@ mod tests {
             .unwrap();
 
         let ran = scheduler.tick("2026-07-18 10:00:00").await.unwrap();
-        // reminder:1 + daily_brief + the overdue_check created by ensure_today_jobs.
+        // reminder:1 (paused) + daily_brief (deprecated, on-demand) + the
+        // overdue_check created by ensure_today_jobs (paused).
         assert_eq!(ran, 3);
 
         let reminder_result: String =
@@ -678,21 +592,29 @@ mod tests {
                 .await
                 .unwrap();
         assert!(reminder_result.contains("reminders paused"));
+
+        // Deprecated types are never executed, even when not paused.
+        let brief_result: String =
+            sqlx::query_scalar("SELECT last_result FROM agent_jobs WHERE job_type='daily_brief'")
+                .fetch_one(&scheduler.pool)
+                .await
+                .unwrap();
+        assert!(brief_result.contains("on-demand"));
     }
 
     #[tokio::test]
     async fn bootstrap_creates_only_todays_missing_jobs() {
         let scheduler = scheduler().await;
         let created = scheduler.bootstrap("2026-07-18 07:30:00").await.unwrap();
-        assert_eq!(created, 3); // daily brief + overdue check + task reminder
+        assert_eq!(created, 2); // overdue check + task reminder
 
         // Second bootstrap (e.g. another restart the same day) creates nothing.
         let again = scheduler.bootstrap("2026-07-18 07:45:00").await.unwrap();
         assert_eq!(again, 0);
 
-        // A different day creates the new day's trio.
+        // A different day creates the new day's pair.
         let tomorrow = scheduler.bootstrap("2026-07-19 07:00:00").await.unwrap();
-        assert_eq!(tomorrow, 3);
+        assert_eq!(tomorrow, 2);
     }
 
     async fn seed_exam_with_plans(pool: &sqlx::SqlitePool) {
@@ -730,8 +652,8 @@ mod tests {
             .unwrap();
 
         let ran = scheduler.tick("2026-07-18 20:00:00").await.unwrap();
-        // reminder + daily_brief + overdue_check (all three today jobs run).
-        assert_eq!(ran, 3);
+        // reminder + overdue_check (the two today jobs run; daily_brief is gone).
+        assert_eq!(ran, 2);
 
         // The overdue check also fires for rp-old; collect both notifications.
         let mut titles = Vec::new();
@@ -820,7 +742,7 @@ mod tests {
     #[tokio::test]
     async fn reminder_time_setting_controls_the_daily_schedule() {
         let scheduler = scheduler().await;
-        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_reminder_time','21:30')")
+        sqlx::query("INSERT INTO settings(key,value) VALUES('reminder_time','21:30')")
             .execute(&scheduler.pool)
             .await
             .unwrap();
@@ -835,14 +757,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn weekly_report_produces_a_summary_payload() {
+    async fn deprecated_weekly_and_brief_jobs_are_skipped_without_side_effects() {
         let pool = scheduler_pool().await;
         seed_exam_with_plans(&pool).await;
         sqlx::query("INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-r')")
             .execute(&pool)
             .await
             .unwrap();
-        let (scheduler, _notifications) = test_scheduler(pool);
+        let (scheduler, mut notifications) = test_scheduler(pool);
         scheduler
             .schedule(
                 JobType::WeeklyReport,
@@ -852,17 +774,55 @@ mod tests {
             .await
             .unwrap();
 
-        let ran = scheduler.tick("2026-07-18 09:00:00").await.unwrap();
-        // weekly + daily_brief + overdue_check (task_reminder is 19:00, not due).
-        assert_eq!(ran, 3);
+        let ran = scheduler.tick("2026-07-18 08:30:00").await.unwrap();
+        // weekly (deprecated, skipped) runs; overdue_check is at 09:00 and the
+        // task reminder at 19:00 are not due yet.
+        assert_eq!(ran, 1);
 
         let result: String =
             sqlx::query_scalar("SELECT last_result FROM agent_jobs WHERE job_type='weekly_report'")
                 .fetch_one(&scheduler.pool)
                 .await
                 .unwrap();
-        assert!(result.contains("本周完成率"));
-        assert!(result.contains("monday"));
+        assert!(result.contains("removed"));
+        // No notification is produced by a deprecated job.
+        assert!(notifications.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn reminders_are_silent_when_notifications_are_disabled() {
+        let pool = scheduler_pool().await;
+        seed_exam_with_plans(&pool).await;
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-r')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO settings(key,value) VALUES('notification_enabled','false')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (scheduler, mut notifications) = test_scheduler(pool.clone());
+        scheduler
+            .schedule(
+                JobType::TaskReminder,
+                "task_reminder:2026-07-18",
+                "2026-07-18 19:00:00",
+            )
+            .await
+            .unwrap();
+
+        let ran = scheduler.tick("2026-07-18 20:00:00").await.unwrap();
+        // The task reminder runs but is skipped (notifications disabled);
+        // ensure_today_jobs also created the 09:00 overdue_check, which is
+        // due too, so two jobs ran in total.
+        assert_eq!(ran, 2);
+        let result: String =
+            sqlx::query_scalar("SELECT last_result FROM agent_jobs WHERE job_type='task_reminder'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(result.contains("notifications disabled"));
+        assert!(notifications.try_recv().is_err());
     }
 
     #[tokio::test]

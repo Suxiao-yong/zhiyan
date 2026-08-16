@@ -41,3 +41,10 @@ coverage/
 
 # Reasonix desktop client local session metadata
 .reasonix/
+
+# Playwright local console logs (agent-browser / MCP helpers)
+.playwright-cli/
+.playwright-mcp/
+
+# Ruff lint cache
+.ruff_cache/

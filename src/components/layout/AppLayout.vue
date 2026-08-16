@@ -2,12 +2,9 @@
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import {
-  Odometer,
-  Document,
   EditPen,
   Calendar,
-  TrendCharts,
-  DataLine,
+  Document,
   Setting,
   Monitor,
   Fold,
@@ -27,14 +24,14 @@ interface MenuItem {
   icon: any
 }
 
+// Task 2: the ordinary navigation is Agent → Plan → Records → Setup → Settings.
+// Dashboard / AI 分析 / 数据可视化 are no longer menu entries (their URLs
+// redirect to /agent for the migration period).
 const menuItems: MenuItem[] = [
-  { index: '/dashboard', label: '仪表盘', icon: Odometer },
-  { index: '/exam-config', label: '考试配置', icon: Document },
-  { index: '/study-record', label: '学习记录', icon: EditPen },
-  { index: '/study-plan', label: '学习计划', icon: Calendar },
-  { index: '/analysis', label: 'AI 分析', icon: TrendCharts },
-  { index: '/visualization', label: '数据可视化', icon: DataLine },
   { index: '/agent', label: 'Agent', icon: Monitor },
+  { index: '/study-plan', label: '学习计划', icon: Calendar },
+  { index: '/study-record', label: '学习记录', icon: EditPen },
+  { index: '/exam-config', label: '考试配置', icon: Document },
   { index: '/settings', label: '设置', icon: Setting },
 ]
 

@@ -7,48 +7,12 @@ import 'element-plus/dist/index.css'
 import 'element-plus/theme-chalk/dark/css-vars.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 
-// ECharts 按需引入（覆盖后续各阶段所需图表类型与组件）
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { BarChart, LineChart, PieChart, GaugeChart, RadarChart, HeatmapChart } from 'echarts/charts'
-import {
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-  TitleComponent,
-  DataZoomComponent,
-  VisualMapComponent,
-  CalendarComponent,
-  MarkLineComponent,
-  MarkPointComponent,
-} from 'echarts/components'
-import VueECharts from 'vue-echarts'
-
-// ECharts 共享主题（zhiyan-light / zhiyan-dark），必须在图表渲染前注册
-import './services/echarts-theme'
+// Task 16: ECharts 不再在应用启动时全局注册。图表组件各自通过
+// src/services/echarts-setup 惰性注册,保证 Today/Agent 首屏不加载 ECharts。
 
 import App from './App.vue'
 import router from './router'
 import './assets/main.css'
-
-use([
-  CanvasRenderer,
-  BarChart,
-  LineChart,
-  PieChart,
-  GaugeChart,
-  RadarChart,
-  HeatmapChart,
-  GridComponent,
-  TooltipComponent,
-  LegendComponent,
-  TitleComponent,
-  DataZoomComponent,
-  VisualMapComponent,
-  CalendarComponent,
-  MarkLineComponent,
-  MarkPointComponent,
-])
 
 const app = createApp(App)
 
@@ -64,8 +28,5 @@ app.use(ElementPlus)
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component as never)
 }
-
-// ECharts 全局组件 <v-chart>
-app.component('VChart', VueECharts)
 
 app.mount('#app')

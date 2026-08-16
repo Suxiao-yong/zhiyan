@@ -51,7 +51,25 @@ Use this order so neither SQLite pool retains the main database or WAL file duri
 
 Do not reopen either pool between steps 2 and 5.
 
-## Agent tool ownership cutover
+## 2026-08-04 Cloud LLM �򻯺������״̬��Task 11�C18��
+
+- **Tool ownership ������**��`ToolOwnership` ֻʣ `RustOwned`������ʱ���ٶ�ȡ
+  `agent_tool_owner.*` settings��Task 13�����·� "Agent tool ownership cutover" С��Ϊ
+  M6 ʱ����ʷ���� SQL ��������ʱ inert����������Ҫ��Ҳ���ܣ��л� ownership��
+- **���ڼ�������**��`agent_memory_*` ������ UI ��ɾ����`agent_memories` ��������
+  �´��벻�ö�ȡ��Task 11����
+- **Scheduler ����**��ֻ���� `task_reminder`/`overdue_check`��`daily_brief` �� deprecated
+  job ���Ͳ��Զ����ȡ�dispatch һ�� skip��`agent_job_schedule` ����ܾ��� reminder ���ͣ�Task 12����
+- **Brief Ϊ�����豾�ض�ȡ**��`agent_brief_preview` ֱ��ʹ�� BriefBuilder + Analytics��
+  �������� Scheduler state��`agent-daily-brief` �¼��������Ƴ���Task 12����
+- **Debug ·��**��`/agent-debug` ���ڿ�������ע�ᣨ`import.meta.env.DEV`������������
+  ���ɼ���Task 13����
+- **Ǩ�� 1�C10 δ��**������/�ع�����ѭ�·����򣻾ɱ���`ai_analyses`��`agent_memories`��
+  `agent_jobs` �ȣ��� drop���ɻָ������ `docs/agent/cloud-llm-cutover-migration.md`��
+
+## Agent tool ownership cutover��M6 ʱ�����ѹ�ʱ��
+
+> 2026-08-04 ������Ȩ��Ϊ Rust-owned������ SQL ������Ҫִ�С���������ʷ���ݿ�ع��ο���
 
 Cut over only after parity and packaged checks pass.
 
@@ -108,7 +126,7 @@ The following checks remain manual pending and are not claimed as passed: packag
 - Adds **no migration**. Model usage audit lives in the existing `agent_events` table as `model.invoked` events (payload: `local`, `prompt_tokens`, `completion_tokens`, `tools_offered`, `data_permissions`); no prompt text is stored. A dedicated `agent_context_audit` table is deferred to a later M3 part.
 - The `Planner` is constructed from the same Rust pool as `AgentRuntime` and managed as `tauri::State`; it reads `llm_provider`/`llm_base_url`/`llm_model`/`llm_temperature` from settings and the API key from the OS keyring via the re-exported `credentials::api_key_for`. When no key is configured, the provider is Ollama, or the provider fails terminally, the Planner returns a deterministic local-mode turn that performs no successful model call and is marked `local` (never claims model output).
 - Provider errors (`provider_unavailable`, `provider_request_failed`, `budget_exhausted`, `max_iterations`) are redacted at the command boundary; the message never contains the base URL, API key, request body, or response body.
-- Rollback: remove the `agent_run_planner` command registration and the `Planner` state from `lib.rs`. The existing application is unchanged — production Vue flows, tool ownership, and the TypeScript write path are untouched. No database rollback is needed.
+- Rollback: remove the `agent_run_planner` command registration and the `Planner` state from `lib.rs`. The existing application is unchanged  1�7 production Vue flows, tool ownership, and the TypeScript write path are untouched. No database rollback is needed.
 
 ## M3 Part 2 (streaming)
 
@@ -117,7 +135,7 @@ The following checks remain manual pending and are not claimed as passed: packag
 
 ## M3 Part 3 (context inspector + structured memory)
 
-- Migration **v6** adds the additive `agent_context_audit` table (per model call: `call_seq`, `purpose`, `local`, `prompt_tokens`, `completion_tokens`, `tools_offered_json`, `categories_json`, `record_ids_json`, `field_sets_json`, `created_at`). It replaces the Part 1/2 `model.invoked` `agent_events` rows: the Planner records one audit row per provider call and one `local=1` row per fallback turn. The audit stores data categories, record IDs, and field names only — **never raw content** (no plan tasks, record text, or wrong-question text) per the privacy rule.
+- Migration **v6** adds the additive `agent_context_audit` table (per model call: `call_seq`, `purpose`, `local`, `prompt_tokens`, `completion_tokens`, `tools_offered_json`, `categories_json`, `record_ids_json`, `field_sets_json`, `created_at`). It replaces the Part 1/2 `model.invoked` `agent_events` rows: the Planner records one audit row per provider call and one `local=1` row per fallback turn. The audit stores data categories, record IDs, and field names only  1�7 **never raw content** (no plan tasks, record text, or wrong-question text) per the privacy rule.
 - Migration **v7** adds the additive `agent_memories` table (`exam_id`, `memory_type`, `content`, `source`, `confidence`, `status`, timestamps, `last_used_at`) with CHECK constraints on the seven spec §11 types, the three sources, and the candidate/confirmed/inactive status. `user_statement` memories auto-confirm; `behavior_inferred` and `model_candidate` memories start as `candidate` and require user confirmation. `MemoryRepository::relevant` offers confirmed memories to a future context builder, exam-scoped first and ordered by last use.
 - New commands: `agent_context_audit_list`, `agent_memory_list`, `agent_memory_create`, `agent_memory_confirm`, `agent_memory_update`, `agent_memory_deactivate`, `agent_memory_delete`; `ContextAudit` and `MemoryRepository` are managed as Tauri state. `/agent-debug` renders the Context Inspector (audit rows) and the Memory management section.
 - Rollback: remove the v6/v7 commands and the two managed states from `lib.rs`; the tables stay in user databases harmlessly (add-on, ignored by older binaries) or can be dropped on disposable test databases. Disable the `/agent-debug` memory/inspector sections for the rollback UI.
@@ -125,9 +143,9 @@ The following checks remain manual pending and are not claimed as passed: packag
 ## M4 (tray lifecycle + background jobs + daily brief + notifications)
 
 - **No business-table migration beyond v8** (`agent_jobs`, additive). `agent_jobs` carries the job type, a globally unique `dedup_key`, a scheduled time, and a `scheduled -> running -> completed | failed (retry_at)` machine; reminder jobs skip while `agent_reminders_paused = '1'`.
-- Tray: closing the main window hides it (`EXITING` flag set by 彻底退出 allows real close); the tray menu toggles reminders via `settings.agent_reminders_paused`, and 彻底退出 calls `app.exit(0)` after stopping new work.
+- Tray: closing the main window hides it (`EXITING` flag set by 彻底逢�凄1�7 allows real close); the tray menu toggles reminders via `settings.agent_reminders_paused`, and 彻底逢�凄1�7 calls `app.exit(0)` after stopping new work.
 - Scheduler: a 60s tick loop spawned in `setup` calls `bootstrap()`/`ensure_today_jobs()` so daily jobs (brief 08:00, overdue 09:00, reminder at `agent_reminder_time`, default 19:00) self-heal after restart, sleep/wake, and day rollover. Dedup keys are date-scoped; the same key never double-schedules.
-- Notifications travel over a tokio channel (`notify.rs`): `Scheduler` never owns a tauri `AppHandle` — a managed state holding one produced a broken test exe on this toolchain (0xc0000139), so the consumer task in `setup` owns it. Notification bodies carry counts and dates only, never plan/record/wrong-question text.
+- Notifications travel over a tokio channel (`notify.rs`): `Scheduler` never owns a tauri `AppHandle`  1�7 a managed state holding one produced a broken test exe on this toolchain (0xc0000139), so the consumer task in `setup` owns it. Notification bodies carry counts and dates only, never plan/record/wrong-question text.
 - Daily brief (`brief.rs`) is a local skeleton (today plans, overdue count, week completion, due wrong questions, weak areas, confirmed-memory hints) with an optional tool-free LLM explanation; provider failure degrades to local. The `daily_brief` job stores the brief in `last_result`; push-style events are deferred to M5.
 - Cost accounting: `PlannerTurn.estimated_cost_usd` uses `agent_cost_per_1k_prompt_tokens` / `agent_cost_per_1k_completion_tokens` (defaults 0.002 / 0.006 USD per 1k).
 - Rollback: disable the tick task spawn, remove `agent_job_*`/`agent_brief_preview` commands, and skip `tray::build_tray` + the `on_window_event` close interceptor. `agent_jobs` is additive; leave it or drop on disposable test databases.
@@ -136,16 +154,22 @@ The following checks remain manual pending and are not claimed as passed: packag
 
 - Migration **v9** adds `agent_messages` (additive): session-scoped conversation rows with role CHECK (`user|assistant|system`), an optional run reference, token usage, and model. The planner appends one user row (goal) and one assistant row (final text) per turn inside the run; local turns record zero tokens. Conversation survives restarts.
 - New read-only commands: `agent_session_list`, `agent_session_messages`, `agent_approval_list` (pending first, then decided). `AgentRuntime` exposes a `repository()` read accessor.
-- `/agent` (full-screen route) hosts the three-column shell: `AgentSidebar` (new session, recent sessions, workbench deep links), `ConversationPane` (message stream + composer; `sendMessage` = create session if needed → create/start run → planner turn → reload persisted messages), `DailyBrief` card (folds into an artifact after acknowledge; refreshes from the `agent-daily-brief` push), `ApprovalCard` (approve/reject), `AgentStatus`, and `WorkbenchHost` embedding the existing `PlanCheckinBoard`.
-- Brief push happens **from the command layer**: `agent_brief_preview` receives the injected `app: tauri::AppHandle` and emits `agent-daily-brief` there. Managed states never hold an owned `AppHandle` (a held one produced a broken test exe on this toolchain — see M4 note).
+- `/agent` (full-screen route) hosts the three-column shell: `AgentSidebar` (new session, recent sessions, workbench deep links), `ConversationPane` (message stream + composer; `sendMessage` = create session if needed ↄ1�7 create/start run ↄ1�7 planner turn ↄ1�7 reload persisted messages), `DailyBrief` card (folds into an artifact after acknowledge; refreshes from the `agent-daily-brief` push), `ApprovalCard` (approve/reject), `AgentStatus`, and `WorkbenchHost` embedding the existing `PlanCheckinBoard`.
+- Brief push happens **from the command layer**: `agent_brief_preview` receives the injected `app: tauri::AppHandle` and emits `agent-daily-brief` there. Managed states never hold an owned `AppHandle` (a held one produced a broken test exe on this toolchain  1�7 see M4 note).
 - `weekly_report` job handler produces a text summary (week completion + weak areas) stored in `last_result`.
 - Rollback: remove the `/agent` route/components, the three read commands, and the planner message writes. `agent_messages` is additive; leave it or drop on disposable test databases.
 
 ## M6 (parity migration + production)
 
-- **No new migration** (v9 is the latest; all M6 schema work reuses v5 settings). New tool ownership defaults land in the v5 settings seed: `exam.get_active`, `plan.get_range`, `record.get_history`, `record.create_free`, `wrong_question.create`, `wrong_question.mark_mastered`, `plan.generate` are all `rust-owned`; unconfigured tools stay fail-closed (`Unavailable`).
+- **No new migration** (v10 is the current latest; all M6 schema work reuses v5 settings). This release adds **no migration at all**: the unpublished v11 (plan preview/apply ownership seeds) was removed after confirming no distributed database ever applied it, so v1–v10 SQL is unchanged and v10 stays the latest. New tool ownership defaults land in the v5 settings seed: `exam.get_active`, `plan.get_range`, `record.get_history`, `record.create_free`, `wrong_question.create`, `wrong_question.mark_mastered`, `plan.generate` are all `rust-owned`; tool ownership is decided by the static Rust registry, never by these inert settings rows.
 - Tool set (M6): R0 reads `exam.get_active` (active exam + subjects), `plan.get_range` (inclusive date interval, both bounds `NaiveDate`-parsed), `record.get_history` (recent records with subject/KP names). R1 writes `record.create_free` (subject-in-exam + KP-in-subject checks), `wrong_question.create` (record/subject/KP ownership checks), `wrong_question.mark_mastered` (idempotent update). R2 `plan.generate` (approval-gated by `agent_r2_auto_execute`, per-week idempotent, weighted floor+largest-fraction slotting across seven in-week days). All SQL is bound-parameter; replay of a non-checkin idempotency key returns `idempotency_conflict` and never double-writes.
 - Workbench registry: `WorkbenchHost` mounts five reused page components (check-in, study plan, records/wrong questions, AI analysis, visualization); `AgentHome` switches them natively; `StudyRecord` accepts `initial-tab` for embedding.
 - `agent_os_enabled` (default on): `/` resolves to `/agent`; setting it to `0` routes `/` to `/dashboard` and disables the legacy TS LLM analysis catch-up (`runPendingAnalyses`) in `App.vue`. Router tests cover default/on/off/not-onboarded.
-- Hardening: forward-only migration test (no DROP/RENAME/TRUNCATE/DELETE in any migration, v1��v9), `MANUAL_TEST.md` M6 packaged checklist (upgrade/rollback drill, 24h soak, workbench switching, tool list).
+- Hardening: forward-only migration test (no DROP/RENAME/TRUNCATE/DELETE in any migration, v1–v10), `MANUAL_TEST.md` M6 packaged checklist (upgrade/rollback drill, 24h soak, workbench switching, tool list).
 - Rollback: remove the new tool descriptors/executor branches and the v5 seed rows for the seven new tools (settings seed uses `INSERT OR IGNORE`, so removing the lines stops future seeding; existing rows are inert unless a tool is dispatched). Remove the workbench switcher and the `agent_os_enabled` routing logic; keep the setting key harmless. No table dropped.
+
+## Migration 版本与历史数据承诺（Cloud LLM 简化后）
+
+- 版本策略：v1–v10 的 SQL 保持原样，本次发布不新增 migration；v11（未发布的 plan preview/apply ownership 种子）已确认从未被任何可分发数据库应用，故从源码移除。若将来任何已发布数据库已应用 v11，则 v11 不可改写、版本继续递增。
+- 历史表保留且可读：`ai_analyses`、`agent_memories`、`agent_jobs` 的表结构与行数据保持兼容，核心 Agent 不再写入这些旧 API；scheduler 允许继续写入其内部 reminder job（`agent_jobs`）。
+- 导出承诺：JSON 导出/导入白名单只承诺现有 `ai_analyses`；完整数据库保真只由 SQLite backup/restore 承诺。不要笼统认为“所有历史表都可 JSON 导出”。

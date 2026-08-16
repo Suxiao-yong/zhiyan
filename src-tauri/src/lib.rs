@@ -42,7 +42,6 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
@@ -58,7 +57,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             credentials::store_api_key,
-            credentials::load_api_key,
+            credentials::has_api_key,
             credentials::delete_api_key,
             agent::commands::agent_health,
             agent::commands::agent_prepare_database_restore,
@@ -69,17 +68,13 @@ pub fn run() {
             agent::commands::agent_list_tools,
             agent::commands::agent_execute_tool,
             agent::commands::agent_decide_approval,
+            agent::commands::agent_resolve_approval,
             agent::commands::agent_undo_tool,
             agent::commands::agent_run_planner,
+            agent::commands::agent_test_provider,
+            agent::commands::agent_cloud_consent_status,
+            agent::commands::agent_confirm_cloud_consent,
             agent::commands::agent_context_audit_list,
-            agent::commands::agent_memory_list,
-            agent::commands::agent_memory_create,
-            agent::commands::agent_memory_confirm,
-            agent::commands::agent_memory_update,
-            agent::commands::agent_memory_deactivate,
-            agent::commands::agent_memory_delete,
-            agent::commands::agent_job_list,
-            agent::commands::agent_job_schedule,
             agent::commands::agent_brief_preview,
             agent::commands::agent_session_list,
             agent::commands::agent_session_messages,
@@ -96,9 +91,11 @@ pub fn run() {
                 AgentRepository::new(pool.clone()),
                 AgentExecutor::new(pool.clone()),
             );
-            let memory = agent::memory::MemoryRepository::new(pool.clone());
-            let planner = Planner::new(pool.clone(), runtime.clone(), memory.clone());
+            let planner = Planner::new(pool.clone(), runtime.clone());
             let context_audit = agent::context::ContextAudit::new(pool.clone());
+            // The raw pool is managed for the on-demand brief command (Task 12);
+            // it no longer goes through the Scheduler state.
+            let brief_pool = pool.clone();
             let scheduler =
                 scheduler::Scheduler::new(pool, notify::spawn_notifier(app.handle().clone()));
             tauri::async_runtime::block_on(runtime.recover_interrupted())
@@ -106,7 +103,7 @@ pub fn run() {
             app.manage(runtime);
             app.manage(planner);
             app.manage(context_audit);
-            app.manage(memory);
+            app.manage(brief_pool);
             app.manage(scheduler.clone());
             tray::build_tray(app.handle())?;
             // M4: background scheduler — catch up on restart, then tick every

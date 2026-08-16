@@ -8,7 +8,10 @@ const routes = [
     component: () => import('@/pages/Welcome.vue'),
     meta: { layout: 'full' },
   },
-  { path: '/dashboard', name: 'dashboard', component: () => import('@/pages/Dashboard.vue') },
+  // Task 2: legacy entry points redirect to the Agent home so old URLs and
+  // bookmarks keep working during the migration; the pages stay for tests and
+  // rollback, but are no longer user navigation.
+  { path: '/dashboard', redirect: '/agent' },
   { path: '/exam-config', name: 'exam-config', component: () => import('@/pages/ExamConfig.vue') },
   {
     path: '/study-record',
@@ -26,18 +29,22 @@ const routes = [
     name: 'study-plan-view',
     component: () => import('@/pages/StudyPlan.vue'),
   },
-  { path: '/analysis', name: 'analysis', component: () => import('@/pages/Analysis.vue') },
-  {
-    path: '/visualization',
-    name: 'visualization',
-    component: () => import('@/pages/Visualization.vue'),
-  },
+  { path: '/analysis', redirect: '/agent' },
+  { path: '/visualization', redirect: '/agent' },
   { path: '/settings', name: 'settings', component: () => import('@/pages/Settings.vue') },
-  {
-    path: '/agent-debug',
-    name: 'agent-debug',
-    component: () => import('@/pages/AgentDebug.vue'),
-  },
+  // Task 13: the Agent debug page is registered in development builds only;
+  // production bundles never contain it and the catch-all redirect absorbs
+  // any stale /agent-debug bookmarks.
+  ...(import.meta.env.DEV
+    ? [
+        {
+          path: '/agent-debug',
+          name: 'agent-debug',
+          component: () => import('@/pages/AgentDebug.vue'),
+          meta: { debugOnly: true },
+        },
+      ]
+    : []),
   {
     path: '/agent',
     name: 'agent',
@@ -45,7 +52,7 @@ const routes = [
     meta: { layout: 'full' },
   },
   { path: '/', name: 'home', component: { render: () => null } },
-  { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
+  { path: '/:pathMatch(.*)*', redirect: '/agent' },
 ]
 
 const router = createRouter({
@@ -53,23 +60,10 @@ const router = createRouter({
   routes,
 })
 
-// M6 Task 6: the home route is the Agent OS by default (agent_os_enabled
-// unset or '1'); flipping it to '0' restores the legacy dashboard first
-// screen. Cached per process to keep navigation cheap.
-let agentOsResolved = false
-let agentOsEnabled = true
-
-async function resolveAgentOsFlag(): Promise<boolean> {
-  if (agentOsResolved) return agentOsEnabled
-  try {
-    const value = await getSetting('agent_os_enabled')
-    agentOsEnabled = value !== '0'
-  } catch {
-    agentOsEnabled = true
-  }
-  agentOsResolved = true
-  return agentOsEnabled
-}
+// M6 Task 6 note: the `agent_os_enabled` settings key is kept for data
+// compatibility and audit, but the production router no longer consults it —
+// `/` always resolves to `/agent` (Task 2). Emergency rollback goes through a
+// version downgrade, not a second home screen in the user path.
 
 // 引导完成态缓存：避免每次导航都查库
 let resolved = false
@@ -99,8 +93,8 @@ router.beforeEach(async (to) => {
   if (to.path === '/welcome') return true
   if (await checkOnboarding()) {
     if (to.path === '/') {
-      // M6 Task 6: home is the Agent OS unless the fallback flag is off.
-      return (await resolveAgentOsFlag()) ? { path: '/agent' } : { path: '/dashboard' }
+      // Task 2: the Agent home is the single product entry.
+      return { path: '/agent' }
     }
     return true
   }

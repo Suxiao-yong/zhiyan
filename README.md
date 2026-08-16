@@ -1,360 +1,373 @@
-<p align="center">
-  <img src="docs/screenshots/dashboard-dark.png" alt="智研 Dashboard" width="600" />
-</p>
+# 智研（ZhiYan）
 
-<h1 align="center">智研（ZhiYan）</h1>
-
-<p align="center">
-  <strong>AI 驱动的个性化学习规划桌面应用</strong><br />
-  半 Agent 模式 —— AI 提建议，人做决策
-</p>
+> AI 驱动的个性化学习规划桌面应用 —— **纯 Agent 架构**：Agent 是唯一的 AI 入口，所有写操作经审批闭环，你始终掌握最终决策权。
 
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" /></a>
+  <a href="https://github.com/Suxiao-yong/zhiyan/releases"><img src="https://img.shields.io/github/v/release/Suxiao-yong/zhiyan.svg?label=Release" alt="Release" /></a>
   <a href="https://github.com/Suxiao-yong/zhiyan/actions"><img src="https://img.shields.io/github/actions/workflow/status/Suxiao-yong/zhiyan/ci.yml?label=CI" alt="CI" /></a>
   <img src="https://img.shields.io/badge/Tauri-2.0-orange" alt="Tauri 2.0" />
   <img src="https://img.shields.io/badge/Vue-3.5-green" alt="Vue 3" />
+  <img src="https://img.shields.io/badge/Rust-1.97-dea584" alt="Rust" />
 </p>
 
 ---
 
-## ✨ 为什么选择智研？
+## 目录
 
-市面上的 AI 学习工具往往让 AI 直接替你做决定——生成一份"完美计划"然后让你照做。**智研的理念不同**：
+- [这是什么](#这是什么)
+- [界面预览](#界面预览)
+- [设计理念：Agent 主权边界](#设计理念agent-主权边界)
+- [架构总览](#架构总览)
+- [Agent 工具协议](#agent-工具协议)
+- [用户功能](#用户功能)
+- [数据与存储](#数据与存储)
+- [隐私与安全](#隐私与安全)
+- [快速开始](#快速开始)
+- [开发与测试](#开发与测试)
+- [项目结构](#项目结构)
+- [FAQ 与已知限制](#faq-与已知限制)
+- [文档索引](#文档索引)
+- [贡献与许可](#贡献与许可)
 
-> **AI 是你的学习顾问，不是你的老板。**
+---
 
-智研采用**半 Agent 模式**：AI 负责分析数据、提出建议、联网研究，但每一步都需要你的确认才会执行。你始终掌握最终决策权。没有配置 LLM？所有核心功能都有本地算法降级，开箱即用。
+## 这是什么
 
-## 📸 界面预览
+智研是一个 Tauri 桌面应用，把"AI 学习助手"做成了一套**可审计、可撤回**的工程系统：
 
-| 仪表盘（暗色） | 仪表盘（亮色） |
-|:---:|:---:|
-| ![仪表盘暗色](docs/screenshots/dashboard-dark.png) | ![仪表盘亮色](docs/screenshots/dashboard-light.png) |
+- **纯 Agent**：计划生成、计划调整、学习记录、错题、复盘——所有 AI 能力都收敛到 Agent 对话，通过 11 个注册工具与你的数据交互
+- **半自主**：Agent 可以自由读取（R0），但**写操作必须经你确认**（R2 设置确认 / R3 审批卡），执行后还可整体撤销
+- **本地优先**：学习数据只存本地 SQLite；LLM API Key 存 OS 凭据管理器；发送给云端的是你确认过的聚合摘要
 
-| 考试配置 | 系统设置 |
-|:---:|:---:|
-| ![考试配置](docs/screenshots/examconfig-dark.png) | ![系统设置](docs/screenshots/settings-light.png) |
+一句话：**AI 是你的学习顾问，不是你的老板。**
 
-| 引导页（暗色） | 引导页（亮色） |
-|:---:|:---:|
-| ![引导暗色](docs/screenshots/welcome-dark.png) | ![引导亮色](docs/screenshots/welcome-light.png) |
+## 界面预览
 
-## 🎯 核心功能
+**Agent 对话工作台（主界面 `/agent`）**——会话侧栏、每日简报、对话中心与右栏工作台：
 
-### 📋 通用化考试配置
+|             主界面（今日打卡工作台）             |
+| :----------------------------------------------: |
+| ![Agent 主界面](docs/screenshots/agent-home.png) |
 
-支持**考研、考公、考证、自定义考试**四种类型。每个考试可配置多个科目，每个科目支持树形知识点结构（章节 → 小节 → 知识点），并为每个知识点设定掌握度评级（1-5 星）。
+|             计划工作台（日历视图）             |              记录工作台（打卡日历）              |
+| :--------------------------------------------: | :----------------------------------------------: |
+| ![计划工作台](docs/screenshots/agent-plan.png) | ![记录工作台](docs/screenshots/agent-record.png) |
 
-### 📅 学习计划 — 四视图 + AI 生成
+以下截图来自早期版本，仅作参考：
 
-- **AI 生成**：配置 LLM 后，AI 规划助手可联网研究考试大纲和备考策略，与你讨论后生成个性化学习计划
-- **本地降级**：未配置 LLM 时，内置算法根据科目权重、知识点掌握度自动分配时间
-- **四种视图**：
-  - 📆 **日历视图** — 月历概览，一眼看全
-  - 📊 **甘特图** — 时间轴展示阶段规划
-  - 📝 **列表视图** — 逐任务管理，支持拖拽排序
-  - 📈 **计划 vs 实际对比** — 可视化执行偏差
-- 甘特图和列表视图均支持**拖拽排序**
+|                   引导·考试配置（暗色）                   |                     系统设置（亮色）                     |
+| :-------------------------------------------------------: | :------------------------------------------------------: |
+| ![考试配置（暗色）](docs/screenshots/examconfig-dark.png) | ![系统设置（亮色）](docs/screenshots/settings-light.png) |
 
-### 📝 学习记录 + 错题联动
+|                    引导页（暗色）                    |                    引导页（亮色）                     |
+| :--------------------------------------------------: | :---------------------------------------------------: |
+| ![引导页（暗色）](docs/screenshots/welcome-dark.png) | ![引导页（亮色）](docs/screenshots/welcome-light.png) |
 
-- **计划任务打卡**：按已经生成的每日计划逐项记录，支持“保存进度”和“完成任务”
-- **多次累计**：同一个计划任务可分多个时段打卡，实际时长自动累计
-- **自由记录**：临时学习和历史补记仍可独立记录，不强制关联计划
-- **错题自动联动**：做题数 > 正确数时自动弹出错题录入区（题目/答案/错因分析）
-- **跨天 04:00 归一化**：凌晨 00:00-03:59 的学习自动归属前一天（考研党的作息）
-- **日历打卡**：日历上用绿点标记有学习记录的天
-- **错题管理**：筛选、标记已掌握、复习计数
+## 设计理念：Agent 主权边界
 
-### 📊 数据可视化 — 6 种图表
+智研的核心不是"AI 有多强"，而是**AI 改变数据的能力边界有多清晰**。每个 Agent 工具在注册时声明五类元数据，运行时强制执行：
 
-| 图表 | 说明 |
-|------|------|
-| 时长趋势折线图 | 每日/每周学习时长变化 |
-| 各科占比饼图 | 时间分配是否合理 |
-| 正确率曲线 | 做题能力变化趋势 |
-| 进度雷达图 | 各科目/知识点掌握度一览 |
-| 知识点热力图 | 哪些知识点是薄弱环节 |
-| 分数预测仪表 | AI 基于历史数据预测考试成绩 |
+| 元数据             | 取值                                                        | 含义                                   |
+| ------------------ | ----------------------------------------------------------- | -------------------------------------- |
+| `risk`             | R0–R4                                                       | 风险分级，决定确认策略                 |
+| `confirmation`     | automatic / summary_or_setting / required / navigation_only | 确认方式                               |
+| `idempotency`      | retry_safe / required_exactly_once / no_automatic_retry     | 重试语义                               |
+| `supports_undo`    | bool                                                        | 是否支持事务级撤销                     |
+| `data_permissions` | 字符串列表                                                  | 访问的数据域（如 `study_plans:write`） |
 
-所有图表支持**时间范围筛选**、**科目筛选**、**导出 PNG**。
+策略落地：
 
-### 🤖 AI 分析 — 半 Agent 模式
+| 级别   | 策略                         | 典型工具                                                                              |
+| ------ | ---------------------------- | ------------------------------------------------------------------------------------- |
+| **R0** | 只读，自动执行               | `plan.get_today`、`record.get_history`、`plan.preview_generate`                       |
+| **R1** | 低风险写，自动 + 可撤销      | （当前未注册）                                                                        |
+| **R2** | 写，需设置确认               | `plan.generate`                                                                       |
+| **R3** | 写，审批卡确认后执行，可撤销 | `plan.apply_preview`、`record.checkin_plan`、`record.create_free`、`wrong_question.*` |
+| **R4** | 仅导航                       | （策略边界，不注册工具）                                                              |
 
-- **每日分析**：总结当天学习情况，指出薄弱环节
-- **每周分析**：对比上周数据，发现趋势变化
-- **阶段分析**：评估整体备考进度，预测分数区间
-- **建议需确认**：AI 提出的每条建议都以卡片形式展示，用户逐条确认/拒绝后才会应用到系统
-- **本地降级**：未配置 LLM 时，降级为基于统计规则的本地分析（标注"本地分析（非 AI）"）
+### 审批闭环（R3 写操作的完整生命周期）
 
-### 🔒 数据导入导出 + 备份恢复
-
-- **JSON 导出**：支持全部/指定考试/日期范围，分批处理 + schema 校验
-- **JSON 导入**：三种冲突处理模式（跳过/覆盖/合并）
-- **数据库备份**：`VACUUM INTO` 一致性快照，输出 `.db` 文件
-- **数据库恢复**：覆盖 + 自动重启
-
-## 🛠 技术栈
-
-| 层 | 技术 | 说明 |
-|----|------|------|
-| 桌面框架 | [Tauri 2.0](https://tauri.app/) | Rust 后端，轻量安全 |
-| 前端框架 | [Vue 3](https://vuejs.org/) + TypeScript | Composition API + `<script setup>` |
-| UI 组件库 | [Element Plus](https://element-plus.org/) | + [Tailwind CSS v4](https://tailwindcss.com/) |
-| 状态管理 | [Pinia](https://pinia.vuejs.org/) | + vue-router |
-| 图表 | [ECharts 5](https://echarts.apache.org/) | via vue-echarts |
-| 数据库 | SQLite | via `@tauri-apps/plugin-sql` |
-| HTTP | `@tauri-apps/plugin-http` | Rust 侧发起，绕前端 CSP |
-| 安全存储 | [keyring](https://crates.io/crates/keyring) | OS 凭据管理器（DPAPI 加密 API Key） |
-| 构建工具 | [Vite 6](https://vite.dev/) | |
-| 测试 | [Vitest](https://vitest.dev/) | 单元测试 |
-
-### 架构概览
-
-```
-┌─────────────────────────────────────────────────────┐
-│  Frontend (Vue 3 + TypeScript)                      │
-│  ┌─────────┐  ┌──────────┐  ┌───────────────────┐  │
-│  │  Pages   │→│  Stores   │→│  Services          │  │
-│  │  (.vue)  │  │  (Pinia)  │  │  (llm/search/db) │  │
-│  └─────────┘  └──────────┘  └────────┬──────────┘  │
-│                                       │ invoke()    │
-├───────────────────────────────────────┼─────────────┤
-│  Backend (Rust)                       │             │
-│  ┌────────────┐  ┌──────────────────┐│             │
-│  │ credentials │  │ tauri-plugin-sql ││             │
-│  │ (keyring)   │  │ (SQLite)         ││             │
-│  └────────────┘  └──────────────────┘│             │
-│  ┌────────────────────────────────────┘             │
-│  │ tauri-plugin-http → LLM API / AnySearch API      │
-│  └──────────────────────────────────────────────────│
-└─────────────────────────────────────────────────────┘
+```text
+Agent 请求写操作
+   │
+   ▼
+executor 校验 schema / 作用域 / 前置条件
+   │
+   ▼
+生成脱敏预览（影响行数、日期范围、前后摘要、冲突）── 审批卡（10 分钟过期）
+   │                                          │
+   ▼                                          ▼
+确认 ──► 重新校验（savepoint 事务）──► 落库 ──► 可撤销（事务补偿）
+   ▲
+拒绝/过期 ──► 零写入，Run 正常继续
 ```
 
-**数据流**：Vue 页面 → Pinia stores → Services 层 → `invoke()` 调 Rust 后端 → SQLite 读写 / keyring 存取 / HTTP 调 LLM
+- **per-approval 守卫**：同一审批重复点击只执行一次
+- **exactly-once 幂等**：写工具以 SHA-256 输入指纹预留执行，并发竞争有界重试，重放返回胜者结果
+- **undo 补偿**：`plan.apply_preview.v1` / `record.checkin_plan.v1` 定向补偿事务，恢复被替换的计划与记录关联；外部已修改时拒绝撤销
 
-## 📋 环境要求
+## 架构总览
 
-### Windows（主要支持平台）
+```text
+┌─────────────────────────────────────────────────────────────┐
+│  Frontend (Vue 3 + TypeScript)                              │
+│  AgentHome（对话/审批卡/简报） + 工作台（打卡/计划/记录）      │
+│  Pages → Stores(Pinia) → Services → invoke()                │
+├───────────────────────────────────┼─────────────────────────┤
+│  Backend (Rust)                   ▼                         │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  Agent 运行时（唯一 AI 入口）                          │  │
+│  │  planner（模型↔工具循环, OpenAI-compatible reqwest）    │  │
+│  │    → executor（事务/幂等/undo）                        │  │
+│  │    → policy（R0–R4）→ tools（11 个注册工具）           │  │
+│  │    → repository（会话/Run/Step/审批/审计持久化）        │  │
+│  ├───────────────────────────────────────────────────────┤  │
+│  │  本地确定性能力层                                      │  │
+│  │  scheduler（提醒/逾期）· brief（每日简报）· tray        │  │
+│  │  credentials（keyring）· db（迁移 v1–v10, WAL）        │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
 
-- **Node.js** ≥ 18
-- **Rust** 工具链（`stable-x86_64-pc-windows-msvc`）
-  - 安装：[rustup](https://rustup.rs/)
-- **Microsoft Visual Studio C++ Build Tools**
-  - 安装 Visual Studio Build Tools 时勾选"使用 C++ 的桌面开发"
-- **Windows SDK**（通常随 Build Tools 一起安装）
-- **WebView2 Runtime**（Windows 11 自带；Windows 10 可能需要手动安装）
+**Agent 是唯一 AI 入口**。历史上独立存在的 AI 分析、计划生成器、聊天助手、本地降级链路均已删除；前端 `analyzer.ts` 只保留确定性统计聚合，AI 文案全部来自 Agent 对话。每日简报与提醒为本地确定性能力，不依赖模型。
 
-### macOS / Linux
+## Agent 工具协议
 
-Tauri 2.0 原生支持 macOS 和 Linux，但本项目目前仅在 Windows 上测试。macOS/Linux 用户如果遇到构建问题，请参考 [Tauri 官方文档](https://tauri.app/start/prerequisites/) 安装对应平台的依赖。
+工具注册表（`agent/tools/`）内置 11 个工具，全部 Rust 原生执行，输入/输出均经 JSON Schema 校验：
 
-## 🚀 安装与运行
+| 工具                           | 风险 | 确认 | 撤销 | 幂等         | 能力                                         |
+| ------------------------------ | ---- | ---- | ---- | ------------ | -------------------------------------------- |
+| `exam.get_active`              | R0   | 自动 | —    | 重试安全     | 当前考试与科目                               |
+| `plan.get_today`               | R0   | 自动 | —    | 重试安全     | 今日计划（04:00 业务日边界）                 |
+| `plan.get_range`               | R0   | 自动 | —    | 重试安全     | 日期范围计划                                 |
+| `plan.preview_generate`        | R0   | 自动 | —    | 重试安全     | 生成周计划草案（只读，不落库）               |
+| `record.get_history`           | R0   | 自动 | —    | 重试安全     | 学习记录历史                                 |
+| `plan.generate`                | R2   | 确认 | —    | exactly-once | 写入周计划（权重分配，每周幂等）             |
+| `plan.apply_preview`           | R3   | 审批 | ✅   | 重试安全     | 应用草案，替换旧计划，可整体撤销             |
+| `record.checkin_plan`          | R3   | 审批 | ✅   | exactly-once | 计划打卡（锁定计划字段、联动错题、聚合更新） |
+| `record.create_free`           | R3   | 审批 | —    | 重试安全     | 自由记录                                     |
+| `wrong_question.create`        | R3   | 审批 | —    | 重试安全     | 录入错题                                     |
+| `wrong_question.mark_mastered` | R3   | 审批 | —    | 重试安全     | 标记掌握                                     |
 
-### 从源码构建（开发者）
+协议层保障：
+
+- **Schema 双校验**：输入（拒绝未知/锁定字段）与输出（落库前验证）双向把关
+- **字节上限**：上下文快照、工具输出、累计 prompt、序列化请求体均有 UTF-8 字节上限
+- **上下文审计**：每次模型调用记录 `agent_context_audit`（工具清单、数据类别、字段名、token），**不存原文**
+- **稳定错误码**：命令边界返回脱敏、稳定的错误码（如 `provider_protocol_error`、`idempotency_conflict`）
+- **能力探测**：连接测试会实测流式与工具调用能力，失败返回稳定错误码
+
+## 用户功能
+
+### 🤖 Agent 对话工作台（`/agent`，单一入口）
+
+三栏布局：
+
+- **会话侧栏**：多会话，历史可回看、继续
+- **对话中心**：流式渲染模型回复与工具执行轨迹；写操作插入审批卡
+- **右栏工作台**：今日打卡 / 学习计划 / 学习记录，切换不打断对话
+- **每日简报**：本地聚合当天计划、完成情况、逾期、薄弱点
+
+其他页面（计划、记录、设置）作为工作台与配置入口保留；旧路径（`/dashboard`、`/analysis`、`/visualization`）自动重定向到 `/agent`。
+
+### 💬 典型用法示例
+
+主界面就是对话框，直接说你的目标：
+
+| 你说的话                            | Agent 做的事                                                         | 你会看到                               |
+| ----------------------------------- | -------------------------------------------------------------------- | -------------------------------------- |
+| "帮我看今天的计划"                  | `plan.get_today`（R0 只读）                                          | 今日任务列表直接回复                   |
+| "为我的数学制定本周计划"            | `plan.preview_generate` 生成周草案（R0）→ `plan.apply_preview`（R3） | 审批卡展示草案预览 → 确认落库 → 可撤销 |
+| "昨晚做了 30 道题错 5 道，帮我记录" | `record.checkin_plan` / `record.create_free`（R3）                   | 审批卡确认后写入记录与错题             |
+| "这道错题我掌握了"                  | `wrong_question.mark_mastered`（R3）                                 | 审批卡确认后标记                       |
+| "对比我这周和上周的学习情况"        | `plan.get_range` + `record.get_history`（R0）                        | 数据驱动的摘要回复（复盘）             |
+
+右栏工作台与对话联动：打卡、改计划、看历史的同时，对话上下文不丢。
+
+### 📅 学习计划
+
+- **Agent 生成**：对话中发起 → `plan.preview_generate` 生成周草案（只读）→ 审批卡预览 → `plan.apply_preview` 落库 → 可整体撤销
+- **日历视图**：月历概览；**列表视图**：拖拽排序
+- **计划 vs 实际**：由学习记录实时派生，对比统计内嵌展示
+
+### 📝 学习记录与错题
+
+- **计划打卡**：`record.checkin_plan`（R3）锁定计划字段，多次打卡自动累计实际时长，联动写入错题，同步计划聚合
+- **自由记录**：`record.create_free`（R3），支持补记
+- **跨天归一化**：凌晨 04:00 前的实时记录归属前一天（业务"今日"一致）
+- **错题库**：`wrong_question.create` / `mark_mastered`（R3），支持复习计数与掌握标记
+
+### 🔔 本地提醒与托盘
+
+- `task_reminder`（默认 19:00，尊重 `reminder_time` 设置）与 `overdue_check`（09:00）由 Rust 调度器 60s tick 驱动，原子领取、日期级去重、失败重试
+- 尊重通知开关与托盘暂停状态
+- 每日简报为按需读取（`mode=local`），不再作为后台 job 调度
+
+### 📦 数据管理
+
+- JSON 导出（全量 / 指定考试 / 日期范围）与导入（跳过 / 覆盖 / 合并，schema 校验 + 分批写入）
+- 数据库备份（`VACUUM INTO` 一致性快照）与恢复（覆盖 + 自动重启）
+
+## 数据与存储
+
+SQLite 单文件（WAL 模式，外键强制），17 张表：
+
+### 业务数据
+
+| 表                                        | 说明                                                    |
+| ----------------------------------------- | ------------------------------------------------------- |
+| `exams` / `subjects` / `knowledge_points` | 考试 / 科目 / 树形知识点（掌握度）                      |
+| `study_plans`                             | 每日计划（pending / in_progress / completed / skipped） |
+| `study_records`                           | 学习记录（打卡与自由记录，`plan_id` 关联）              |
+| `wrong_questions`                         | 错题（复习计数 / 掌握标记）                             |
+| `ai_analyses`                             | 历史分析表（只读弃用，保留兼容）                        |
+
+### Agent 运行时
+
+| 表                              | 说明                                       |
+| ------------------------------- | ------------------------------------------ |
+| `agent_sessions` / `agent_runs` | 会话与 Run（状态机含中断恢复）             |
+| `agent_steps` / `agent_events`  | 工具执行步骤（收据 / undo 载荷）与审计事件 |
+| `agent_approvals`               | 审批（过期时间、前置条件 hash、决定状态）  |
+| `agent_context_audit`           | 模型调用数据溯源（不含原文）               |
+| `agent_memories`                | 长期记忆（保留表，新代码不读）             |
+| `agent_jobs` / `agent_messages` | 后台调度 / 会话消息                        |
+
+数据库迁移 v1–v10 **forward-only**（测试强制无 DROP / RENAME / DELETE），升级自动执行，操作手册见 `docs/agent/migration-runbook.md`。
+
+## 隐私与安全
+
+| 数据        | 存储位置                                                               | 加密      |
+| ----------- | ---------------------------------------------------------------------- | --------- |
+| 学习数据    | 本地 SQLite                                                            | —         |
+| LLM API Key | OS 凭据管理器（Windows DPAPI / macOS Keychain / Linux Secret Service） | ✅ 系统级 |
+| 非敏感配置  | SQLite settings 表                                                     | —         |
+
+- API Key 只在保存瞬间从输入框一次性提交给 Rust（`store_api_key`），前端**从不读取**已保存的 Key（只有 `has_api_key` 布尔）
+- 发送给云端前必须确认**数据出境范围**（provider / 地址 / 模型任一变化需重新确认）
+- 发送内容是聚合摘要（考试信息、当日计划、近期记录摘要、错题摘要），且有上下文审计留痕
+- 命令错误与事件 payload 固定脱敏（不暴露 SQL、路径、密钥、原文）
+
+## 快速开始
+
+### 环境要求（Windows 为主要支持平台）
+
+- Node.js ≥ 18
+- Rust 工具链（`stable-x86_64-pc-windows-msvc`，经 [rustup](https://rustup.rs/)）
+- Visual Studio C++ Build Tools（勾选"使用 C++ 的桌面开发"）
+- WebView2 Runtime（Windows 11 自带）
+
+### 从源码运行
 
 ```bash
-# 1. 克隆仓库
 git clone https://github.com/Suxiao-yong/zhiyan.git
 cd zhiyan
-
-# 2. 安装依赖
 npm install
-
-# 3. 开发模式（热重载）
-npm run tauri dev
-
-# 4. 生产构建（生成安装包）
-npm run tauri build
+npm run tauri dev        # 开发模式（热重载）
+npm run tauri build      # 生产构建（产物在 src-tauri/target/release/bundle/）
 ```
 
-构建产物位于 `src-tauri/target/release/bundle/`：
-- Windows: `.msi`（安装包）+ `.exe`（便携版）
+预编译安装包见 [Releases](https://github.com/Suxiao-yong/zhiyan/releases)（`.msi` 安装包 / `.exe` 便携版）。
 
-### 预编译安装包
+### 三步上手
 
-前往 [Releases](https://github.com/Suxiao-yong/zhiyan/releases) 页面下载最新版本的安装包。
+1. **引导**：创建考试 → 添加科目 → 知识点掌握度自评
+2. **设置**（可选但推荐）：配置 OpenAI 兼容 provider（DeepSeek / OpenAI / 通义千问 / Kimi / 自定义），填入 API Key，确认数据出境范围，连接测试
+3. **对话**：在 `/agent` 发送"为我的数学制定本周计划"，预览并确认审批卡
 
-## 📖 使用指南
+> 💡 不配置 LLM：数据查看、编辑、打卡、提醒全部可用，仅 Agent 对话不可用。也支持配置本地 Ollama，但本地模型暂不支持 Agent 工具调用。
 
-### 第一步：首次启动引导
-
-首次打开智研，会进入 5 步引导流程：
-
-1. **选择考试类型**：考研 / 考公 / 考证 / 自定义
-2. **创建考试**：填写考试名称、考试日期（须晚于今天）、总分
-3. **添加科目**：为考试添加需要学习的科目，设定目标分数、当前水平（1-5）、权重
-4. **知识点自评**：为每个科目的知识点打 1-5 星掌握度（这是 AI 分析的基准数据）
-5. **完成** → 自动跳转到学习计划页
-
-> 💡 中途退出引导也没关系，下次打开会从头开始引导。
-
-### 第二步：配置 LLM（可选但推荐）
-
-进入 **设置** 页面配置大模型 API：
-
-| Provider | API 地址 | 推荐模型 | 说明 |
-|----------|---------|---------|------|
-| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` | **推荐**，性价比高 |
-| OpenAI | `https://api.openai.com` | `gpt-4o` | 需要海外网络 |
-| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode` | `qwen-plus` | 国内直连 |
-| Kimi | `https://api.moonshot.cn` | `moonshot-v1-8k` | 国内直连 |
-| Ollama | `http://localhost:11434` | `llama3` | 本地运行，无需 API Key |
-| 自定义 | 用户填写 | 用户填写 | 任何 OpenAI 兼容接口 |
-
-填入 API Key 后点击 **连接测试** 验证配置。
-
-> 💡 不配置 LLM 也能使用所有核心功能。AI 相关功能会自动降级为本地统计算法。
-
-#### AnySearch 联网搜索（可选）
-
-设置页还提供了 AnySearch API Key 配置。AI 规划助手可以联网搜索考试大纲、备考策略等实时信息。不填 Key 也可以使用（匿名模式，有较低频率限制）。
-
-### 第三步：制定学习计划
-
-进入 **学习计划** 页面：
-
-- **已配置 LLM**：点击"AI 生成计划"，打开 AI 规划助手聊天窗口
-  - AI 会联网研究你的考试相关信息
-  - 与你讨论学习策略（你可以提出偏好和要求）
-  - 确认后生成阶段计划 → 自动展开为每日任务
-- **未配置 LLM**：系统根据科目权重、知识点掌握度、距离考试天数自动分配
-
-在日历/甘特图/列表视图中查看和管理计划，支持拖拽调整顺序。
-
-### 第四步：每日学习记录
-
-进入 **学习记录** 页面：
-
-1. 在默认的 **计划打卡** 页签找到当天任务
-2. 点击“开始打卡”或“继续记录”，填写本次时长、实际内容、做题情况、掌握度、心情和学习时段
-3. 尚未完成时选择“保存进度”，完成后选择“完成任务”
-4. 同一个任务可以多次打卡，计划实际时长自动累计，历史记录和日历同步更新
-
-计划外的临时学习可点击右上角 **自由记录**。自由记录仍支持选择日期补记，并沿用凌晨 04:00 的跨天归一化规则。
-
-> 如果做题数 > 正确数，会自动弹出**错题录入区**，记录题目、正确答案、你的答案、错误类型（概念不清/计算错误/粗心/其他）和错因分析。
-
-### 第五步：查看分析与可视化
-
-- **仪表盘**：今日学习时长、连续打卡天数、本周累计、计划完成率
-- **AI 分析**：每日/每周/阶段诊断报告，AI 建议逐条确认
-- **数据可视化**：6 种图表全方位展示学习数据趋势
-
-### 数据管理
-
-在 **设置** 页面可以：
-- 导出学习数据为 JSON 文件（全量/指定考试/日期范围）
-- 从 JSON 导入（支持跳过/覆盖/合并三种冲突处理）
-- 备份数据库为 `.db` 文件
-- 从备份恢复（覆盖 + 自动重启）
-
-## 📂 项目结构
-
-```
-zhiyan/
-├── src/                          # 前端源码
-│   ├── components/               # Vue 组件
-│   │   ├── analysis/             # AI 分析相关组件
-│   │   ├── charts/               # 图表组件
-│   │   ├── common/               # 通用组件（空状态、页头、统计卡片）
-│   │   ├── dashboard/            # 仪表盘组件
-│   │   ├── exam/                 # 考试配置组件
-│   │   ├── layout/               # 布局组件（侧边栏）
-│   │   ├── plan/                 # 学习计划组件（日历、甘特图、AI 聊天）
-│   │   ├── record/               # 学习记录组件
-│   │   └── viz/                  # 数据可视化图表
-│   ├── pages/                    # 页面组件（路由入口）
-│   ├── services/                 # 业务逻辑层
-│   │   ├── llm-adapter.ts        # LLM 统一调用适配
-│   │   ├── search.ts             # AnySearch 联网搜索
-│   │   ├── analyzer.ts           # AI 分析 + 本地降级
-│   │   ├── plan-generator.ts     # 计划生成算法
-│   │   ├── plan-chat-agent.ts    # AI 规划助手（function calling）
-│   │   ├── db.ts                 # SQLite 数据库操作
-│   │   └── prompts.ts            # LLM Prompt 模板
-│   ├── stores/                   # Pinia 状态管理
-│   ├── router/                   # Vue Router 配置
-│   ├── types/                    # TypeScript 类型定义
-│   └── assets/                   # 静态资源
-├── src-tauri/                    # Rust 后端
-│   ├── src/
-│   │   ├── credentials.rs        # API Key 凭据管理（keyring）
-│   │   ├── db.rs                 # 数据库迁移（schema）
-│   │   ├── lib.rs                # Tauri 入口
-│   │   └── main.rs               # 应用主函数
-│   ├── capabilities/             # Tauri 权限声明
-│   └── Cargo.toml                # Rust 依赖
-├── docs/                         # 文档和截图
-│   └── screenshots/              # 应用截图
-├── package.json                  # 前端依赖
-├── vite.config.ts                # Vite 构建配置
-├── tsconfig.json                 # TypeScript 配置
-└── README.md                     # 本文件
-```
-
-## 🧪 测试
+## 开发与测试
 
 ```bash
-# 前端单元测试（12 个文件 / 55 个用例）
+# 前端：单元测试（13 文件 / 79 用例）、类型、代码风格
 npx vitest run
-
-# 运行测试（监听模式）
-npx vitest
-
-# 类型检查
 npx vue-tsc --noEmit
+npx eslint .
+npx prettier --check "src/**/*.{ts,vue}"
 
-# Rust 后端测试（lib 单测 51 + agent_repository 12 + agent_tools 42 = 105 用例）
+# Rust：全部测试（lib 165 + agent_repository 12 + agent_tools 42）
 cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+
+# Rust 质量门
+cargo clippy --manifest-path src-tauri/Cargo.toml --lib -- -D warnings
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 ```
 
-前端测试覆盖：
-- `prompts.test.ts` — LLM Prompt 模板注入与 schema 字段
-- `llm-adapter.test.ts` — JSON 响应解析容错
-- `analyzer.test.ts` — 本地降级分析与分数预测
-- `plan-generator.test.ts` — 计划生成算法
-- `plan-service.test.ts` / `record-service.test.ts` / `export.test.ts` — 计划、记录、导入导出服务
-- `agent-client.test.ts` / `agent-tool-parity.test.ts` — Agent 运行时客户端与工具对齐
-- `AgentDebug.test.ts` — 隐藏调试页交互
-- `checkin-ui.test.ts` / `PlanCheckinDialog.test.ts` — 打卡 UI 组件
+测试重点：
 
-Rust 测试覆盖：
-- lib 单测（51）— Agent Runtime 状态机、策略引擎（R0–R4）、执行器编排
-- `agent_tools`（42）— `plan.get_today` / `record.checkin_plan` 工具、exactly-once 与 undo、并发与隐私
-- `agent_repository`（12）— 会话/Run 持久化、状态转换原子性、启动恢复
+- **前端**：路由单一入口契约、Agent 客户端 DTO、密钥边界、导入导出、打卡 UI
+- **Rust lib**：Run 状态机与中断恢复、R0–R4 策略、执行器事务编排、调度器、迁移链
+- **集成**：exactly-once 并发竞态、undo 补偿链、审批过期 / 重复确认、迁移升级恢复、隐私脱敏
 
-手动测试清单见 [MANUAL_TEST.md](./MANUAL_TEST.md)。
+## 项目结构
 
-## 🔐 数据与隐私
+```text
+zhiyan/
+├── src/                        # 前端（Vue 3 + TS）
+│   ├── components/
+│   │   ├── agent/              # 对话侧栏 / 审批卡 / 简报 / 工作台宿主
+│   │   └── plan/ record/ exam/ viz/ common/ layout/
+│   ├── pages/                  # AgentHome（主界面）、StudyPlan、StudyRecord、Settings…
+│   ├── services/               # db / record / plan / exam / analyzer / viz / export / agent-client
+│   ├── stores/                 # Pinia：agent / exam / plan / record / settings
+│   ├── router/                 # 单一入口：/ → /agent，旧路径重定向
+│   └── types/  assets/
+├── src-tauri/                  # Rust 后端
+│   ├── src/
+│   │   ├── agent/              # planner / executor / policy / runtime / repository /
+│   │   │                       #   tools / context_snapshot / plan_draft / context / error
+│   │   ├── scheduler.rs  brief.rs  tray.rs  credentials.rs  db.rs  lib.rs
+│   ├── tests/                  # 集成测试（agent_tools / agent_repository）
+│   └── capabilities/           # Tauri 权限声明
+├── docs/                       # 设计概念 / 截图 / 迁移与 parity 文档
+├── tests/fixtures/             # 测试 fixture
+└── package.json  vite.config.ts  tsconfig.json  vitest.config.ts
+```
 
-智研遵循**本地优先**原则：
+## FAQ 与已知限制
 
-| 数据 | 存储位置 | 加密 |
-|------|---------|------|
-| 学习数据（考试/记录/计划/错题/分析） | 本地 SQLite 数据库 | — |
-| LLM API Key | OS 凭据管理器（Windows DPAPI） | ✅ 系统级加密 |
-| AnySearch API Key | OS 凭据管理器 + SQLite fallback | ✅ DPAPI / XOR 混淆 |
-| 非敏感设置（主题/provider/baseUrl） | SQLite settings 表 | — |
+### 常见问题
 
-- **所有学习数据仅存本地，绝不上传云端**
-- 唯一的外发网络请求是用户主动配置的 LLM API 调用
-- 发送给 LLM 的 Prompt 仅包含**聚合摘要**（如"数学本周学习 120 分钟，正确率 65%"），不含原始学习记录明细
-- 数据库路径：`%APPDATA%\com.zhiyan.app\zhiyan.db`
+**Q：为什么 Agent 不可用/提示未连接？**
+未配置 LLM，或配置后未在设置页**确认数据出境范围**。provider / API 地址 / 模型任一变化后都需重新确认。
 
-## 🤝 贡献
+**Q：保存后 API Key 在设置页不显示？**
+这是设计使然：Key 只经 OS 凭据管理器加密存储，前端永不回读，页面只显示"已配置/需要重新输入"布尔状态。
 
-欢迎提交 Issue 和 Pull Request！请参阅 [CONTRIBUTING.md](./CONTRIBUTING.md) 了解开发环境搭建和贡献流程。
+**Q：有本地离线模式吗？**
+学习数据的录入、查看、打卡、提醒均不依赖模型；Agent 对话需要云端 LLM。不再提供"本地算法生成计划"的降级方案。
 
-本项目遵循 [Contributor Covenant](./CODE_OF_CONDUCT.md) 行为准则。
+**Q：提醒时间为什么不受设置影响？**
+提醒时间键已统一为 `reminder_time`（默认 19:00 生效），设置页的提醒时间 UI 尚未接入，当前请通过托盘暂停/恢复控制提醒。
 
-## 📄 许可
+**Q：切换 Provider 后提示"需要 API Key"？**
+切换后 keyring 状态会即时刷新；新 Provider 若未配置过 Key，需重新输入保存。
 
-[Apache License 2.0](./LICENSE)
+### 已知限制
 
-Copyright 2026 ZhiYan Contributors
+- ollama：可作为 provider 配置，但**本地模型暂不支持 Agent 工具调用**
+- 平台：仅在 Windows 上完整测试；macOS / Linux 构建依赖 Tauri 官方环境，未验证
+- 长期记忆（`agent_memories`）：表保留兼容，新代码不再自动读取
+- 手工测试清单（打包手测等）见 [MANUAL_TEST.md](MANUAL_TEST.md)
 
-## ⭐ Star History
+## 文档索引
 
-如果你觉得智研对你有帮助，请给个 Star 支持！
+| 文档                                                                                       | 说明                   |
+| ------------------------------------------------------------------------------------------ | ---------------------- |
+| [docs/agent/migration-runbook.md](docs/agent/migration-runbook.md)                         | 数据库迁移操作手册     |
+| [docs/agent/feature-parity.md](docs/agent/feature-parity.md)                               | 功能 parity 矩阵       |
+| [docs/agent/cloud-llm-cutover-migration.md](docs/agent/cloud-llm-cutover-migration.md)     | Cloud LLM 改造迁移说明 |
+| [docs/agent/cloud-llm-cutover-test-matrix.md](docs/agent/cloud-llm-cutover-test-matrix.md) | 改造测试矩阵           |
+| [docs/agent/cloud-llm-cutover-baseline.md](docs/agent/cloud-llm-cutover-baseline.md)       | 改造验证基线           |
+| [docs/design-concepts/](docs/design-concepts/)                                             | 产品设计概念稿         |
+| [MANUAL_TEST.md](MANUAL_TEST.md)                                                           | 手动测试清单           |
+| [PROJECT_STATUS.md](PROJECT_STATUS.md)                                                     | 项目进度状态           |
+| [CHANGELOG.md](CHANGELOG.md)                                                               | 变更日志               |
+
+## 贡献与许可
+
+欢迎提交 Issue 和 Pull Request！请参阅 [CONTRIBUTING.md](./CONTRIBUTING.md) 与 [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)。
+
+本项目基于 [Apache License 2.0](./LICENSE) 开源。Copyright 2026 ZhiYan Contributors。

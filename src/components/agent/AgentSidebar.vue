@@ -1,18 +1,16 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, ChatDotRound, Odometer, Calendar, EditPen, Monitor } from '@element-plus/icons-vue'
+import { Plus, ChatDotRound, Setting } from '@element-plus/icons-vue'
 import { useAgentStore } from '@/stores/agent'
 
 const router = useRouter()
 const agent = useAgentStore()
 
-const workbenchLinks = [
-  { path: '/dashboard', label: '仪表盘', icon: Odometer },
-  { path: '/study-plan', label: '学习计划', icon: Calendar },
-  { path: '/study-record', label: '学习记录', icon: EditPen },
-  { path: '/agent-debug', label: 'Agent 调试', icon: Monitor },
-]
+// Task 3: the sidebar keeps new-session, the session list, and the settings
+// entry only. Plan and Records live in the right workbench, not duplicated
+// here; Dashboard and Agent Debug are gone from the user path.
+const settingsLink = { path: '/settings', label: '设置', icon: Setting }
 
 onMounted(async () => {
   await agent.refreshSessions()
@@ -58,12 +56,12 @@ function formatTime(value: string): string {
       </li>
     </ul>
 
-    <div class="sidebar-section-label">工作台</div>
+    <div class="sidebar-section-label">设置</div>
     <ul class="workbench-links" data-test="agent-workbench-links">
-      <li v-for="link in workbenchLinks" :key="link.path">
-        <el-link :underline="false" @click="router.push(link.path)">
-          <el-icon><component :is="link.icon" /></el-icon>
-          {{ link.label }}
+      <li>
+        <el-link :underline="false" @click="router.push(settingsLink.path)">
+          <el-icon><component :is="settingsLink.icon" /></el-icon>
+          {{ settingsLink.label }}
         </el-link>
       </li>
     </ul>

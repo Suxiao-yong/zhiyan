@@ -4,8 +4,6 @@ import { useRoute } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useExamStore } from '@/stores/exam'
-import { getSetting } from '@/services/db'
-import { runPendingAnalyses } from '@/services/agent-engine'
 import {
   isPermissionGranted,
   requestPermission,
@@ -28,15 +26,8 @@ onMounted(async () => {
   watch(() => settingsStore.theme, applyTheme)
   await examStore.loadExams()
   if (examStore.activeExamId) {
-    // M6 Task 5: the legacy TS LLM analysis catch-up path is disabled when the
-    // Agent OS is active (agent_os_enabled); the Rust planner owns analysis
-    // there. Flipping the setting off restores the legacy path.
-    const agentOsEnabled = await getSetting('agent_os_enabled')
-    if (agentOsEnabled === '0') {
-      runPendingAnalyses(examStore.activeExamId, settingsStore.llmConfig).catch((e) =>
-        console.warn('启动补跑分析失败', e),
-      )
-    }
+    // Task 9: 启动补跑分析已删除——本地统计与文案由 Agent 侧 ContextSnapshot
+    // / Daily Brief（Rust）负责,不再有前端自动的 LLM 分析路径。
     sendStartupReminder()
   }
 })
@@ -53,7 +44,7 @@ async function sendStartupReminder() {
     if (granted) {
       sendNotification({
         title: '智研',
-        body: '今日学习任务完成了吗？打开应用查看计划与 AI 分析。',
+        body: '今日学习任务完成了吗？打开应用查看今日计划与智能复盘。',
       })
     }
   } catch (e) {

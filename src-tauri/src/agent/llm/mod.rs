@@ -101,6 +101,23 @@ impl LlmProvider {
             }
         }
     }
+
+    /// The request body this provider would serialize for `messages` + `tools`.
+    /// Used by the Planner to enforce `MAX_REQUEST_BYTES` before sending.
+    pub(crate) fn request_body(&self, messages: &[ProviderMessage], tools: &[Value]) -> Value {
+        match self {
+            Self::OpenAiCompatible(provider) => {
+                openai_compatible::OpenAiCompatibleProvider::serialize_request_body(
+                    provider.model(),
+                    messages,
+                    provider.temperature(),
+                    tools,
+                )
+            }
+            #[cfg(test)]
+            Self::Synthetic(_) => serde_json::json!({ "messages": messages, "tools": tools }),
+        }
+    }
 }
 
 #[cfg(test)]

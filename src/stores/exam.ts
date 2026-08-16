@@ -3,9 +3,17 @@
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { setSetting } from '@/services/db'
 import type { Exam, KnowledgePoint, Subject } from '@/types'
 import * as examService from '@/services/exam-service'
 import type { ExamInput, KnowledgePointInput, SubjectInput } from '@/services/exam-service'
+
+/** 同步当前活跃考试给 Rust（scheduler 提醒目标），失败不影响本地状态 */
+function persistActiveExam(id: string | null): void {
+  setSetting('agent_active_exam_id', id ?? '').catch(() => {
+    /* ignore */
+  })
+}
 
 export const useExamStore = defineStore('exam', () => {
   const exams = ref<Exam[]>([])
@@ -18,14 +26,17 @@ export const useExamStore = defineStore('exam', () => {
     exams.value = await examService.getAllExams()
     if (!activeExamId.value && exams.value.length) {
       activeExamId.value = exams.value[0].id
+      persistActiveExam(activeExamId.value)
     }
     if (activeExamId.value && !exams.value.some((e) => e.id === activeExamId.value)) {
       activeExamId.value = exams.value[0]?.id ?? null
+      persistActiveExam(activeExamId.value)
     }
   }
 
   function setActiveExam(id: string | null) {
     activeExamId.value = id
+    persistActiveExam(id)
   }
 
   async function createExam(input: ExamInput): Promise<Exam> {

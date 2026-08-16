@@ -130,8 +130,8 @@ pub fn create_descriptor() -> ToolDescriptor {
             "required":["id"],
             "properties":{"id":{"type":"string"}}
         }),
-        risk: RiskLevel::R1,
-        confirmation: Confirmation::Automatic,
+        risk: RiskLevel::R3,
+        confirmation: Confirmation::Required,
         supports_undo: false,
         timeout_ms: 3000,
         idempotency: Idempotency::RetrySafe,
@@ -192,8 +192,8 @@ pub fn mark_mastered_descriptor() -> ToolDescriptor {
             "required":["id","mastered"],
             "properties":{"id":{"type":"string"},"mastered":{"type":"integer"}}
         }),
-        risk: RiskLevel::R1,
-        confirmation: Confirmation::Automatic,
+        risk: RiskLevel::R3,
+        confirmation: Confirmation::Required,
         supports_undo: false,
         timeout_ms: 3000,
         idempotency: Idempotency::RetrySafe,

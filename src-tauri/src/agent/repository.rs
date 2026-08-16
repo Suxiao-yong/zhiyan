@@ -218,6 +218,26 @@ impl AgentRepository {
         self.get_run(id).await
     }
 
+    pub async fn fail_run(&self, run_id: &str, error_code: &str) -> Result<AgentRun, AgentError> {
+        // Atomic terminal transition: only a still-active run may be failed, so
+        // a concurrent completion/cancel cannot be silently overwritten. When
+        // the conditional update touches no row the run is already terminal.
+        let result = sqlx::query(
+            "UPDATE agent_runs SET status = 'failed', error_code = ?, \
+             completed_at = datetime('now','localtime') \
+             WHERE id = ? AND status IN ('running','waiting_approval')",
+        )
+        .bind(error_code)
+        .bind(run_id)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx)?;
+        if result.rows_affected() != 1 {
+            return Err(AgentError::Conflict);
+        }
+        self.get_run(run_id).await
+    }
+
     pub async fn append_event(
         &self,
         run_id: &str,

@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import VChart from 'vue-echarts'
+import VueECharts from 'vue-echarts'
 import { TrendCharts } from '@element-plus/icons-vue'
 import { useChartTheme } from '@/services/theme'
+import { ensureECharts } from '@/services/echarts-setup'
+
+ensureECharts()
 
 const props = defineProps<{ data: { date: string; minutes: number }[] }>()
 const type = ref<'line' | 'bar'>('line')
@@ -41,7 +44,7 @@ const option = computed(
         </el-radio-group>
       </div>
     </template>
-    <v-chart v-if="data.length" class="chart" :option="option" :theme="theme" autoresize />
+    <VueECharts v-if="data.length" class="chart" :option="option" :theme="theme" autoresize />
     <el-empty v-else description="无数据" :image-size="50" />
   </el-card>
 </template>
