@@ -2829,6 +2829,182 @@ fn legacy_specialized_write_api_is_rust_owned_with_inert_legacy_settings() {
     });
 }
 
+// --- knowledge point mastery recompute (learning-effectiveness-loop Task 5) ---
+
+async fn seed_mastery_fixture(pool: &SqlitePool) {
+    seed_exam_tree(pool).await;
+    sqlx::query(
+        r#"
+        INSERT INTO study_plans (
+            id, exam_id, subject_id, knowledge_point_id, date, planned_tasks,
+            planned_duration, status, generated_by, sort_order, created_at, updated_at
+        ) VALUES ('plan-mastery', 'exam-1', 'subject-math', 'kp-function',
+                  '2026-07-17', '复习函数', 60, 'pending', 'local', 0,
+                  '2026-07-16 09:00:00', '2026-07-16 09:00:00')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn seed_history_rating(
+    pool: &SqlitePool,
+    id: &str,
+    date: &str,
+    created_at: &str,
+    rating: Option<i64>,
+) {
+    sqlx::query(
+        r#"
+        INSERT INTO study_records (
+            id, date, subject_id, knowledge_point_id, duration_min,
+            mastery_rating, created_at, updated_at
+        ) VALUES (?, ?, 'subject-math', 'kp-function', 30, ?, ?, ?)
+        "#,
+    )
+    .bind(id)
+    .bind(date)
+    .bind(rating)
+    .bind(created_at)
+    .bind(created_at)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn mastery_checkin_input(mastery_rating: Option<i64>) -> RecordCheckinPlanInput {
+    RecordCheckinPlanInput {
+        plan_id: "plan-mastery".to_owned(),
+        duration_min: 30,
+        content: None,
+        questions_count: 0,
+        correct_count: 0,
+        mastery_rating,
+        difficulty_notes: None,
+        mood: None,
+        session_time: None,
+        finish: false,
+        wrong_questions: Vec::new(),
+    }
+}
+
+#[test]
+fn checkin_updates_kp_mastery_from_recent_ratings() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_mastery_fixture(&pool).await;
+        // Two rated history rows plus the new rating=1 checkin: the three most
+        // recent rated records are 1 (2026-07-17), 5 (07-16), 5 (07-15).
+        seed_history_rating(&pool, "record-h1", "2026-07-15", "2026-07-15 09:00:00", Some(5)).await;
+        seed_history_rating(&pool, "record-h2", "2026-07-16", "2026-07-16 09:00:00", Some(5)).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        record::checkin_plan(
+            &mut tx,
+            mastery_checkin_input(Some(1)),
+            BUSINESS_DATE,
+            "record-mastery-new",
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let m: i64 = sqlx::query_scalar("SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        // ROUND(AVG(1, 5, 5)) = ROUND(3.67) = 4.
+        assert_eq!(m, 4);
+    });
+}
+
+#[test]
+fn checkin_without_any_rated_records_keeps_mastery_untouched() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_mastery_fixture(&pool).await;
+        // History exists but carries no mastery ratings: the aggregate must
+        // keep the self-assessed baseline (default 3).
+        seed_history_rating(&pool, "record-h1", "2026-07-15", "2026-07-15 09:00:00", None).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        record::checkin_plan(
+            &mut tx,
+            mastery_checkin_input(None),
+            BUSINESS_DATE,
+            "record-mastery-null",
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let m: i64 = sqlx::query_scalar("SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(m, 3);
+    });
+}
+
+#[test]
+fn first_rated_checkin_sets_mastery_directly() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_mastery_fixture(&pool).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        record::checkin_plan(
+            &mut tx,
+            mastery_checkin_input(Some(2)),
+            BUSINESS_DATE,
+            "record-mastery-first",
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let m: i64 = sqlx::query_scalar("SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(m, 2);
+    });
+}
+
+#[test]
+fn create_free_with_kp_recomputes_mastery_too() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_exam_tree(&pool).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        record::create_free(
+            &mut tx,
+            record::RecordCreateFreeInput {
+                exam_id: EXAM_ID.to_owned(),
+                date: BUSINESS_DATE.to_owned(),
+                subject_id: "subject-math".to_owned(),
+                knowledge_point_id: Some("kp-function".to_owned()),
+                duration_min: 45,
+                content: None,
+                questions_count: None,
+                correct_count: None,
+                mastery_rating: Some(4),
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let m: i64 = sqlx::query_scalar("SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(m, 4);
+    });
+}
+
 // --- review.get_due / review.complete (learning-effectiveness-loop Task 4) ---
 
 async fn seed_review_fixture(pool: &SqlitePool) {
