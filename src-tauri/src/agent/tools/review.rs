@@ -37,7 +37,18 @@ pub async fn get_due(
     tx: &mut Transaction<'_, Sqlite>,
     input: ReviewGetDueInput,
 ) -> Result<ReviewGetDueOutput, AgentError> {
-    let items: Vec<ReviewDueItem> = sqlx::query_as(
+    let items = due_items(&mut **tx, &input.exam_id).await?;
+    let count = items.len() as i64;
+    Ok(ReviewGetDueOutput { count, items })
+}
+
+/// Shared due-questions query (Task 8): one SQL for the tool, the Tauri
+/// command, and the scheduler reminder count.
+async fn due_items<'e, E>(executor: E, exam_id: &str) -> Result<Vec<ReviewDueItem>, AgentError>
+where
+    E: sqlx::Executor<'e, Database = Sqlite>,
+{
+    sqlx::query_as(
         r#"
         SELECT wq.id, wq.question_desc, s.name AS subject_name, kp.name AS knowledge_point_name
         FROM wrong_questions wq
@@ -50,12 +61,40 @@ pub async fn get_due(
         LIMIT 20
         "#,
     )
-    .bind(&input.exam_id)
-    .fetch_all(&mut **tx)
+    .bind(exam_id)
+    .fetch_all(executor)
     .await
-    .map_err(|_| AgentError::Persistence("review.get_due query failed".to_owned()))?;
+    .map_err(|_| AgentError::Persistence("review.get_due query failed".to_owned()))
+}
+
+/// Pool-level read for the `review_list_due` Tauri command (Task 8).
+pub async fn list_due(
+    pool: &sqlx::SqlitePool,
+    exam_id: &str,
+) -> Result<ReviewGetDueOutput, AgentError> {
+    let items = due_items(pool, exam_id).await?;
     let count = items.len() as i64;
     Ok(ReviewGetDueOutput { count, items })
+}
+
+/// Pool-level due count for the task reminder copy (Task 8). Same WHERE as
+/// `due_items` but uncapped (the tool list caps at 20; the count does not).
+pub async fn count_due(pool: &sqlx::SqlitePool, exam_id: &str) -> Result<i64, AgentError> {
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM wrong_questions wq
+        JOIN subjects s ON s.id = wq.subject_id
+        WHERE s.exam_id = ?
+          AND wq.mastered = 0
+          AND (wq.next_review_at IS NULL OR wq.next_review_at <= date('now','localtime'))
+        "#,
+    )
+    .bind(exam_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| AgentError::Persistence("review count query failed".to_owned()))?;
+    Ok(count)
 }
 
 pub fn get_due_descriptor() -> ToolDescriptor {
