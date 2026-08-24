@@ -102,6 +102,23 @@ export function agentBriefPreview(examId?: string | null): Promise<AgentBrief> {
   return invoke<AgentBrief>('agent_brief_preview', { examId: examId ?? null })
 }
 
+export interface DueReviewItem {
+  id: string
+  question_desc: string | null
+  subject_name: string
+  knowledge_point_name: string | null
+}
+
+export interface ReviewListDueOutput {
+  count: number
+  items: DueReviewItem[]
+}
+
+/** Today's due wrong-question reviews for the right-pane workbench card. */
+export function reviewListDue(examId?: string | null): Promise<ReviewListDueOutput> {
+  return invoke<ReviewListDueOutput>('review_list_due', { examId: examId ?? null })
+}
+
 /** Agent OS reads (M5). */
 export function agentSessionList(limit?: number): Promise<AgentSession[]> {
   return invoke<AgentSession[]>('agent_session_list', { limit: limit ?? null })
