@@ -266,6 +266,41 @@ pub async fn agent_brief_preview(
         .map_err(Into::into)
 }
 
+/// Today's due wrong questions for the right-pane workbench card (Task 8):
+/// a pure local read. Falls back to the active exam when no exam id is given
+/// (same fallback as the brief); no exam at all is an empty result, not an
+/// error, so the card can render its empty state.
+#[tauri::command]
+pub async fn review_list_due(
+    pool: State<'_, SqlitePool>,
+    exam_id: Option<String>,
+) -> Result<super::tools::review::ReviewGetDueOutput, CommandError> {
+    review_list_due_impl(pool.inner(), exam_id).await
+}
+
+async fn review_list_due_impl(
+    pool: &SqlitePool,
+    exam_id: Option<String>,
+) -> Result<super::tools::review::ReviewGetDueOutput, CommandError> {
+    let exam_id = match exam_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(id) => Some(id.to_owned()),
+        None => active_exam_fallback(pool).await?,
+    };
+    let Some(exam_id) = exam_id else {
+        return Ok(super::tools::review::ReviewGetDueOutput {
+            count: 0,
+            items: Vec::new(),
+        });
+    };
+    super::tools::review::list_due(pool, &exam_id)
+        .await
+        .map_err(Into::into)
+}
+
 /// Resolve the exam a brief targets: the persisted `agent_active_exam_id`, or
 /// the most recently active exam as a fallback (mirrors the Scheduler helper).
 async fn active_exam_fallback(pool: &SqlitePool) -> Result<Option<String>, CommandError> {
@@ -481,8 +516,8 @@ mod tests {
     use super::{
         agent_approval_list, agent_brief_preview, agent_context_audit_list, agent_decide_approval,
         agent_execute_tool, agent_list_tools, agent_run_planner, agent_session_list,
-        agent_session_messages, agent_undo_tool, provider_test_result_from_error, trimmed_required,
-        CommandError,
+        agent_session_messages, agent_undo_tool, provider_test_result_from_error,
+        review_list_due_impl, trimmed_required, CommandError,
     };
     use crate::agent::error::AgentError;
 
@@ -510,6 +545,51 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[tokio::test]
+    async fn review_list_due_returns_active_exam_due_items_or_empty() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for migration in crate::db::migrations() {
+            sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+        }
+
+        // No exams at all: an empty result, not an error.
+        let empty = review_list_due_impl(&pool, None).await.unwrap();
+        assert_eq!(empty.count, 0);
+        assert!(empty.items.is_empty());
+
+        // Seed an exam with one due and one already-mastered wrong question;
+        // the active-exam fallback must surface only the due one.
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO exams (id, name, exam_date) VALUES ('exam-due', 'Due', '2030-01-01');
+            INSERT INTO subjects (id, exam_id, name) VALUES ('sub-due', 'exam-due', 'Math');
+            INSERT INTO wrong_questions (id, subject_id, question_desc, next_review_at)
+                VALUES ('wq-a', 'sub-due', 'due', '2000-01-01'),
+                       ('wq-b', 'sub-due', 'mastered', NULL);
+            UPDATE wrong_questions SET mastered = 1 WHERE id = 'wq-b';
+            INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-due');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let out = review_list_due_impl(&pool, None).await.unwrap();
+        assert_eq!(out.count, 1);
+        assert_eq!(out.items[0].id, "wq-a");
+        assert_eq!(out.items[0].subject_name, "Math");
+
+        // An explicit exam id bypasses the fallback.
+        let explicit = review_list_due_impl(&pool, Some("exam-due".to_owned()))
+            .await
+            .unwrap();
+        assert_eq!(explicit.count, 1);
     }
 
     #[test]

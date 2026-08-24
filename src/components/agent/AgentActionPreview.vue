@@ -25,6 +25,13 @@ interface PreviewRow {
   subject_name: string
   planned_tasks: string
   planned_duration: number
+  /** Task 7：确定性依据（知识点任务才有）；只展示 Rust 生成的 reason 文本。 */
+  evidence?: {
+    mastery?: number
+    wrong_question_count?: number
+    days_to_exam?: number | null
+    reason?: string
+  } | null
 }
 
 const draftRows = computed<PreviewRow[]>(() => {
@@ -81,6 +88,13 @@ const hasPrecondition = computed(() => {
           <span class="action-preview__row-subject">{{ row.subject_name }}</span>
           <span class="action-preview__row-task">{{ row.planned_tasks }}</span>
           <span class="action-preview__row-min">{{ row.planned_duration }} 分钟</span>
+          <span
+            v-if="row.evidence?.reason"
+            class="action-preview__row-evidence"
+            data-test="action-preview-row-evidence"
+          >
+            依据：{{ row.evidence.reason }}
+          </span>
         </div>
         <p
           v-if="draftRowCount !== undefined && draftRowCount > draftRows.length"
@@ -164,6 +178,7 @@ const hasPrecondition = computed(() => {
   gap: 8px;
   font-size: 12px;
   color: var(--c-ink-2);
+  flex-wrap: wrap;
 }
 .action-preview__row-date {
   font-variant-numeric: tabular-nums;
@@ -178,6 +193,11 @@ const hasPrecondition = computed(() => {
   flex: 1;
 }
 .action-preview__row-min {
+  color: var(--c-ink-3);
+}
+.action-preview__row-evidence {
+  width: 100%;
+  font-size: var(--fs-xs);
   color: var(--c-ink-3);
 }
 .action-preview__more,

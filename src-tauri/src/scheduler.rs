@@ -310,11 +310,19 @@ impl Scheduler {
                     .unwrap_or_default();
                 let unfinished = stats.planned - stats.completed - stats.skipped;
                 if unfinished > 0 {
-                    let _ = self.notifications.send(
-                        "今日任务提醒",
-                        format!("今日还有 {unfinished} 项任务未完成。"),
-                    );
-                    JobOutcome::Done(json!({ "unfinished": unfinished }))
+                    // Task 8: mention due reviews when any exist; a failed count
+                    // silently skips the extra line so the main reminder holds.
+                    let mut body = format!("今日还有 {unfinished} 项任务未完成。");
+                    let due_reviews = crate::agent::tools::review::count_due(&self.pool, &exam_id)
+                        .await
+                        .unwrap_or(0);
+                    if due_reviews > 0 {
+                        body.push_str(&format!("今天还有 {due_reviews} 道错题待复习。"));
+                    }
+                    let _ = self.notifications.send("今日任务提醒", body);
+                    JobOutcome::Done(
+                        json!({ "unfinished": unfinished, "due_reviews": due_reviews }),
+                    )
                 } else {
                     JobOutcome::Done(json!({ "unfinished": 0, "note": "all done" }))
                 }
@@ -663,9 +671,54 @@ mod tests {
                 assert!(notification.body.contains("2"));
                 // Notification bodies never carry plan text.
                 assert!(!notification.body.contains("rp-"));
+                // No due reviews seeded: the review line must be absent.
+                assert!(!notification.body.contains("待复习"));
             }
         }
         assert!(titles.contains(&"今日任务提醒".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn task_reminder_mentions_due_reviews() {
+        let pool = scheduler_pool().await;
+        seed_exam_with_plans(&pool).await;
+        // Two due wrong questions for the active exam: one overdue, one never
+        // scheduled (NULL next_review_at also counts as due).
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO wrong_questions (id, subject_id, question_desc, next_review_at)
+                VALUES ('wq-due-1', 'sub-r', 'due past', '2000-01-01'),
+                       ('wq-due-2', 'sub-r', 'never scheduled', NULL);
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-r')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (scheduler, mut notifications) = test_scheduler(pool.clone());
+        scheduler
+            .schedule(
+                JobType::TaskReminder,
+                "task_reminder:2026-07-18",
+                "2026-07-18 19:00:00",
+            )
+            .await
+            .unwrap();
+
+        scheduler.tick("2026-07-18 20:00:00").await.unwrap();
+
+        let mut mentioned = false;
+        while let Ok(notification) = notifications.try_recv() {
+            if notification.title == "今日任务提醒" {
+                assert!(notification.body.contains("待复习"));
+                assert!(notification.body.contains("2 道错题"));
+                mentioned = true;
+            }
+        }
+        assert!(mentioned, "task reminder must mention due reviews");
     }
 
     #[tokio::test]

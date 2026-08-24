@@ -101,6 +101,18 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 11,
+            description: "add review-scheduling columns to wrong_questions (spaced repetition)",
+            sql: r#"
+                ALTER TABLE wrong_questions ADD COLUMN next_review_at TEXT;
+                ALTER TABLE wrong_questions ADD COLUMN review_interval_days REAL NOT NULL DEFAULT 0;
+                ALTER TABLE wrong_questions ADD COLUMN ease_factor REAL NOT NULL DEFAULT 2.5;
+                CREATE INDEX IF NOT EXISTS idx_wrong_questions_due
+                    ON wrong_questions(next_review_at) WHERE mastered = 0;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -503,10 +515,9 @@ mod tests {
             .collect();
 
         assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
-        // The unpublished v11 (plan preview/apply ownership seeds) was removed
-        // after confirming no distributed database ever applied it; v10 is the
-        // current latest and v1-v10 SQL is unchanged.
-        assert_eq!(versions.last(), Some(&10));
+        // v1-v10 SQL is unchanged; v11 adds review-scheduling columns to
+        // wrong_questions (spaced repetition) and is the current latest.
+        assert_eq!(versions.last(), Some(&11));
     }
 
     #[test]
@@ -634,7 +645,7 @@ mod tests {
                 );
                 assert_eq!(
                     migration_list.last().map(|migration| migration.version),
-                    Some(10)
+                    Some(11)
                 );
             });
     }
@@ -1005,6 +1016,67 @@ mod tests {
             });
     }
 
+    #[test]
+    fn migration_v11_adds_review_scheduling_columns() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                // A v10-era database: run everything through v10, then v11.
+                for migration in &migrations() {
+                    sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+                }
+
+                // v11 adds three review-scheduling columns to wrong_questions.
+                let columns: Vec<String> = sqlx::query_scalar(
+                    "SELECT name FROM pragma_table_info('wrong_questions') ORDER BY cid",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+                for required in ["next_review_at", "review_interval_days", "ease_factor"] {
+                    assert!(
+                        columns.iter().any(|column| column == required),
+                        "wrong_questions.{required} must exist after v11"
+                    );
+                }
+
+                // The partial index on next_review_at exists (mastered=0 only).
+                let due_index: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_wrong_questions_due'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(due_index, 1);
+
+                // Pre-existing rows inherit safe defaults: ease 2.5, interval 0.
+                sqlx::raw_sql(
+                    "INSERT INTO exams (id, name, exam_date) VALUES ('exam-v11', 'V11', '2030-01-01');
+                     INSERT INTO subjects (id, exam_id, name) VALUES ('subject-v11', 'exam-v11', 'V11');
+                     INSERT INTO wrong_questions (id, subject_id) VALUES ('wq-v11', 'subject-v11');",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+
+                let (ease, interval): (f64, f64) = sqlx::query_as(
+                    "SELECT ease_factor, review_interval_days FROM wrong_questions WHERE id='wq-v11'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(ease, 2.5);
+                assert_eq!(interval, 0.0);
+            });
+    }
+
     async fn seed_v4_rows(pool: &sqlx::SqlitePool) {
         sqlx::raw_sql(
             r#"
@@ -1351,8 +1423,8 @@ mod tests {
                 // migration is executed only when its version is new, so a
                 // re-run of the entry never re-applies ALTER TABLE statements.
                 let mut applied = std::collections::HashSet::new();
-                // 1. Create the v10 schema (the current latest; v11 was never
-                // distributed, so this is the production upgrade target).
+                // 1. Create the latest schema (v11 adds review-scheduling
+                // columns, never distributed), then re-run to simulate upgrade.
                 for migration in migrations() {
                     if applied.insert(migration.version) {
                         sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();

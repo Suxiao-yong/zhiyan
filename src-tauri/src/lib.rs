@@ -6,6 +6,7 @@ pub mod brief;
 mod credentials;
 pub mod db;
 pub mod notify;
+pub mod review;
 pub mod scheduler;
 pub mod tray;
 
@@ -76,6 +77,7 @@ pub fn run() {
             agent::commands::agent_confirm_cloud_consent,
             agent::commands::agent_context_audit_list,
             agent::commands::agent_brief_preview,
+            agent::commands::review_list_due,
             agent::commands::agent_session_list,
             agent::commands::agent_session_messages,
             agent::commands::agent_approval_list,

@@ -22,7 +22,13 @@ use crate::agent::tools::{Idempotency, ListedTool, RiskLevel};
 
 const DEFAULT_MAX_ITERATIONS: i64 = 6;
 const DEFAULT_TOKEN_BUDGET: i64 = 20000;
-const SYSTEM_PROMPT: &str = "你是智研的学习顾问助手。利用提供的工具回答用户目标；获取到信息后给出不含 tool_calls 的最终答复，使用中文。";
+const SYSTEM_PROMPT: &str = "你是智研的 AI 学习助手，帮助用户真正学会，而不是替用户完成。\
+核心教学法：\
+1. 打卡或汇报做题情况时，先根据所涉知识点提出 1-3 道简短检查题（优先基于用户的历史错题出变式题——同一考点、不同数字或问法），等用户回答后再继续。\
+2. 用户答错或求助时，不直接给答案：用反问引导其自己推导（苏格拉底式），逐步缩小范围，直到用户说出关键步骤再确认。\
+3. 根据检查结果如实给出 mastery_rating（1-5）：全对且轻松=5，全对=4，部分对=3，多数不会=2，完全不懂=1，并把它用于 record.checkin_plan。\
+4. 用户做错的题，主动建议用 wrong_question.create 记入错题库；复习巩固用 review.get_due 查询今日应复习项、review.complete 记录复习结果；已彻底掌握的用 mark_mastered 标记。\
+5. 利用提供的工具回答用户目标；获取到信息后给出不含 tool_calls 的最终答复，使用中文。";
 
 /// Version of the data-export consent policy. Bumping it invalidates every
 /// previously granted consent, forcing users to re-confirm the data scope.
@@ -866,6 +872,14 @@ mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::*;
+
+    #[test]
+    fn system_prompt_contains_teaching_directives() {
+        assert!(SYSTEM_PROMPT.contains("检查题"));
+        assert!(SYSTEM_PROMPT.contains("不直接给答案"));
+        assert!(SYSTEM_PROMPT.contains("变式"));
+        assert!(SYSTEM_PROMPT.contains("mastery_rating"));
+    }
     use crate::agent::executor::AgentExecutor;
     use crate::agent::llm::{LlmProvider, ProviderResponse, ProviderUsage, SyntheticProvider};
     use crate::agent::model::RunEvent;
@@ -941,7 +955,7 @@ mod tests {
         let offering = planner.tool_offering().await.unwrap();
         // Task 13: every registered tool is Rust-owned and offered to the
         // model (R3 writes stay approval-gated by their descriptor).
-        assert_eq!(offering.len(), 11);
+        assert_eq!(offering.len(), 13);
         // The provider-facing name is the dot-free alias (DeepSeek rejects
         // dotted function names), while the registry keeps the dotted name.
         let today = offering
@@ -967,7 +981,7 @@ mod tests {
             .await
             .unwrap();
         let offering = planner.tool_offering().await.unwrap();
-        assert_eq!(offering.len(), 11);
+        assert_eq!(offering.len(), 13);
         let checkin = offering
             .iter()
             .find(|t| t["function"]["name"] == "record_checkin_plan")

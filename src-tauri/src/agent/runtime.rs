@@ -557,7 +557,7 @@ mod tests {
     async fn runtime_is_the_public_tool_execution_boundary() {
         let (runtime, pool) = test_runtime().await;
         let listed = runtime.list_tools().await.unwrap();
-        assert_eq!(listed.len(), 11);
+        assert_eq!(listed.len(), 13);
         assert_eq!(
             listed
                 .iter()
@@ -652,7 +652,7 @@ mod tests {
 
         // Every listed tool is Rust-owned regardless of the legacy setting.
         let listed = runtime.list_tools().await.unwrap();
-        assert_eq!(listed.len(), 11);
+        assert_eq!(listed.len(), 13);
         for tool in &listed {
             assert_eq!(
                 tool.ownership,
@@ -1615,6 +1615,21 @@ mod tests {
                 && row.get("planned_tasks").is_some()
                 && row.get("planned_duration").is_some()
         }));
+        // Task 7：知识点任务携带确定性依据。draft_runtime 种子 kp-f（函数）掌握度
+        // 2、无错题；注意 fixture 科目按 id 排序（sub-e 在前），不能假设首行是数学。
+        let func_row = rows
+            .iter()
+            .find(|row| {
+                row["planned_tasks"]
+                    .as_str()
+                    .is_some_and(|task| task.contains("函数"))
+            })
+            .expect("draft 必须包含知识点“函数”的任务行");
+        assert_eq!(func_row["evidence"]["mastery"], serde_json::json!(2));
+        assert_eq!(
+            func_row["evidence"]["reason"],
+            serde_json::json!("自评掌握度较低(2/5)")
+        );
         assert!(preview["fields"].get("precondition_hash").is_some());
         // The preview never exposes the preview step id, the raw request, or
         // a key.

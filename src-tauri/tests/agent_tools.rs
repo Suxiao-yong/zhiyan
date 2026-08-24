@@ -2828,3 +2828,391 @@ fn legacy_specialized_write_api_is_rust_owned_with_inert_legacy_settings() {
         );
     });
 }
+
+// --- knowledge point mastery recompute (learning-effectiveness-loop Task 5) ---
+
+async fn seed_mastery_fixture(pool: &SqlitePool) {
+    seed_exam_tree(pool).await;
+    sqlx::query(
+        r#"
+        INSERT INTO study_plans (
+            id, exam_id, subject_id, knowledge_point_id, date, planned_tasks,
+            planned_duration, status, generated_by, sort_order, created_at, updated_at
+        ) VALUES ('plan-mastery', 'exam-1', 'subject-math', 'kp-function',
+                  '2026-07-17', '复习函数', 60, 'pending', 'local', 0,
+                  '2026-07-16 09:00:00', '2026-07-16 09:00:00')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn seed_history_rating(
+    pool: &SqlitePool,
+    id: &str,
+    date: &str,
+    created_at: &str,
+    rating: Option<i64>,
+) {
+    sqlx::query(
+        r#"
+        INSERT INTO study_records (
+            id, date, subject_id, knowledge_point_id, duration_min,
+            mastery_rating, created_at, updated_at
+        ) VALUES (?, ?, 'subject-math', 'kp-function', 30, ?, ?, ?)
+        "#,
+    )
+    .bind(id)
+    .bind(date)
+    .bind(rating)
+    .bind(created_at)
+    .bind(created_at)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn mastery_checkin_input(mastery_rating: Option<i64>) -> RecordCheckinPlanInput {
+    RecordCheckinPlanInput {
+        plan_id: "plan-mastery".to_owned(),
+        duration_min: 30,
+        content: None,
+        questions_count: 0,
+        correct_count: 0,
+        mastery_rating,
+        difficulty_notes: None,
+        mood: None,
+        session_time: None,
+        finish: false,
+        wrong_questions: Vec::new(),
+    }
+}
+
+#[test]
+fn checkin_updates_kp_mastery_from_recent_ratings() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_mastery_fixture(&pool).await;
+        // Two rated history rows plus the new rating=1 checkin: the three most
+        // recent rated records are 1 (2026-07-17), 5 (07-16), 5 (07-15).
+        seed_history_rating(
+            &pool,
+            "record-h1",
+            "2026-07-15",
+            "2026-07-15 09:00:00",
+            Some(5),
+        )
+        .await;
+        seed_history_rating(
+            &pool,
+            "record-h2",
+            "2026-07-16",
+            "2026-07-16 09:00:00",
+            Some(5),
+        )
+        .await;
+
+        let mut tx = pool.begin().await.unwrap();
+        record::checkin_plan(
+            &mut tx,
+            mastery_checkin_input(Some(1)),
+            BUSINESS_DATE,
+            "record-mastery-new",
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let m: i64 = sqlx::query_scalar(
+            "SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // ROUND(AVG(1, 5, 5)) = ROUND(3.67) = 4.
+        assert_eq!(m, 4);
+    });
+}
+
+#[test]
+fn checkin_without_any_rated_records_keeps_mastery_untouched() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_mastery_fixture(&pool).await;
+        // History exists but carries no mastery ratings: the aggregate must
+        // keep the self-assessed baseline (default 3).
+        seed_history_rating(
+            &pool,
+            "record-h1",
+            "2026-07-15",
+            "2026-07-15 09:00:00",
+            None,
+        )
+        .await;
+
+        let mut tx = pool.begin().await.unwrap();
+        record::checkin_plan(
+            &mut tx,
+            mastery_checkin_input(None),
+            BUSINESS_DATE,
+            "record-mastery-null",
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let m: i64 = sqlx::query_scalar(
+            "SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(m, 3);
+    });
+}
+
+#[test]
+fn first_rated_checkin_sets_mastery_directly() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_mastery_fixture(&pool).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        record::checkin_plan(
+            &mut tx,
+            mastery_checkin_input(Some(2)),
+            BUSINESS_DATE,
+            "record-mastery-first",
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let m: i64 = sqlx::query_scalar(
+            "SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(m, 2);
+    });
+}
+
+#[test]
+fn create_free_with_kp_recomputes_mastery_too() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_exam_tree(&pool).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        record::create_free(
+            &mut tx,
+            record::RecordCreateFreeInput {
+                exam_id: EXAM_ID.to_owned(),
+                date: BUSINESS_DATE.to_owned(),
+                subject_id: "subject-math".to_owned(),
+                knowledge_point_id: Some("kp-function".to_owned()),
+                duration_min: 45,
+                content: None,
+                questions_count: None,
+                correct_count: None,
+                mastery_rating: Some(4),
+            },
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let m: i64 = sqlx::query_scalar(
+            "SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(m, 4);
+    });
+}
+
+// --- review.get_due / review.complete (learning-effectiveness-loop Task 4) ---
+
+async fn seed_review_fixture(pool: &SqlitePool) {
+    seed_exam_tree(pool).await;
+    seed_agent_run(pool).await;
+    // Four wrong questions under the bound exam:
+    // - wq-due: overdue (next_review_at in the past)
+    // - wq-null: never scheduled (NULL next_review_at counts as due)
+    // - wq-future: scheduled in the future (not due)
+    // - wq-done: mastered, excluded even though overdue
+    sqlx::query(
+        r#"
+        INSERT INTO wrong_questions (id, subject_id, question_desc, next_review_at) VALUES
+            ('wq-due', 'subject-math', 'Overdue question', '2000-01-01'),
+            ('wq-null', 'subject-math', 'Never scheduled', NULL),
+            ('wq-future', 'subject-math', 'Future question', '2999-01-01');
+        INSERT INTO wrong_questions (id, subject_id, question_desc, mastered, next_review_at)
+            VALUES ('wq-done', 'subject-math', 'Mastered question', 1, '2000-01-01');
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[test]
+fn review_get_due_returns_due_and_unscheduled_only() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_review_fixture(&pool).await;
+
+        let response = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "review.get_due".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"exam_id": EXAM_ID}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let ToolCallResponse::Completed {
+            output,
+            replayed,
+            undo_available,
+            ..
+        } = response
+        else {
+            panic!("R0 must complete")
+        };
+        assert!(!replayed);
+        assert!(!undo_available);
+        assert_eq!(output["count"], 2);
+        let ids: Vec<&str> = output["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect();
+        // Never-scheduled first, then oldest next_review_at.
+        assert_eq!(ids, vec!["wq-null", "wq-due"]);
+        assert_eq!(output["items"][0]["subject_name"], "数学");
+        assert!(output["items"][0]["knowledge_point_name"].is_null());
+    });
+}
+
+#[test]
+fn review_complete_first_success_schedules_one_day_and_is_undoable() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_review_fixture(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+
+        let response = executor
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "review.complete".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"wrong_question_id": "wq-due", "quality": 4}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let ToolCallResponse::Completed {
+            step_id,
+            output,
+            replayed,
+            undo_available,
+        } = response
+        else {
+            panic!("R1 must complete")
+        };
+        assert!(!replayed);
+        assert!(undo_available);
+        assert_eq!(output["interval_days"], 1.0);
+
+        let (count, ease): (i64, f64) = sqlx::query_as(
+            "SELECT review_count, ease_factor FROM wrong_questions WHERE id='wq-due'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+        assert!((ease - 2.5).abs() < 1e-9); // q=4 keeps the initial ease
+        let last_review: String =
+            sqlx::query_scalar("SELECT last_review_at FROM wrong_questions WHERE id='wq-due'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!last_review.is_empty());
+        let due_offset: i64 = sqlx::query_scalar(
+            "SELECT CAST(julianday(next_review_at) - julianday(date('now','localtime')) AS INTEGER) \
+             FROM wrong_questions WHERE id='wq-due'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(due_offset, 1);
+
+        // Undo restores the pre-review scheduling state.
+        executor.undo(&step_id).await.unwrap();
+        let restored: (i64, f64, f64, Option<String>) = sqlx::query_as(
+            "SELECT review_count, ease_factor, review_interval_days, next_review_at \
+             FROM wrong_questions WHERE id='wq-due'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(restored.0, 0);
+        assert!((restored.1 - 2.5).abs() < 1e-9);
+        assert!((restored.2 - 0.0).abs() < 1e-9);
+        assert_eq!(restored.3.as_deref(), Some("2000-01-01"));
+    });
+}
+
+#[test]
+fn review_complete_rejects_mastered_question() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_review_fixture(&pool).await;
+
+        let error = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "review.complete".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"wrong_question_id": "wq-done", "quality": 4}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "persistence_error");
+    });
+}
+
+#[test]
+fn review_complete_rejects_quality_out_of_range() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_review_fixture(&pool).await;
+
+        let error = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "review.complete".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"wrong_question_id": "wq-due", "quality": 9}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "tool_schema_invalid");
+    });
+}

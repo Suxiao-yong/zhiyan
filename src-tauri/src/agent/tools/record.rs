@@ -217,7 +217,40 @@ pub async fn create_free(
     .execute(&mut **tx)
     .await
     .map_err(|_| AgentError::Persistence("record.create_free insert failed".to_owned()))?;
+    // 掌握度重算与记录写入同事务：失败即整体回滚（SAVEPOINT 不变式）。
+    if let Some(kp_id) = &input.knowledge_point_id {
+        recompute_kp_mastery(tx, kp_id).await?;
+    }
     Ok(RecordCreateFreeOutput { id })
+}
+
+/// 打卡/自由记录写入成功后，用该知识点最近 3 条带评分的记录重算掌握度。
+/// 无评分记录时保持原值（COALESCE 保护）；评分本身限定 1–5，均值四舍五入
+/// 后天然落在 1..=5 内。必须在业务写入的同一事务（SAVEPOINT 段）内调用。
+pub(crate) async fn recompute_kp_mastery(
+    tx: &mut Transaction<'_, Sqlite>,
+    knowledge_point_id: &str,
+) -> Result<(), AgentError> {
+    sqlx::query(
+        r#"
+        UPDATE knowledge_points SET
+            current_mastery = COALESCE((
+                SELECT CAST(ROUND(AVG(mastery_rating)) AS INTEGER) FROM (
+                    SELECT mastery_rating FROM study_records
+                    WHERE knowledge_point_id = ? AND mastery_rating IS NOT NULL
+                    ORDER BY date DESC, created_at DESC, id DESC LIMIT 3
+                )
+            ), current_mastery),
+            updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+        "#,
+    )
+    .bind(knowledge_point_id)
+    .bind(knowledge_point_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| AgentError::Persistence("recompute_kp_mastery failed".to_owned()))?;
+    Ok(())
 }
 
 pub fn create_free_descriptor() -> ToolDescriptor {
@@ -362,6 +395,11 @@ pub async fn checkin_plan(
         .execute(&mut **tx)
         .await
         .map_err(map_sqlx)?;
+    }
+
+    // 掌握度重算与打卡写入同事务：失败即整体回滚（SAVEPOINT 不变式）。
+    if let Some(kp_id) = &plan.knowledge_point_id {
+        recompute_kp_mastery(tx, kp_id).await?;
     }
 
     sqlx::query(

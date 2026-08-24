@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **学习效果闭环（AI 辅助学习者）**：打通“打卡 → 检查题 → 掌握度 → 计划 → 复习调度”的效果闭环：
+  - **错题间隔重复调度**：migration v11 为 `wrong_questions` 增加 `next_review_at` / `review_interval_days` / `ease_factor` 列与到期部分索引（v1–v10 SQL 不变）；新增 `review.rs` SM-2 lite 纯函数模块（失败归零次日重见，成功按 1→6→×ease 爬梯，ease 地板 1.3、间隔上限 365 天）。
+  - **Agent 新工具**：`review.get_due`（R0 只读，查询今日应复习错题）与 `review.complete`（R1 自动执行 + 事务级撤销，SM-2 调度写入并自增 `review_count`）；工具总数 11→13。
+  - **掌握度闭环修复**：打卡/自由记录后按知识点最近 3 条 `mastery_rating` 均值重算 `knowledge_points.current_mastery`（此前该字段无任何更新路径，为死数据）；聚合在 SAVEPOINT 内执行，保持“failed tool 无已提交业务写入”不变式。
+  - **计划证据链**：周计划草案任务在审批卡携带确定性依据——掌握度、未掌握错题数、距考试天数与中文理由（仅进审批预览投影，不改变落库契约）。
+  - **教学法提示词**：Agent 打卡先出检查题、答错时苏格拉底式反问引导、基于历史错题出变式题、根据检查结果如实评定 `mastery_rating`。
+  - **提醒集成**：`task_reminder` 文案追加今日待复习错题数。
+  - **前端**：右栏工作台新增“今日复习”卡片（由新增只读命令 `review_list_due` 驱动，preview-safe 回退空结果）。
 - **Agent Runtime 基础（里程碑 1）**：通过 migration v4 新增五张持久化表（`agent_sessions`、`agent_runs`、`agent_steps`、`agent_events`、`agent_approvals`）；实现 Run 状态机、审计事件、启动恢复（`running` → `interrupted`，保留 `waiting_approval`）；暴露 `agent_health`、`agent_prepare_database_restore` 命令；新增隐藏路由 `/agent-debug`。
 - **Agent 工具与策略垂直切片（里程碑 2）**：
   - Migration v5：为 `agent_steps` 增加 `policy_json`、`receipt_json`、`undo_json`、`undone_at` 收据列与 `idx_agent_steps_tool_status` 索引，并写入 `plan.get_today=shadow`、`record.checkin_plan=typescript` 所有权默认值。

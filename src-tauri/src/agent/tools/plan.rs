@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::agent::error::AgentError;
 use crate::agent::plan_draft::{
     build_draft, DraftConflict, DraftInput, DraftKnowledgePoint, DraftSubject, PlanDraft,
+    TaskEvidence,
 };
 
 use super::{Confirmation, Idempotency, RiskLevel, ToolDescriptor};
@@ -550,7 +551,9 @@ pub async fn preview_generate(
     .map_err(|_| AgentError::Persistence("plan.preview_generate subjects read failed".to_owned()))?;
 
     let kps: Vec<DraftKnowledgePoint> = sqlx::query_as(
-        "SELECT id, subject_id, name, COALESCE(current_mastery, 0) AS current_mastery \
+        "SELECT id, subject_id, name, COALESCE(current_mastery, 0) AS current_mastery, \
+         (SELECT COUNT(*) FROM wrong_questions wq \
+           WHERE wq.knowledge_point_id = knowledge_points.id AND wq.mastered = 0) AS wrong_count \
          FROM knowledge_points WHERE subject_id IN (SELECT id FROM subjects WHERE exam_id = ?) \
          ORDER BY sort_order, created_at, id",
     )
@@ -643,6 +646,9 @@ pub struct ProjectedRow {
     pub knowledge_point_id: Option<String>,
     pub planned_tasks: String,
     pub planned_duration: i64,
+    /// 审批卡依据行（知识点任务才有）；apply 落库时不写入 study_plans。
+    #[serde(default)]
+    pub evidence: Option<TaskEvidence>,
 }
 
 /// Result of projecting the draft against the existing plan state.
@@ -692,6 +698,7 @@ pub fn project_apply_rows(
                 knowledge_point_id: task.knowledge_point_id.clone(),
                 planned_tasks: task.task.clone(),
                 planned_duration: task.duration_min,
+                evidence: task.evidence.clone(),
             });
         }
     }

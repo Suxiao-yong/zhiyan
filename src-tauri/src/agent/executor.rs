@@ -22,6 +22,7 @@ use super::{
             self, RecordCheckinPlanInput, RecordCheckinPlanOutput, RecordCreateFreeInput,
             RecordGetHistoryInput,
         },
+        review::{self, ReviewCompleteInput, ReviewGetDueInput},
         wrong_question::{self, WrongQuestionCreateInput, WrongQuestionMarkMasteredInput},
         Idempotency, ListedTool, RiskLevel, ToolDescriptor, ToolOwnership, ToolRegistry,
     },
@@ -32,6 +33,7 @@ use super::policy::ApprovalGrant;
 const RECORD_CHECKIN_TOOL: &str = "record.checkin_plan";
 const RECORD_CHECKIN_VERSION: &str = "1";
 const RECORD_CHECKIN_UNDO_KIND: &str = "record.checkin_plan.v1";
+const REVIEW_COMPLETE_UNDO_KIND: &str = "review.complete.v1";
 
 #[derive(Debug, Clone)]
 pub struct RecordCheckinExecutionRequest {
@@ -1008,6 +1010,53 @@ impl ToolDispatcher {
                         undo_available: false,
                     })
                 }
+                "review.get_due" => {
+                    let input: ReviewGetDueInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = review::get_due(tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "review.complete" => {
+                    let input: ReviewCompleteInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let prior: Option<(i64, f64, f64, Option<String>)> = sqlx::query_as(
+                        "SELECT review_count, ease_factor, review_interval_days, next_review_at \
+                         FROM wrong_questions WHERE id = ?",
+                    )
+                    .bind(&input.wrong_question_id)
+                    .fetch_optional(&mut **tx)
+                    .await
+                    .map_err(map_sqlx)?;
+                    let output = review::complete(tx, input.clone()).await?;
+                    // The tool already rejected missing/mastered rows; the
+                    // snapshot below is only taken for undo bookkeeping.
+                    let (review_count, ease_factor, review_interval_days, next_review_at) =
+                        prior.ok_or_else(|| {
+                            AgentError::Persistence(
+                                "wrong question not found or mastered".to_owned(),
+                            )
+                        })?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: Some(json!({
+                            "kind": REVIEW_COMPLETE_UNDO_KIND,
+                            "wrong_question_id": input.wrong_question_id,
+                            "review_count": review_count,
+                            "ease_factor": ease_factor,
+                            "review_interval_days": review_interval_days,
+                            "next_review_at": next_review_at,
+                        })),
+                        undo_available: true,
+                    })
+                }
                 RECORD_CHECKIN_TOOL => {
                     let input: RecordCheckinPlanInput =
                         serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
@@ -1244,8 +1293,100 @@ pub(crate) async fn undo_in_transaction(
             undo_checkin_in_transaction(tx, &step).await
         }
         ("plan.apply_preview", "1") => undo_apply_preview_in_transaction(tx, &step).await,
+        ("review.complete", "1") => undo_review_complete_in_transaction(tx, &step).await,
         _ => Err(AgentError::ToolSchemaInvalid),
     }
+}
+
+/// Undo for `review.complete`: restore the four scheduling columns captured
+/// before the review. A repeated undo is a conflict; a question that was
+/// re-mastered or deleted after the review refuses to roll back silently.
+async fn undo_review_complete_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    step: &UndoStep,
+) -> Result<ToolUndoResponse, AgentError> {
+    if step.undone_at.is_some() {
+        return Err(AgentError::Conflict);
+    }
+    let undo: Value = serde_json::from_str(
+        step.undo_json
+            .as_deref()
+            .ok_or(AgentError::ToolSchemaInvalid)?,
+    )
+    .map_err(|_| AgentError::ToolSchemaInvalid)?;
+    if undo["kind"].as_str() != Some(REVIEW_COMPLETE_UNDO_KIND) {
+        return Err(AgentError::ToolSchemaInvalid);
+    }
+    let wrong_question_id = undo["wrong_question_id"]
+        .as_str()
+        .ok_or(AgentError::ToolSchemaInvalid)?;
+    // 收据字段缺失时 fail-closed：拒绝撤销而不是把调度列静默清零。
+    let review_count = undo["review_count"]
+        .as_i64()
+        .ok_or(AgentError::ToolSchemaInvalid)?;
+    let ease_factor = undo["ease_factor"]
+        .as_f64()
+        .ok_or(AgentError::ToolSchemaInvalid)?;
+    let review_interval_days = undo["review_interval_days"]
+        .as_f64()
+        .ok_or(AgentError::ToolSchemaInvalid)?;
+    let updated = sqlx::query(
+        r#"
+        UPDATE wrong_questions
+        SET review_count = ?,
+            ease_factor = ?,
+            review_interval_days = ?,
+            next_review_at = ?
+        WHERE id = ? AND mastered = 0
+        "#,
+    )
+    .bind(review_count)
+    .bind(ease_factor)
+    .bind(review_interval_days)
+    .bind(undo["next_review_at"].as_str())
+    .bind(wrong_question_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    if updated.rows_affected() != 1 {
+        return Err(AgentError::Conflict);
+    }
+
+    let updated_step = sqlx::query(
+        "UPDATE agent_steps SET undone_at=datetime('now','localtime') \
+         WHERE id=? AND undone_at IS NULL",
+    )
+    .bind(&step.id)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    if updated_step.rows_affected() != 1 {
+        return Err(AgentError::IdempotencyConflict);
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO agent_events(run_id, step_id, event_type, payload_json)
+        VALUES(?, ?, 'tool.undone', ?)
+        "#,
+    )
+    .bind(&step.run_id)
+    .bind(&step.id)
+    .bind(
+        json!({
+            "step_id": step.id,
+            "tool_name": "review.complete",
+            "tool_version": "1",
+            "result": "undone"
+        })
+        .to_string(),
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    Ok(ToolUndoResponse {
+        step_id: step.id.clone(),
+        output: undo,
+    })
 }
 
 /// Undo for `record.checkin_plan`: remove the written record (and its wrong
@@ -1944,6 +2085,24 @@ async fn enforce_run_scope(
             }
         }
     }
+    // `review.complete` references a wrong question through a dedicated field.
+    if tool_name == "review.complete" {
+        if let Some(wq_id) = input.get("wrong_question_id").and_then(Value::as_str) {
+            let wq_exam: Option<String> = sqlx::query_scalar(
+                "SELECT s.exam_id FROM wrong_questions w JOIN subjects s ON s.id = w.subject_id \
+                 WHERE w.id = ?",
+            )
+            .bind(wq_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(map_sqlx)?;
+            if let Some(wq_exam) = wq_exam {
+                if wq_exam != exam {
+                    return Err(scope_error());
+                }
+            }
+        }
+    }
     // `plan.apply_preview` carries no business id, but its persisted draft is
     // exam-scoped: the draft's exam must equal the bound exam.
     if tool_name == "plan.apply_preview" {
@@ -1983,6 +2142,9 @@ fn input_references_business_data(tool_name: &str, input: &Value) -> bool {
         }
     }
     if tool_name == "wrong_question.mark_mastered" && input.get("id").is_some() {
+        return true;
+    }
+    if tool_name == "review.complete" && input.get("wrong_question_id").is_some() {
         return true;
     }
     if tool_name == "plan.apply_preview" {
@@ -2609,6 +2771,7 @@ async fn build_approval_preview(
                                     "subject_name": row.subject_name,
                                     "planned_tasks": row.planned_tasks,
                                     "planned_duration": row.planned_duration,
+                                    "evidence": row.evidence,
                                 })
                             })
                             .collect();

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import PlanCheckinBoard from '@/components/record/PlanCheckinBoard.vue'
+import ReviewWorkbench from '@/components/agent/ReviewWorkbench.vue'
 import StudyPlan from '@/pages/StudyPlan.vue'
 import StudyRecord from '@/pages/StudyRecord.vue'
 import { WORKBENCHES, type WorkbenchKey } from './workbench'
@@ -26,6 +27,7 @@ defineProps<{ workbench: WorkbenchKey }>()
         data-test="workbench-record"
         initial-tab="records"
       />
+      <ReviewWorkbench v-else-if="workbench === 'review'" data-test="workbench-review" />
     </div>
   </section>
 </template>
