@@ -31,6 +31,17 @@ pub struct DraftKnowledgePoint {
     pub subject_id: String,
     pub name: String,
     pub current_mastery: i64,
+    /// 该知识点下未掌握错题数（查询时以标量子查询统计）。
+    pub wrong_count: i64,
+}
+
+/// 计划任务的确定性依据（纯本地计算，不走 LLM）：审批卡展示“为什么安排这个任务”。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskEvidence {
+    pub mastery: i64,
+    pub wrong_question_count: i64,
+    pub days_to_exam: Option<i64>,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +74,9 @@ pub struct DraftTask {
     pub knowledge_point_id: Option<String>,
     pub task: String,
     pub duration_min: i64,
+    /// 知识点任务携带的确定性依据；无知识点的综合复习任务为 None。
+    #[serde(default)]
+    pub evidence: Option<TaskEvidence>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -114,6 +128,19 @@ pub struct PlanDraft {
 
 fn fmt_date(date: NaiveDate) -> String {
     date.format("%Y-%m-%d").to_string()
+}
+
+/// 依据文案的确定性规则：错题优先于掌握度自评。
+fn reason_text(mastery: i64, wrong_count: i64, has_wrong: bool) -> String {
+    if has_wrong && mastery <= 2 {
+        format!("掌握度偏低({mastery}/5)且有{wrong_count}道未掌握错题，优先攻克")
+    } else if has_wrong {
+        format!("有{wrong_count}道未掌握错题需巩固")
+    } else if mastery <= 2 {
+        format!("自评掌握度较低({mastery}/5)")
+    } else {
+        format!("巩固提升({mastery}/5)")
+    }
 }
 
 /// Phase split mirroring the retired TypeScript algorithm: fewer than 7 days
@@ -183,6 +210,7 @@ pub fn build_draft(input: DraftInput<'_>) -> Result<PlanDraft, AgentError> {
             )
             .num_days();
         let is_sunday = (epoch_days + 4).rem_euclid(7) == 0;
+        let days_to_exam = exam_date.signed_duration_since(date).num_days();
         let hours = if is_sunday {
             daily_hours / 2.0
         } else {
@@ -201,6 +229,7 @@ pub fn build_draft(input: DraftInput<'_>) -> Result<PlanDraft, AgentError> {
             }
             let kps = &mut kps_by_subject[index];
             let mut kp_id = None;
+            let mut evidence = None;
             let mut task = format!("{} 综合复习", subject.name);
             if !kps.is_empty() {
                 let idx = kp_idx[index] % kps.len();
@@ -211,6 +240,12 @@ pub fn build_draft(input: DraftInput<'_>) -> Result<PlanDraft, AgentError> {
                 } else {
                     format!("学习：{}", kp.name)
                 };
+                evidence = Some(TaskEvidence {
+                    mastery: kp.current_mastery,
+                    wrong_question_count: kp.wrong_count,
+                    days_to_exam: Some(days_to_exam),
+                    reason: reason_text(kp.current_mastery, kp.wrong_count, kp.wrong_count > 0),
+                });
                 kp_idx[index] = idx + 1;
             }
             tasks.push(DraftTask {
@@ -219,6 +254,7 @@ pub fn build_draft(input: DraftInput<'_>) -> Result<PlanDraft, AgentError> {
                 knowledge_point_id: kp_id,
                 task,
                 duration_min: min,
+                evidence,
             });
         }
         daily_plans.push(DraftDay {
@@ -338,18 +374,21 @@ mod tests {
                 subject_id: "sub-math".into(),
                 name: "函数".into(),
                 current_mastery: 2,
+                wrong_count: 0,
             },
             DraftKnowledgePoint {
                 id: "kp-geo".into(),
                 subject_id: "sub-math".into(),
                 name: "几何".into(),
                 current_mastery: 4,
+                wrong_count: 0,
             },
             DraftKnowledgePoint {
                 id: "kp-word".into(),
                 subject_id: "sub-eng".into(),
                 name: "词汇".into(),
                 current_mastery: 3,
+                wrong_count: 0,
             },
         ]
     }
@@ -457,6 +496,44 @@ mod tests {
             .conflicts
             .iter()
             .any(|c| c.kind == DraftConflictKind::KeepTodayActualSubjects));
+    }
+
+    #[test]
+    fn reason_text_covers_all_four_branches() {
+        assert_eq!(
+            reason_text(2, 3, true),
+            "掌握度偏低(2/5)且有3道未掌握错题，优先攻克"
+        );
+        assert_eq!(reason_text(4, 2, true), "有2道未掌握错题需巩固");
+        assert_eq!(reason_text(1, 0, false), "自评掌握度较低(1/5)");
+        assert_eq!(reason_text(4, 0, false), "巩固提升(4/5)");
+    }
+
+    #[test]
+    fn draft_tasks_attach_evidence_with_mastery_wrong_count_and_days_to_exam() {
+        let mut draft_input = input("2030-01-10", "2030-01-04", 4.0);
+        // kp-func：掌握度 2、未掌握错题 3（低掌握优先排期，占据第 0 天数学任务）。
+        draft_input.knowledge_points[0].wrong_count = 3;
+        let draft = build_draft(draft_input).unwrap();
+
+        let task = &draft.daily_plans[0].tasks[0];
+        assert_eq!(task.knowledge_point_id.as_deref(), Some("kp-func"));
+        let evidence = task.evidence.as_ref().expect("kp 任务必须携带 evidence");
+        assert_eq!(evidence.mastery, 2);
+        assert_eq!(evidence.wrong_question_count, 3);
+        assert_eq!(evidence.days_to_exam, Some(6)); // 2030-01-10 − 2030-01-04
+        assert_eq!(
+            evidence.reason,
+            "掌握度偏低(2/5)且有3道未掌握错题，优先攻克"
+        );
+
+        // 无知识点的“综合复习”任务不携带 evidence。
+        let mut draft_input = input("2030-01-10", "2030-01-04", 4.0);
+        draft_input.knowledge_points.clear();
+        let draft = build_draft(draft_input).unwrap();
+        let task = &draft.daily_plans[0].tasks[0];
+        assert_eq!(task.knowledge_point_id, None);
+        assert!(task.evidence.is_none());
     }
 
     #[test]

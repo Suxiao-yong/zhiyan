@@ -2761,6 +2761,7 @@ async fn build_approval_preview(
                                     "subject_name": row.subject_name,
                                     "planned_tasks": row.planned_tasks,
                                     "planned_duration": row.planned_duration,
+                                    "evidence": row.evidence,
                                 })
                             })
                             .collect();
