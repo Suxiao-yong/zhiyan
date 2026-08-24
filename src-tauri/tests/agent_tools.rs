@@ -2896,8 +2896,22 @@ fn checkin_updates_kp_mastery_from_recent_ratings() {
         seed_mastery_fixture(&pool).await;
         // Two rated history rows plus the new rating=1 checkin: the three most
         // recent rated records are 1 (2026-07-17), 5 (07-16), 5 (07-15).
-        seed_history_rating(&pool, "record-h1", "2026-07-15", "2026-07-15 09:00:00", Some(5)).await;
-        seed_history_rating(&pool, "record-h2", "2026-07-16", "2026-07-16 09:00:00", Some(5)).await;
+        seed_history_rating(
+            &pool,
+            "record-h1",
+            "2026-07-15",
+            "2026-07-15 09:00:00",
+            Some(5),
+        )
+        .await;
+        seed_history_rating(
+            &pool,
+            "record-h2",
+            "2026-07-16",
+            "2026-07-16 09:00:00",
+            Some(5),
+        )
+        .await;
 
         let mut tx = pool.begin().await.unwrap();
         record::checkin_plan(
@@ -2910,10 +2924,12 @@ fn checkin_updates_kp_mastery_from_recent_ratings() {
         .unwrap();
         tx.commit().await.unwrap();
 
-        let m: i64 = sqlx::query_scalar("SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let m: i64 = sqlx::query_scalar(
+            "SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         // ROUND(AVG(1, 5, 5)) = ROUND(3.67) = 4.
         assert_eq!(m, 4);
     });
@@ -2926,7 +2942,14 @@ fn checkin_without_any_rated_records_keeps_mastery_untouched() {
         seed_mastery_fixture(&pool).await;
         // History exists but carries no mastery ratings: the aggregate must
         // keep the self-assessed baseline (default 3).
-        seed_history_rating(&pool, "record-h1", "2026-07-15", "2026-07-15 09:00:00", None).await;
+        seed_history_rating(
+            &pool,
+            "record-h1",
+            "2026-07-15",
+            "2026-07-15 09:00:00",
+            None,
+        )
+        .await;
 
         let mut tx = pool.begin().await.unwrap();
         record::checkin_plan(
@@ -2939,10 +2962,12 @@ fn checkin_without_any_rated_records_keeps_mastery_untouched() {
         .unwrap();
         tx.commit().await.unwrap();
 
-        let m: i64 = sqlx::query_scalar("SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let m: i64 = sqlx::query_scalar(
+            "SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(m, 3);
     });
 }
@@ -2964,10 +2989,12 @@ fn first_rated_checkin_sets_mastery_directly() {
         .unwrap();
         tx.commit().await.unwrap();
 
-        let m: i64 = sqlx::query_scalar("SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let m: i64 = sqlx::query_scalar(
+            "SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(m, 2);
     });
 }
@@ -2997,10 +3024,12 @@ fn create_free_with_kp_recomputes_mastery_too() {
         .unwrap();
         tx.commit().await.unwrap();
 
-        let m: i64 = sqlx::query_scalar("SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let m: i64 = sqlx::query_scalar(
+            "SELECT current_mastery FROM knowledge_points WHERE id = 'kp-function'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(m, 4);
     });
 }
@@ -3048,7 +3077,13 @@ fn review_get_due_returns_due_and_unscheduled_only() {
             })
             .await
             .unwrap();
-        let ToolCallResponse::Completed { output, replayed, undo_available, .. } = response else {
+        let ToolCallResponse::Completed {
+            output,
+            replayed,
+            undo_available,
+            ..
+        } = response
+        else {
             panic!("R0 must complete")
         };
         assert!(!replayed);
@@ -3086,7 +3121,13 @@ fn review_complete_first_success_schedules_one_day_and_is_undoable() {
             })
             .await
             .unwrap();
-        let ToolCallResponse::Completed { step_id, output, replayed, undo_available } = response else {
+        let ToolCallResponse::Completed {
+            step_id,
+            output,
+            replayed,
+            undo_available,
+        } = response
+        else {
             panic!("R1 must complete")
         };
         assert!(!replayed);
@@ -3101,12 +3142,11 @@ fn review_complete_first_success_schedules_one_day_and_is_undoable() {
         .unwrap();
         assert_eq!(count, 1);
         assert!((ease - 2.5).abs() < 1e-9); // q=4 keeps the initial ease
-        let last_review: String = sqlx::query_scalar(
-            "SELECT last_review_at FROM wrong_questions WHERE id='wq-due'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let last_review: String =
+            sqlx::query_scalar("SELECT last_review_at FROM wrong_questions WHERE id='wq-due'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(!last_review.is_empty());
         let due_offset: i64 = sqlx::query_scalar(
             "SELECT CAST(julianday(next_review_at) - julianday(date('now','localtime')) AS INTEGER) \

@@ -15,7 +15,10 @@ pub struct ReviewOutcome {
 
 impl ReviewOutcome {
     pub fn into_state(self) -> ReviewState {
-        ReviewState { interval_days: self.interval_days, ease_factor: self.ease_factor }
+        ReviewState {
+            interval_days: self.interval_days,
+            ease_factor: self.ease_factor,
+        }
     }
 }
 
@@ -30,7 +33,11 @@ pub fn schedule(state: ReviewState, quality: u8) -> ReviewOutcome {
     let ease = (state.ease_factor + delta).max(EASE_FLOOR);
 
     if q < 3.0 {
-        return ReviewOutcome { interval_days: 0.0, ease_factor: ease, due_in_days: 1.0 };
+        return ReviewOutcome {
+            interval_days: 0.0,
+            ease_factor: ease,
+            due_in_days: 1.0,
+        };
     }
     let interval = if state.interval_days <= 0.0 {
         1.0
@@ -39,7 +46,11 @@ pub fn schedule(state: ReviewState, quality: u8) -> ReviewOutcome {
     } else {
         (state.interval_days * ease).min(INTERVAL_CAP)
     };
-    ReviewOutcome { interval_days: interval, ease_factor: ease, due_in_days: interval }
+    ReviewOutcome {
+        interval_days: interval,
+        ease_factor: ease,
+        due_in_days: interval,
+    }
 }
 
 #[cfg(test)]
@@ -48,26 +59,50 @@ mod tests {
 
     #[test]
     fn first_success_schedules_one_day() {
-        let out = schedule(ReviewState { interval_days: 0.0, ease_factor: 2.5 }, 4);
+        let out = schedule(
+            ReviewState {
+                interval_days: 0.0,
+                ease_factor: 2.5,
+            },
+            4,
+        );
         assert_eq!(out.due_in_days, 1.0);
         assert_eq!(out.interval_days, 1.0);
     }
 
     #[test]
     fn second_success_jumps_to_six_days() {
-        let out = schedule(ReviewState { interval_days: 1.0, ease_factor: 2.5 }, 4);
+        let out = schedule(
+            ReviewState {
+                interval_days: 1.0,
+                ease_factor: 2.5,
+            },
+            4,
+        );
         assert_eq!(out.interval_days, 6.0);
     }
 
     #[test]
     fn later_success_multiplies_by_ease() {
-        let out = schedule(ReviewState { interval_days: 6.0, ease_factor: 2.5 }, 4);
+        let out = schedule(
+            ReviewState {
+                interval_days: 6.0,
+                ease_factor: 2.5,
+            },
+            4,
+        );
         assert!((out.interval_days - 15.0).abs() < 1e-9); // 6 * 2.5
     }
 
     #[test]
     fn failure_resets_interval_but_ease_stays_above_floor() {
-        let out = schedule(ReviewState { interval_days: 30.0, ease_factor: 2.5 }, 1);
+        let out = schedule(
+            ReviewState {
+                interval_days: 30.0,
+                ease_factor: 2.5,
+            },
+            1,
+        );
         assert_eq!(out.interval_days, 0.0);
         assert_eq!(out.due_in_days, 1.0);
         assert!(out.ease_factor < 2.5 && out.ease_factor >= 1.3);
@@ -75,7 +110,10 @@ mod tests {
 
     #[test]
     fn ease_floor_is_130() {
-        let mut st = ReviewState { interval_days: 100.0, ease_factor: 1.3 };
+        let mut st = ReviewState {
+            interval_days: 100.0,
+            ease_factor: 1.3,
+        };
         for _ in 0..5 {
             st = schedule(st, 3).into_state();
         }
@@ -84,7 +122,13 @@ mod tests {
 
     #[test]
     fn interval_cap_365_days() {
-        let out = schedule(ReviewState { interval_days: 400.0, ease_factor: 2.8 }, 5);
+        let out = schedule(
+            ReviewState {
+                interval_days: 400.0,
+                ease_factor: 2.8,
+            },
+            5,
+        );
         assert!(out.interval_days <= 365.0);
     }
 }
