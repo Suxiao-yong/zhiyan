@@ -1,6 +1,6 @@
 [package]
 name = "zhiyan"
-version = "0.1.0"
+version = "0.2.0"
 description = "智研 - AI-driven study planner desktop app"
 authors = ["Suxiao-yong"]
 edition = "2021"
