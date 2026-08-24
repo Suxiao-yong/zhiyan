@@ -6,6 +6,7 @@ pub mod brief;
 mod credentials;
 pub mod db;
 pub mod notify;
+pub mod review;
 pub mod scheduler;
 pub mod tray;
 
