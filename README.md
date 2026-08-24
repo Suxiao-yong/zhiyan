@@ -81,7 +81,7 @@
 | 级别   | 策略                         | 典型工具                                                                              |
 | ------ | ---------------------------- | ------------------------------------------------------------------------------------- |
 | **R0** | 只读，自动执行               | `plan.get_today`、`record.get_history`、`plan.preview_generate`                       |
-| **R1** | 低风险写，自动 + 可撤销      | （当前未注册）                                                                        |
+| **R1** | 低风险写，自动 + 可撤销      | `review.complete`                                                                     |
 | **R2** | 写，需设置确认               | `plan.generate`                                                                       |
 | **R3** | 写，审批卡确认后执行，可撤销 | `plan.apply_preview`、`record.checkin_plan`、`record.create_free`、`wrong_question.*` |
 | **R4** | 仅导航                       | （策略边界，不注册工具）                                                              |
@@ -149,6 +149,8 @@ executor 校验 schema / 作用域 / 前置条件
 | `record.create_free`           | R3   | 审批 | —    | 重试安全     | 自由记录                                     |
 | `wrong_question.create`        | R3   | 审批 | —    | 重试安全     | 录入错题                                     |
 | `wrong_question.mark_mastered` | R3   | 审批 | —    | 重试安全     | 标记掌握                                     |
+| `review.get_due`               | R0   | 自动 | —    | 重试安全     | 今日应复习错题（到期或未安排的未掌握错题）   |
+| `review.complete`              | R1   | 自动 | ✅   | 重试安全     | 错题复习结果写入 SM-2 调度，可撤销           |
 
 协议层保障：
 
