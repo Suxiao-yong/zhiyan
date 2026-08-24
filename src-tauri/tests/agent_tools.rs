@@ -2828,3 +2828,175 @@ fn legacy_specialized_write_api_is_rust_owned_with_inert_legacy_settings() {
         );
     });
 }
+
+// --- review.get_due / review.complete (learning-effectiveness-loop Task 4) ---
+
+async fn seed_review_fixture(pool: &SqlitePool) {
+    seed_exam_tree(pool).await;
+    seed_agent_run(pool).await;
+    // Four wrong questions under the bound exam:
+    // - wq-due: overdue (next_review_at in the past)
+    // - wq-null: never scheduled (NULL next_review_at counts as due)
+    // - wq-future: scheduled in the future (not due)
+    // - wq-done: mastered, excluded even though overdue
+    sqlx::query(
+        r#"
+        INSERT INTO wrong_questions (id, subject_id, question_desc, next_review_at) VALUES
+            ('wq-due', 'subject-math', 'Overdue question', '2000-01-01'),
+            ('wq-null', 'subject-math', 'Never scheduled', NULL),
+            ('wq-future', 'subject-math', 'Future question', '2999-01-01');
+        INSERT INTO wrong_questions (id, subject_id, question_desc, mastered, next_review_at)
+            VALUES ('wq-done', 'subject-math', 'Mastered question', 1, '2000-01-01');
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[test]
+fn review_get_due_returns_due_and_unscheduled_only() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_review_fixture(&pool).await;
+
+        let response = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "review.get_due".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"exam_id": EXAM_ID}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let ToolCallResponse::Completed { output, replayed, undo_available, .. } = response else {
+            panic!("R0 must complete")
+        };
+        assert!(!replayed);
+        assert!(!undo_available);
+        assert_eq!(output["count"], 2);
+        let ids: Vec<&str> = output["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect();
+        // Never-scheduled first, then oldest next_review_at.
+        assert_eq!(ids, vec!["wq-null", "wq-due"]);
+        assert_eq!(output["items"][0]["subject_name"], "数学");
+        assert!(output["items"][0]["knowledge_point_name"].is_null());
+    });
+}
+
+#[test]
+fn review_complete_first_success_schedules_one_day_and_is_undoable() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_review_fixture(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+
+        let response = executor
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "review.complete".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"wrong_question_id": "wq-due", "quality": 4}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let ToolCallResponse::Completed { step_id, output, replayed, undo_available } = response else {
+            panic!("R1 must complete")
+        };
+        assert!(!replayed);
+        assert!(undo_available);
+        assert_eq!(output["interval_days"], 1.0);
+
+        let (count, ease): (i64, f64) = sqlx::query_as(
+            "SELECT review_count, ease_factor FROM wrong_questions WHERE id='wq-due'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+        assert!((ease - 2.5).abs() < 1e-9); // q=4 keeps the initial ease
+        let last_review: String = sqlx::query_scalar(
+            "SELECT last_review_at FROM wrong_questions WHERE id='wq-due'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!last_review.is_empty());
+        let due_offset: i64 = sqlx::query_scalar(
+            "SELECT CAST(julianday(next_review_at) - julianday(date('now','localtime')) AS INTEGER) \
+             FROM wrong_questions WHERE id='wq-due'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(due_offset, 1);
+
+        // Undo restores the pre-review scheduling state.
+        executor.undo(&step_id).await.unwrap();
+        let restored: (i64, f64, f64, Option<String>) = sqlx::query_as(
+            "SELECT review_count, ease_factor, review_interval_days, next_review_at \
+             FROM wrong_questions WHERE id='wq-due'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(restored.0, 0);
+        assert!((restored.1 - 2.5).abs() < 1e-9);
+        assert!((restored.2 - 0.0).abs() < 1e-9);
+        assert_eq!(restored.3.as_deref(), Some("2000-01-01"));
+    });
+}
+
+#[test]
+fn review_complete_rejects_mastered_question() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_review_fixture(&pool).await;
+
+        let error = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "review.complete".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"wrong_question_id": "wq-done", "quality": 4}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "persistence_error");
+    });
+}
+
+#[test]
+fn review_complete_rejects_quality_out_of_range() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_review_fixture(&pool).await;
+
+        let error = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "review.complete".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"wrong_question_id": "wq-due", "quality": 9}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "tool_schema_invalid");
+    });
+}

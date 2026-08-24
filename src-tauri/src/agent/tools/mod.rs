@@ -9,6 +9,7 @@ use crate::agent::error::AgentError;
 pub mod exam;
 pub mod plan;
 pub mod record;
+pub mod review;
 pub mod wrong_question;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -91,6 +92,8 @@ impl ToolRegistry {
             exam::descriptor(),
             wrong_question::create_descriptor(),
             wrong_question::mark_mastered_descriptor(),
+            review::get_due_descriptor(),
+            review::complete_descriptor(),
         ] {
             tools.insert(descriptor.name, descriptor);
         }
@@ -169,6 +172,8 @@ mod tests {
                 "record.checkin_plan",
                 "record.create_free",
                 "record.get_history",
+                "review.complete",
+                "review.get_due",
                 "wrong_question.create",
                 "wrong_question.mark_mastered"
             ]
