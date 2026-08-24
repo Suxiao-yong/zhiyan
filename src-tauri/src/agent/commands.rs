@@ -570,7 +570,7 @@ mod tests {
             INSERT INTO exams (id, name, exam_date) VALUES ('exam-due', 'Due', '2030-01-01');
             INSERT INTO subjects (id, exam_id, name) VALUES ('sub-due', 'exam-due', 'Math');
             INSERT INTO wrong_questions (id, subject_id, question_desc, next_review_at)
-                VALUES ('wq-a', 'sub-due', 'due', '2026-01-01'),
+                VALUES ('wq-a', 'sub-due', 'due', '2000-01-01'),
                        ('wq-b', 'sub-due', 'mastered', NULL);
             UPDATE wrong_questions SET mastered = 1 WHERE id = 'wq-b';
             INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-due');

@@ -1320,6 +1320,16 @@ async fn undo_review_complete_in_transaction(
     let wrong_question_id = undo["wrong_question_id"]
         .as_str()
         .ok_or(AgentError::ToolSchemaInvalid)?;
+    // 收据字段缺失时 fail-closed：拒绝撤销而不是把调度列静默清零。
+    let review_count = undo["review_count"]
+        .as_i64()
+        .ok_or(AgentError::ToolSchemaInvalid)?;
+    let ease_factor = undo["ease_factor"]
+        .as_f64()
+        .ok_or(AgentError::ToolSchemaInvalid)?;
+    let review_interval_days = undo["review_interval_days"]
+        .as_f64()
+        .ok_or(AgentError::ToolSchemaInvalid)?;
     let updated = sqlx::query(
         r#"
         UPDATE wrong_questions
@@ -1330,9 +1340,9 @@ async fn undo_review_complete_in_transaction(
         WHERE id = ? AND mastered = 0
         "#,
     )
-    .bind(undo["review_count"].as_i64().unwrap_or_default())
-    .bind(undo["ease_factor"].as_f64().unwrap_or_default())
-    .bind(undo["review_interval_days"].as_f64().unwrap_or_default())
+    .bind(review_count)
+    .bind(ease_factor)
+    .bind(review_interval_days)
     .bind(undo["next_review_at"].as_str())
     .bind(wrong_question_id)
     .execute(&mut **tx)

@@ -687,7 +687,7 @@ mod tests {
         sqlx::raw_sql(
             r#"
             INSERT INTO wrong_questions (id, subject_id, question_desc, next_review_at)
-                VALUES ('wq-due-1', 'sub-r', 'due past', '2026-07-01'),
+                VALUES ('wq-due-1', 'sub-r', 'due past', '2000-01-01'),
                        ('wq-due-2', 'sub-r', 'never scheduled', NULL);
             "#,
         )
