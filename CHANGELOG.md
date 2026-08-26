@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-26
+
+### Added
+
+- **内容管线（材料 → 概念 → 闪卡）**：从原始学习材料到间隔重复复习的完整闭环：
+  - **材料导入**：`material.create`（R3，审批确认后落库），支持粘贴/上传文本材料并按科目归档；migration v12 新增 `materials` / `flashcards` 表（forward-only，无 DROP/RENAME）。
+  - **概念拆解落库**：Agent 将材料拆解为知识点并经 `knowledge_point.create_batch`（R3）批量挂到知识树。
+  - **闪卡三件套**：`flashcard.create_batch`（R3，批量生成闪卡）、`flashcard.get_due`（R0，查询今日到期闪卡，与错题复习同口径：JOIN subjects 过滤考试、未掌握、NULL 或已到期）、`flashcard.complete`（R1 自动 + 事务级撤销，SM-2 lite 调度写入）；工具总数 13→18。
+  - **引用溯源**：闪卡与知识点携带 `material_id` + `source_ref`，复习时可回跳原始材料出处。
+  - **知识树思维导图**：新增 `knowledge_tree` 只读命令与前端思维导图视图（掌握度着色，ECharts 树图）；父子环守卫防止树结构损坏。
+  - **提醒扩展**：每日任务提醒在文案中同时统计今日到期错题与到期闪卡（各自 >0 才出现对应子句；单一类型只显示该部分）。
+
 ## [0.2.0] - 2026-08-24
 
 ### Added

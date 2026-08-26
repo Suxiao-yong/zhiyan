@@ -36,7 +36,7 @@
 
 智研是一个 Tauri 桌面应用，把"AI 学习助手"做成了一套**可审计、可撤回**的工程系统：
 
-- **纯 Agent**：计划生成、计划调整、学习记录、错题、复盘——所有 AI 能力都收敛到 Agent 对话，通过 11 个注册工具与你的数据交互
+- **纯 Agent**：计划生成、计划调整、学习记录、错题、材料导入与闪卡——所有 AI 能力都收敛到 Agent 对话，通过 18 个注册工具与你的数据交互
 - **半自主**：Agent 可以自由读取（R0），但**写操作必须经你确认**（R2 设置确认 / R3 审批卡），执行后还可整体撤销
 - **本地优先**：学习数据只存本地 SQLite；LLM API Key 存 OS 凭据管理器；发送给云端的是你确认过的聚合摘要
 
@@ -81,9 +81,9 @@
 | 级别   | 策略                         | 典型工具                                                                              |
 | ------ | ---------------------------- | ------------------------------------------------------------------------------------- |
 | **R0** | 只读，自动执行               | `plan.get_today`、`record.get_history`、`plan.preview_generate`                       |
-| **R1** | 低风险写，自动 + 可撤销      | `review.complete`                                                                     |
+| **R1** | 低风险写，自动 + 可撤销      | `review.complete`、`flashcard.complete`                                               |
 | **R2** | 写，需设置确认               | `plan.generate`                                                                       |
-| **R3** | 写，审批卡确认后执行，可撤销 | `plan.apply_preview`、`record.checkin_plan`、`record.create_free`、`wrong_question.*` |
+| **R3** | 写，审批卡确认后执行，可撤销 | `plan.apply_preview`、`record.checkin_plan`、`record.create_free`、`wrong_question.*`、`material.create`、`knowledge_point.create_batch`、`flashcard.create_batch` |
 | **R4** | 仅导航                       | （策略边界，不注册工具）                                                              |
 
 ### 审批闭环（R3 写操作的完整生命周期）
@@ -120,12 +120,12 @@ executor 校验 schema / 作用域 / 前置条件
 │  │  Agent 运行时（唯一 AI 入口）                          │  │
 │  │  planner（模型↔工具循环, OpenAI-compatible reqwest）    │  │
 │  │    → executor（事务/幂等/undo）                        │  │
-│  │    → policy（R0–R4）→ tools（11 个注册工具）           │  │
+│  │    → policy（R0–R4）→ tools（18 个注册工具）           │  │
 │  │    → repository（会话/Run/Step/审批/审计持久化）        │  │
 │  ├───────────────────────────────────────────────────────┤  │
 │  │  本地确定性能力层                                      │  │
 │  │  scheduler（提醒/逾期）· brief（每日简报）· tray        │  │
-│  │  credentials（keyring）· db（迁移 v1–v10, WAL）        │  │
+│  │  credentials（keyring）· db（迁移 v1–v12, WAL）        │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -134,7 +134,7 @@ executor 校验 schema / 作用域 / 前置条件
 
 ## Agent 工具协议
 
-工具注册表（`agent/tools/`）内置 11 个工具，全部 Rust 原生执行，输入/输出均经 JSON Schema 校验：
+工具注册表（`agent/tools/`）内置 18 个工具，全部 Rust 原生执行，输入/输出均经 JSON Schema 校验：
 
 | 工具                           | 风险 | 确认 | 撤销 | 幂等         | 能力                                         |
 | ------------------------------ | ---- | ---- | ---- | ------------ | -------------------------------------------- |
@@ -151,6 +151,13 @@ executor 校验 schema / 作用域 / 前置条件
 | `wrong_question.mark_mastered` | R3   | 审批 | —    | 重试安全     | 标记掌握                                     |
 | `review.get_due`               | R0   | 自动 | —    | 重试安全     | 今日应复习错题（到期或未安排的未掌握错题）   |
 | `review.complete`              | R1   | 自动 | ✅   | 重试安全     | 错题复习结果写入 SM-2 调度，可撤销           |
+| `material.create`              | R3   | 审批 | —    | 重试安全     | 导入学习材料并按科目归档                     |
+| `knowledge_point.create_batch` | R3   | 审批 | —    | 重试安全     | 从材料拆解的概念批量挂载到知识树             |
+| `flashcard.create_batch`       | R3   | 审批 | —    | 重试安全     | 批量生成闪卡（携带材料引用溯源）             |
+| `flashcard.get_due`            | R0   | 自动 | —    | 重试安全     | 今日到期闪卡（未掌握且 NULL 或已到期）       |
+| `flashcard.complete`           | R1   | 自动 | ✅   | 重试安全     | 闪卡复习结果写入 SM-2 调度，可撤销           |
+
+另有只读 Tauri 命令 `knowledge_tree`（非 Agent 工具），为知识树思维导图视图提供树形数据（掌握度着色）。
 
 协议层保障：
 
@@ -200,6 +207,14 @@ executor 校验 schema / 作用域 / 前置条件
 - **跨天归一化**：凌晨 04:00 前的实时记录归属前一天（业务"今日"一致）
 - **错题库**：`wrong_question.create` / `mark_mastered`（R3），支持复习计数与掌握标记
 
+### 📥 材料导入与闪卡复习
+
+- **材料导入**：对话中粘贴学习材料，Agent 经 `material.create`（R3）按科目归档落库
+- **概念拆解**：Agent 将材料拆解为知识点，经 `knowledge_point.create_batch`（R3）批量挂到知识树
+- **闪卡生成与复习**：`flashcard.create_batch`（R3）批量生成闪卡；每日提醒统计到期闪卡，右栏工作台“今日复习”驱动 `flashcard.complete`（R1）写入 SM-2 调度
+- **引用溯源**：闪卡与知识点携带材料出处（`material_id` + `source_ref`），可回跳原文
+- **知识树思维导图**：`knowledge_tree` 只读命令驱动的 ECharts 树图视图，按掌握度着色
+
 ### 🔔 本地提醒与托盘
 
 - `task_reminder`（默认 19:00，尊重 `reminder_time` 设置）与 `overdue_check`（09:00）由 Rust 调度器 60s tick 驱动，原子领取、日期级去重、失败重试
@@ -213,7 +228,7 @@ executor 校验 schema / 作用域 / 前置条件
 
 ## 数据与存储
 
-SQLite 单文件（WAL 模式，外键强制），17 张表：
+SQLite 单文件（WAL 模式，外键强制），19 张表：
 
 ### 业务数据
 
@@ -223,6 +238,8 @@ SQLite 单文件（WAL 模式，外键强制），17 张表：
 | `study_plans`                             | 每日计划（pending / in_progress / completed / skipped） |
 | `study_records`                           | 学习记录（打卡与自由记录，`plan_id` 关联）              |
 | `wrong_questions`                         | 错题（复习计数 / 掌握标记）                             |
+| `materials`                               | 学习材料（导入归档，闪卡/知识点的引用溯源来源）         |
+| `flashcards`                              | 闪卡（SM-2 调度 / 掌握标记 / 材料出处）                 |
 | `ai_analyses`                             | 历史分析表（只读弃用，保留兼容）                        |
 
 ### Agent 运行时
@@ -236,7 +253,7 @@ SQLite 单文件（WAL 模式，外键强制），17 张表：
 | `agent_memories`                | 长期记忆（保留表，新代码不读）             |
 | `agent_jobs` / `agent_messages` | 后台调度 / 会话消息                        |
 
-数据库迁移 v1–v10 **forward-only**（测试强制无 DROP / RENAME / DELETE），升级自动执行，操作手册见 `docs/agent/migration-runbook.md`。
+数据库迁移 v1–v12 **forward-only**（测试强制无 DROP / RENAME / DELETE），升级自动执行，操作手册见 `docs/agent/migration-runbook.md`。
 
 ## 隐私与安全
 
@@ -289,7 +306,7 @@ npx vue-tsc --noEmit
 npx eslint .
 npx prettier --check "src/**/*.{ts,vue}"
 
-# Rust：全部测试（lib 165 + agent_repository 12 + agent_tools 42）
+# Rust：全部测试（lib 183 + agent_repository 15 + agent_tools 65）
 cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 
 # Rust 质量门
