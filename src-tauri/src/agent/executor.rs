@@ -15,6 +15,7 @@ use super::{
     policy::{self, PolicyContext, PolicyDecision},
     tools::{
         exam,
+        material::{self, MaterialCreateInput},
         plan::{
             self, PlanApplyPreviewInput, PlanGenerateInput, PlanGetRangeInput, PlanGetTodayInput,
         },
@@ -966,6 +967,18 @@ impl ToolDispatcher {
                     let input: RecordCreateFreeInput =
                         serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
                     let output = record::create_free(tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "material.create" => {
+                    let input: MaterialCreateInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = material::create(tx, input).await?;
                     Ok(DispatchResult {
                         output: serde_json::to_value(output)
                             .map_err(|_| AgentError::ToolSchemaInvalid)?,
@@ -2888,6 +2901,22 @@ async fn build_approval_preview(
                 json!([]),
                 date.to_owned(),
                 json!({"subject_id": subject_id, "duration_min": duration, "date": date}),
+            )
+        }
+        "material.create" => {
+            let title = input.get("title").and_then(Value::as_str).unwrap_or("");
+            let content = input.get("content").and_then(Value::as_str).unwrap_or("");
+            let char_count = content.chars().count();
+            // Only the first 120 characters are excerpted; the full body never
+            // enters the approval preview.
+            let excerpt: String = content.chars().take(120).collect();
+            (
+                "新增学习资料".to_owned(),
+                1_i64,
+                format!("新增资料《{title}》共 {char_count} 字"),
+                json!([]),
+                String::new(),
+                json!({"title": title, "char_count": char_count, "excerpt": excerpt}),
             )
         }
         "wrong_question.create" => {

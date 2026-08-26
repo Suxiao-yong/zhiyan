@@ -17,7 +17,10 @@ use zhiyan_lib::{
     agent::commands::CommandError,
     agent::error::AgentError,
     agent::model::{ToolCallRequest, ToolCallResponse},
-    agent::tools::plan::{self, PlanGetTodayInput},
+    agent::tools::{
+        material,
+        plan::{self, PlanGetTodayInput},
+    },
     agent::{
         executor::{AgentExecutor, RecordCheckinExecutionRequest},
         repository::AgentRepository,
@@ -3214,5 +3217,176 @@ fn review_complete_rejects_quality_out_of_range() {
             .await
             .unwrap_err();
         assert_eq!(error.code(), "tool_schema_invalid");
+    });
+}
+
+// --- material.create (v0.3.0 Task 3, R3 paste-text import) ---
+
+#[test]
+fn material_create_applies_with_approval_and_stores_content() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_exam_tree(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+
+        // 200 chars: long enough to exercise the 120-char preview excerpt cap
+        // while the full body must never appear in preview or tool output.
+        let content = "甲".repeat(200);
+        let char_count = content.chars().count();
+        let ToolCallResponse::WaitingApproval {
+            approval_id,
+            preview,
+            ..
+        } = executor
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "material.create".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id": EXAM_ID,
+                    "subject_id": "subject-math",
+                    "title": "函数笔记",
+                    "content": content,
+                }),
+                idempotency_key: Some("material/create/1".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("material.create must request approval")
+        };
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM materials")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0,
+            "no business write before approval"
+        );
+
+        // The approval preview shows title + char count + a 120-char excerpt,
+        // never the full content.
+        let preview_json = serde_json::to_string(&preview).unwrap();
+        let excerpt: String = content.chars().take(120).collect();
+        assert_eq!(preview["fields"]["title"].as_str().unwrap(), "函数笔记");
+        assert_eq!(
+            preview["fields"]["char_count"].as_i64().unwrap(),
+            char_count as i64
+        );
+        assert_eq!(preview["fields"]["excerpt"].as_str().unwrap(), excerpt);
+        assert!(
+            !preview_json.contains(&content),
+            "preview must not contain the full content"
+        );
+
+        let approved = executor.resolve_approval(&approval_id, true).await.unwrap();
+        assert_eq!(approved.status, "approved");
+
+        let stored: (String, String, String) =
+            sqlx::query_as("SELECT exam_id, title, content FROM materials")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored.0, EXAM_ID);
+        assert_eq!(stored.1, "函数笔记");
+        assert_eq!(stored.2, content);
+
+        // Tool output carries material_id/title/char_count only — never the
+        // content itself.
+        let output_json: String =
+            sqlx::query_scalar("SELECT output_json FROM agent_steps WHERE id = ?")
+                .bind(&approved.step_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let output: Value = serde_json::from_str(&output_json).unwrap();
+        assert!(!output["material_id"].as_str().unwrap().is_empty());
+        assert_eq!(output["title"].as_str().unwrap(), "函数笔记");
+        assert_eq!(output["char_count"].as_i64().unwrap(), char_count as i64);
+        assert!(
+            !output_json.contains("甲"),
+            "tool output must not echo the content"
+        );
+    });
+}
+
+#[test]
+fn material_create_rejects_oversized_content() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_exam_tree(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+
+        for content in ["a".repeat(50_001), "中".repeat(50_001)] {
+            let error = executor
+                .execute(ToolCallRequest {
+                    run_id: "run-checkin".to_owned(),
+                    step_index: 0,
+                    tool_name: "material.create".to_owned(),
+                    tool_version: "1".to_owned(),
+                    input: serde_json::json!({
+                        "exam_id": EXAM_ID,
+                        "subject_id": "subject-math",
+                        "title": "超长资料",
+                        "content": content,
+                    }),
+                    idempotency_key: None,
+                    approval_id: None,
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "tool_schema_invalid");
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM materials")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0,
+            "oversized content must never be written"
+        );
+    });
+}
+
+#[test]
+fn material_create_rejects_subject_not_in_exam() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_exam_tree(&pool).await;
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO exams (id, name, exam_date) VALUES ('exam-2', 'Other', '2027-01-01');
+            INSERT INTO subjects (id, exam_id, name) VALUES ('subject-other', 'exam-2', '英语');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let error = material::create(
+            &mut tx,
+            material::MaterialCreateInput {
+                exam_id: Some(EXAM_ID.to_owned()),
+                subject_id: "subject-other".to_owned(),
+                title: "越权资料".to_owned(),
+                content: "不应写入".to_owned(),
+            },
+        )
+        .await
+        .unwrap_err();
+        tx.rollback().await.unwrap();
+        assert_eq!(error.code(), "persistence_error");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM materials")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0
+        );
     });
 }
