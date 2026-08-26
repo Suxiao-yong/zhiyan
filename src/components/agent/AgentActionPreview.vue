@@ -31,6 +31,7 @@ interface PreviewRow {
     wrong_question_count?: number
     days_to_exam?: number | null
     reason?: string
+    source_ref?: string | null
   } | null
 }
 
@@ -94,6 +95,13 @@ const hasPrecondition = computed(() => {
             data-test="action-preview-row-evidence"
           >
             依据：{{ row.evidence.reason }}
+          </span>
+          <span
+            v-if="row.evidence?.source_ref"
+            class="action-preview__row-evidence"
+            data-test="action-preview-row-source-ref"
+          >
+            出处：{{ row.evidence.source_ref }}
           </span>
         </div>
         <p

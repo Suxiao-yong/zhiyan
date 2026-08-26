@@ -33,6 +33,9 @@ pub struct DraftKnowledgePoint {
     pub current_mastery: i64,
     /// 该知识点下未掌握错题数（查询时以标量子查询统计）。
     pub wrong_count: i64,
+    /// 材料出处（§N / §N-§M）；无关联材料时为 None。
+    #[serde(default)]
+    pub source_ref: Option<String>,
 }
 
 /// 计划任务的确定性依据（纯本地计算，不走 LLM）：审批卡展示“为什么安排这个任务”。
@@ -42,6 +45,10 @@ pub struct TaskEvidence {
     pub wrong_question_count: i64,
     pub days_to_exam: Option<i64>,
     pub reason: String,
+    /// 材料出处（§N / §N-§M），仅当知识点关联了材料时存在；
+    /// default + skip 兼容旧审批收据的反序列化与快照对比。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,6 +252,7 @@ pub fn build_draft(input: DraftInput<'_>) -> Result<PlanDraft, AgentError> {
                     wrong_question_count: kp.wrong_count,
                     days_to_exam: Some(days_to_exam),
                     reason: reason_text(kp.current_mastery, kp.wrong_count, kp.wrong_count > 0),
+                    source_ref: kp.source_ref.clone(),
                 });
                 kp_idx[index] = idx + 1;
             }
@@ -375,6 +383,7 @@ mod tests {
                 name: "函数".into(),
                 current_mastery: 2,
                 wrong_count: 0,
+                source_ref: None,
             },
             DraftKnowledgePoint {
                 id: "kp-geo".into(),
@@ -382,6 +391,7 @@ mod tests {
                 name: "几何".into(),
                 current_mastery: 4,
                 wrong_count: 0,
+                source_ref: None,
             },
             DraftKnowledgePoint {
                 id: "kp-word".into(),
@@ -389,6 +399,7 @@ mod tests {
                 name: "词汇".into(),
                 current_mastery: 3,
                 wrong_count: 0,
+                source_ref: None,
             },
         ]
     }
@@ -534,6 +545,26 @@ mod tests {
         let task = &draft.daily_plans[0].tasks[0];
         assert_eq!(task.knowledge_point_id, None);
         assert!(task.evidence.is_none());
+    }
+
+    #[test]
+    fn evidence_carries_material_source_ref_when_present() {
+        // kp-func 带材料出处；kp-geo 无出处（None）。
+        let mut draft_input = input("2030-01-10", "2030-01-04", 4.0);
+        draft_input.knowledge_points[0].source_ref = Some("§1-§2".to_owned());
+        let draft = build_draft(draft_input).unwrap();
+
+        // 第 0 天数学任务排 kp-func（低掌握度优先）。
+        let task = &draft.daily_plans[0].tasks[0];
+        assert_eq!(task.knowledge_point_id.as_deref(), Some("kp-func"));
+        let evidence = task.evidence.as_ref().expect("kp 任务必须携带 evidence");
+        assert_eq!(evidence.source_ref.as_deref(), Some("§1-§2"));
+
+        // 第 1 天数学任务轮转到 kp-geo（无材料出处）。
+        let second = &draft.daily_plans[1].tasks[0];
+        assert_eq!(second.knowledge_point_id.as_deref(), Some("kp-geo"));
+        let evidence = second.evidence.as_ref().expect("kp 任务必须携带 evidence");
+        assert!(evidence.source_ref.is_none());
     }
 
     #[test]

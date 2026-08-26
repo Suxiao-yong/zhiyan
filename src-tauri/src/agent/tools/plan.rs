@@ -553,7 +553,8 @@ pub async fn preview_generate(
     let kps: Vec<DraftKnowledgePoint> = sqlx::query_as(
         "SELECT id, subject_id, name, COALESCE(current_mastery, 0) AS current_mastery, \
          (SELECT COUNT(*) FROM wrong_questions wq \
-           WHERE wq.knowledge_point_id = knowledge_points.id AND wq.mastered = 0) AS wrong_count \
+           WHERE wq.knowledge_point_id = knowledge_points.id AND wq.mastered = 0) AS wrong_count, \
+         material_id, source_ref \
          FROM knowledge_points WHERE subject_id IN (SELECT id FROM subjects WHERE exam_id = ?) \
          ORDER BY sort_order, created_at, id",
     )
