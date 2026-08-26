@@ -310,19 +310,36 @@ impl Scheduler {
                     .unwrap_or_default();
                 let unfinished = stats.planned - stats.completed - stats.skipped;
                 if unfinished > 0 {
-                    // Task 8: mention due reviews when any exist; a failed count
-                    // silently skips the extra line so the main reminder holds.
+                    // Task 8/10: mention due reviews when any exist; a failed
+                    // count silently skips its clause so the main reminder holds.
                     let mut body = format!("今日还有 {unfinished} 项任务未完成。");
                     let due_reviews = crate::agent::tools::review::count_due(&self.pool, &exam_id)
                         .await
                         .unwrap_or(0);
-                    if due_reviews > 0 {
-                        body.push_str(&format!("今天还有 {due_reviews} 道错题待复习。"));
+                    let due_flashcards =
+                        crate::agent::tools::flashcard::count_due(&self.pool, &exam_id)
+                            .await
+                            .unwrap_or(0);
+                    match (due_reviews, due_flashcards) {
+                        (0, 0) => {}
+                        (reviews, 0) => {
+                            body.push_str(&format!("今天还有 {reviews} 道错题待复习。"));
+                        }
+                        (0, flashcards) => {
+                            body.push_str(&format!("今天还有 {flashcards} 张闪卡待复习。"));
+                        }
+                        (reviews, flashcards) => {
+                            body.push_str(&format!(
+                                "今天还有 {reviews} 道错题、{flashcards} 张闪卡待复习。"
+                            ));
+                        }
                     }
                     let _ = self.notifications.send("今日任务提醒", body);
-                    JobOutcome::Done(
-                        json!({ "unfinished": unfinished, "due_reviews": due_reviews }),
-                    )
+                    JobOutcome::Done(json!({
+                        "unfinished": unfinished,
+                        "due_reviews": due_reviews,
+                        "due_flashcards": due_flashcards,
+                    }))
                 } else {
                     JobOutcome::Done(json!({ "unfinished": 0, "note": "all done" }))
                 }
@@ -671,8 +688,9 @@ mod tests {
                 assert!(notification.body.contains("2"));
                 // Notification bodies never carry plan text.
                 assert!(!notification.body.contains("rp-"));
-                // No due reviews seeded: the review line must be absent.
+                // No due reviews or flashcards seeded: neither line appears.
                 assert!(!notification.body.contains("待复习"));
+                assert!(!notification.body.contains("闪卡"));
             }
         }
         assert!(titles.contains(&"今日任务提醒".to_owned()));
@@ -719,6 +737,97 @@ mod tests {
             }
         }
         assert!(mentioned, "task reminder must mention due reviews");
+    }
+
+    #[tokio::test]
+    async fn task_reminder_mentions_due_flashcards_alongside_wrong_questions() {
+        let pool = scheduler_pool().await;
+        seed_exam_with_plans(&pool).await;
+        // Two due wrong questions and three due flashcards: the combined
+        // sentence names both counts.
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO wrong_questions (id, subject_id, question_desc, next_review_at)
+                VALUES ('wq-due-1', 'sub-r', 'due past', '2000-01-01'),
+                       ('wq-due-2', 'sub-r', 'never scheduled', NULL);
+            INSERT INTO flashcards (id, subject_id, front, back, next_review_at)
+                VALUES ('fc-due-1', 'sub-r', 'a', 'b', '2000-01-01'),
+                       ('fc-due-2', 'sub-r', 'c', 'd', NULL),
+                       ('fc-due-3', 'sub-r', 'e', 'f', '2000-01-02');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-r')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (scheduler, mut notifications) = test_scheduler(pool.clone());
+        scheduler
+            .schedule(
+                JobType::TaskReminder,
+                "task_reminder:2026-07-18",
+                "2026-07-18 19:00:00",
+            )
+            .await
+            .unwrap();
+
+        scheduler.tick("2026-07-18 20:00:00").await.unwrap();
+
+        let mut mentioned = false;
+        while let Ok(notification) = notifications.try_recv() {
+            if notification.title == "今日任务提醒" {
+                assert!(notification.body.contains("2 道错题、3 张闪卡待复习"));
+                mentioned = true;
+            }
+        }
+        assert!(mentioned, "task reminder must name both due counts");
+    }
+
+    #[tokio::test]
+    async fn task_reminder_mentions_flashcards_without_wrong_questions() {
+        let pool = scheduler_pool().await;
+        seed_exam_with_plans(&pool).await;
+        // Flashcards only: the wrong-question clause must stay absent.
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO flashcards (id, subject_id, front, back, next_review_at)
+                VALUES ('fc-due-1', 'sub-r', 'a', 'b', '2000-01-01'),
+                       ('fc-due-2', 'sub-r', 'c', 'd', NULL),
+                       ('fc-due-3', 'sub-r', 'e', 'f', '2000-01-02');
+            INSERT INTO wrong_questions (id, subject_id, question_desc, next_review_at)
+                VALUES ('wq-later', 'sub-r', 'not yet due', '2999-01-01');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-r')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (scheduler, mut notifications) = test_scheduler(pool.clone());
+        scheduler
+            .schedule(
+                JobType::TaskReminder,
+                "task_reminder:2026-07-18",
+                "2026-07-18 19:00:00",
+            )
+            .await
+            .unwrap();
+
+        scheduler.tick("2026-07-18 20:00:00").await.unwrap();
+
+        let mut mentioned = false;
+        while let Ok(notification) = notifications.try_recv() {
+            if notification.title == "今日任务提醒" {
+                assert!(notification.body.contains("3 张闪卡待复习"));
+                assert!(!notification.body.contains("道错题"));
+                mentioned = true;
+            }
+        }
+        assert!(mentioned, "task reminder must mention due flashcards");
     }
 
     #[tokio::test]
