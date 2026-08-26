@@ -113,6 +113,40 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 12,
+            description: "content side: materials, flashcards, knowledge point provenance",
+            sql: r#"
+                CREATE TABLE materials (
+                    id TEXT PRIMARY KEY,
+                    exam_id TEXT NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+                    subject_id TEXT NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+                );
+                ALTER TABLE knowledge_points ADD COLUMN material_id TEXT REFERENCES materials(id) ON DELETE SET NULL;
+                ALTER TABLE knowledge_points ADD COLUMN source_ref TEXT;
+                CREATE TABLE flashcards (
+                    id TEXT PRIMARY KEY,
+                    subject_id TEXT NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+                    knowledge_point_id TEXT REFERENCES knowledge_points(id) ON DELETE SET NULL,
+                    material_id TEXT REFERENCES materials(id) ON DELETE SET NULL,
+                    source_ref TEXT,
+                    front TEXT NOT NULL,
+                    back TEXT NOT NULL,
+                    review_count INTEGER NOT NULL DEFAULT 0,
+                    mastered INTEGER NOT NULL DEFAULT 0,
+                    next_review_at TEXT,
+                    review_interval_days REAL NOT NULL DEFAULT 0,
+                    ease_factor REAL NOT NULL DEFAULT 2.5,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+                    last_review_at TEXT
+                );
+                CREATE INDEX idx_flashcards_due ON flashcards(next_review_at) WHERE mastered = 0;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -515,9 +549,9 @@ mod tests {
             .collect();
 
         assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
-        // v1-v10 SQL is unchanged; v11 adds review-scheduling columns to
-        // wrong_questions (spaced repetition) and is the current latest.
-        assert_eq!(versions.last(), Some(&11));
+        // v1-v11 SQL is unchanged; v12 adds materials, flashcards and
+        // knowledge-point provenance columns and is the current latest.
+        assert_eq!(versions.last(), Some(&12));
     }
 
     #[test]
@@ -645,7 +679,7 @@ mod tests {
                 );
                 assert_eq!(
                     migration_list.last().map(|migration| migration.version),
-                    Some(11)
+                    Some(12)
                 );
             });
     }
@@ -1077,6 +1111,113 @@ mod tests {
             });
     }
 
+    #[test]
+    fn migration_v12_creates_materials_and_flashcards() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect("sqlite::memory:")
+                    .await
+                    .unwrap();
+                // Build a v11-era database first, then apply v12 on top.
+                for migration in migrations().iter().filter(|m| m.version <= 11) {
+                    sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+                }
+                for migration in migrations().iter().filter(|m| m.version == 12) {
+                    sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+                }
+
+                // materials exists with all expected columns.
+                let material_columns: Vec<String> = sqlx::query_scalar(
+                    "SELECT name FROM pragma_table_info('materials') ORDER BY cid",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+                for required in ["id", "exam_id", "subject_id", "title", "content", "created_at"] {
+                    assert!(
+                        material_columns.iter().any(|column| column == required),
+                        "materials.{required} must exist after v12"
+                    );
+                }
+
+                // flashcards exists with the three review-scheduling columns.
+                let flashcard_columns: Vec<String> = sqlx::query_scalar(
+                    "SELECT name FROM pragma_table_info('flashcards') ORDER BY cid",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+                for required in ["next_review_at", "review_interval_days", "ease_factor"] {
+                    assert!(
+                        flashcard_columns.iter().any(|column| column == required),
+                        "flashcards.{required} must exist after v12"
+                    );
+                }
+
+                // knowledge_points gains material_id and source_ref.
+                let kp_columns: Vec<String> = sqlx::query_scalar(
+                    "SELECT name FROM pragma_table_info('knowledge_points') ORDER BY cid",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+                for required in ["material_id", "source_ref"] {
+                    assert!(
+                        kp_columns.iter().any(|column| column == required),
+                        "knowledge_points.{required} must exist after v12"
+                    );
+                }
+
+                // A material can be inserted and referenced by a flashcard.
+                sqlx::raw_sql(
+                    "INSERT INTO exams (id, name, exam_date) VALUES ('exam-v12', 'V12', '2030-01-01');
+                     INSERT INTO subjects (id, exam_id, name) VALUES ('subject-v12', 'exam-v12', 'V12');
+                     INSERT INTO materials (id, exam_id, subject_id, title, content) VALUES (
+                         'material-v12', 'exam-v12', 'subject-v12', 'T', 'C'
+                     );
+                     INSERT INTO flashcards (id, subject_id, material_id, front, back) VALUES (
+                         'card-v12', 'subject-v12', 'material-v12', 'F', 'B'
+                     );",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+
+                // Foreign keys are enforced: an unknown subject_id must fail.
+                let fk_result = sqlx::raw_sql(
+                    "INSERT INTO materials (id, exam_id, subject_id, title, content) VALUES (
+                         'material-bad', 'exam-v12', 'subject-nonexistent', 'T', 'C'
+                     );",
+                )
+                .execute(&pool)
+                .await;
+                assert!(
+                    fk_result.is_err(),
+                    "inserting a material with an unknown subject_id must violate the FK"
+                );
+
+                // The partial due index exists and only covers mastered = 0.
+                let (index_count, index_sql): (i64, Option<String>) = sqlx::query_as(
+                    "SELECT COUNT(*), MAX(sql) FROM sqlite_master \
+                     WHERE type='index' AND name='idx_flashcards_due'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(index_count, 1);
+                let index_sql = index_sql.unwrap_or_default().to_uppercase();
+                assert!(
+                    index_sql.contains("MASTERED = 0"),
+                    "idx_flashcards_due must be partial over mastered = 0"
+                );
+            });
+    }
+
     async fn seed_v4_rows(pool: &sqlx::SqlitePool) {
         sqlx::raw_sql(
             r#"
@@ -1423,7 +1564,7 @@ mod tests {
                 // migration is executed only when its version is new, so a
                 // re-run of the entry never re-applies ALTER TABLE statements.
                 let mut applied = std::collections::HashSet::new();
-                // 1. Create the latest schema (v11 adds review-scheduling
+                // 1. Create the latest schema (v12 adds materials/flashcards
                 // columns, never distributed), then re-run to simulate upgrade.
                 for migration in migrations() {
                     if applied.insert(migration.version) {
