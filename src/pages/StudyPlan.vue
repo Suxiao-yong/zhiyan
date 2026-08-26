@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@/components/common/PageHeader.vue'
 import PlanCalendar from '@/components/plan/PlanCalendar.vue'
 import PlanList from '@/components/plan/PlanList.vue'
+import KnowledgeMindMap from '@/components/plan/KnowledgeMindMap.vue'
 import { useExamStore } from '@/stores/exam'
 
 // Task 4: the plan page only views and edits plans. Generation and adjustment
@@ -16,7 +17,7 @@ const examStore = useExamStore()
 const activeTab = ref('calendar')
 const refreshKey = ref(0)
 
-const validViews = ['calendar', 'list']
+const validViews = ['calendar', 'list', 'mind-map']
 
 onMounted(async () => {
   await examStore.loadExams()
@@ -48,6 +49,10 @@ watch(activeTab, (v) => {
       </el-tab-pane>
       <el-tab-pane label="列表" name="list" lazy>
         <PlanList :key="'lst-' + refreshKey" />
+      </el-tab-pane>
+      <!-- Task 8: 只读知识点思维导图；点击节点在组件内弹溯源 dialog，页面只透传 select -->
+      <el-tab-pane label="思维导图" name="mind-map" lazy>
+        <KnowledgeMindMap />
       </el-tab-pane>
     </el-tabs>
   </div>

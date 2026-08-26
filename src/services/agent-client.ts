@@ -119,6 +119,33 @@ export function reviewListDue(examId?: string | null): Promise<ReviewListDueOutp
   return invoke<ReviewListDueOutput>('review_list_due', { examId: examId ?? null })
 }
 
+/** Read-only knowledge-tree node for the mind-map view (v0.3.0 Task 8). */
+export interface KnowledgePointNode {
+  id: string
+  name: string
+  mastery: number
+  wrong_count: number
+  material_id: string | null
+  source_ref: string | null
+  children: KnowledgePointNode[]
+}
+
+export interface KnowledgeTreeSubject {
+  id: string
+  name: string
+  children: KnowledgePointNode[]
+}
+
+export interface KnowledgeTreeOutput {
+  exam_id: string | null
+  subjects: KnowledgeTreeSubject[]
+}
+
+/** Mind-map knowledge tree for the active/explicit exam; empty when no exam. */
+export function knowledgeTree(examId?: string | null): Promise<KnowledgeTreeOutput> {
+  return invoke<KnowledgeTreeOutput>('knowledge_tree', { examId: examId ?? null })
+}
+
 /** Agent OS reads (M5). */
 export function agentSessionList(limit?: number): Promise<AgentSession[]> {
   return invoke<AgentSession[]>('agent_session_list', { limit: limit ?? null })

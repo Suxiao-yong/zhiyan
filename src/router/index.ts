@@ -24,7 +24,7 @@ const routes = [
     component: () => import('@/pages/StudyPlan.vue'),
   },
   {
-    // 可选 view 参数：calendar|gantt|list|compare，用于 URL 直达某个 Tab（Phase 3）
+    // 可选 view 参数：calendar|list|mind-map，用于 URL 直达某个 Tab（Phase 3 / Task 8）
     path: '/study-plan/:view?',
     name: 'study-plan-view',
     component: () => import('@/pages/StudyPlan.vue'),
