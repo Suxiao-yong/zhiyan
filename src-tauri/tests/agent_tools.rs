@@ -18,7 +18,7 @@ use zhiyan_lib::{
     agent::error::AgentError,
     agent::model::{ToolCallRequest, ToolCallResponse},
     agent::tools::{
-        material,
+        knowledge_point_admin, material,
         plan::{self, PlanGetTodayInput},
     },
     agent::{
@@ -3387,6 +3387,276 @@ fn material_create_rejects_subject_not_in_exam() {
                 .await
                 .unwrap(),
             0
+        );
+    });
+}
+
+// --- knowledge_point.create_batch (v0.3.0 Task 4, R3 bulk kp import) ---
+
+#[test]
+fn kp_create_batch_applies_with_material_source() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_exam_tree(&pool).await;
+        sqlx::query(
+            "INSERT INTO materials(id,exam_id,subject_id,title,content) VALUES('mat-1',?, 'subject-math','泰勒级数讲义','正文')",
+        )
+        .bind(EXAM_ID)
+        .execute(&pool)
+        .await
+        .unwrap();
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+
+        let ToolCallResponse::WaitingApproval { approval_id, .. } = executor
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "knowledge_point.create_batch".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id": EXAM_ID,
+                    "subject_id": "subject-math",
+                    "material_id": "mat-1",
+                    "concepts": [
+                        {"name": "泰勒展开", "parent_name": null, "source_ref": "§1-§2"},
+                        {"name": "余项估计", "parent_name": "泰勒展开", "source_ref": "§3"}
+                    ]
+                }),
+                idempotency_key: Some("kp/create/1".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("knowledge_point.create_batch must request approval")
+        };
+        // No business write before approval (the seeded 'kp-function' row is the only kp).
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM knowledge_points")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let approved = executor.resolve_approval(&approval_id, true).await.unwrap();
+        assert_eq!(approved.status, "approved");
+
+        let rows: Vec<(
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )> = sqlx::query_as(
+            r#"
+                SELECT id, name, parent_id, material_id, source_ref
+                FROM knowledge_points
+                WHERE subject_id = 'subject-math' AND name IN ('泰勒展开', '余项估计')
+                ORDER BY rowid
+                "#,
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        let parent = &rows[0];
+        let child = &rows[1];
+        assert_eq!(parent.1, "泰勒展开");
+        assert_eq!(parent.2, None);
+        assert_eq!(child.1, "余项估计");
+        assert_eq!(child.2.as_deref(), Some(parent.0.as_str()));
+        for row in &rows {
+            assert_eq!(row.3.as_deref(), Some("mat-1"));
+        }
+        assert_eq!(parent.4.as_deref(), Some("§1-§2"));
+        assert_eq!(child.4.as_deref(), Some("§3"));
+
+        // Tool output: {created:[{id,name,parent_id}], count}
+        let output_json: String =
+            sqlx::query_scalar("SELECT output_json FROM agent_steps WHERE id = ?")
+                .bind(&approved.step_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let output: Value = serde_json::from_str(&output_json).unwrap();
+        assert_eq!(output["count"].as_i64().unwrap(), 2);
+        let created = output["created"].as_array().unwrap();
+        assert_eq!(created.len(), 2);
+        assert_eq!(created[0]["id"].as_str().unwrap(), parent.0);
+        assert_eq!(created[0]["name"], "泰勒展开");
+        assert_eq!(created[0]["parent_id"], Value::Null);
+        assert_eq!(created[1]["id"].as_str().unwrap(), child.0);
+        assert_eq!(created[1]["name"], "余项估计");
+        assert_eq!(created[1]["parent_id"].as_str().unwrap(), parent.0.as_str());
+    });
+}
+
+#[test]
+fn kp_create_batch_rejects_unknown_parent() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_exam_tree(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+
+        // '不存在节点' is neither earlier in this batch nor in the subject's
+        // existing kp tree ('函数') — must be rejected without any write.
+        let error = knowledge_point_admin::create_batch(
+            &mut tx,
+            knowledge_point_admin::KnowledgePointCreateBatchInput {
+                exam_id: None,
+                subject_id: "subject-math".to_owned(),
+                material_id: None,
+                concepts: vec![knowledge_point_admin::BatchConcept {
+                    name: "洛必达法则".to_owned(),
+                    parent_name: Some("不存在节点".to_owned()),
+                    source_ref: None,
+                }],
+            },
+        )
+        .await
+        .unwrap_err();
+        tx.rollback().await.unwrap();
+        assert_eq!(error.code(), "persistence_error");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM knowledge_points WHERE name='洛必达法则'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0
+        );
+    });
+}
+
+#[test]
+fn kp_create_batch_rejects_empty_and_oversized_batch() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_exam_tree(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+
+        for concepts in [
+            Vec::new(),
+            std::iter::repeat_n(
+                knowledge_point_admin::BatchConcept {
+                    name: "知识点".to_owned(),
+                    parent_name: None,
+                    source_ref: None,
+                },
+                51,
+            )
+            .collect::<Vec<_>>(),
+        ] {
+            let error = knowledge_point_admin::create_batch(
+                &mut tx,
+                knowledge_point_admin::KnowledgePointCreateBatchInput {
+                    exam_id: None,
+                    subject_id: "subject-math".to_owned(),
+                    material_id: None,
+                    concepts,
+                },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.code(), "tool_schema_invalid");
+        }
+    });
+
+    block_on(async {
+        // Schema layer rejects the same shapes at the dispatcher boundary.
+        let pool = migrated_pool().await;
+        seed_exam_tree(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let oversized: Vec<Value> =
+            std::iter::repeat_n(serde_json::json!({"name": "知识点"}), 51).collect();
+        for concepts in [serde_json::json!([]), serde_json::json!(oversized)] {
+            let error = executor
+                .execute(ToolCallRequest {
+                    run_id: "run-checkin".to_owned(),
+                    step_index: 0,
+                    tool_name: "knowledge_point.create_batch".to_owned(),
+                    tool_version: "1".to_owned(),
+                    input: serde_json::json!({
+                        "exam_id": EXAM_ID,
+                        "subject_id": "subject-math",
+                        "concepts": concepts,
+                    }),
+                    idempotency_key: None,
+                    approval_id: None,
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "tool_schema_invalid");
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM knowledge_points")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+    });
+}
+
+#[test]
+fn kp_create_batch_rejects_bad_source_ref_format() {
+    block_on(async {
+        // Schema layer: dispatcher pattern check.
+        let pool = migrated_pool().await;
+        seed_exam_tree(&pool).await;
+        seed_agent_run(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+        let error = executor
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "knowledge_point.create_batch".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id": EXAM_ID,
+                    "subject_id": "subject-math",
+                    "concepts": [{"name": "泰勒展开", "source_ref": "第3段"}],
+                }),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "tool_schema_invalid");
+    });
+
+    block_on(async {
+        // Execution layer: direct calls must hit the same guard.
+        let pool = migrated_pool().await;
+        seed_exam_tree(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let error = knowledge_point_admin::create_batch(
+            &mut tx,
+            knowledge_point_admin::KnowledgePointCreateBatchInput {
+                exam_id: None,
+                subject_id: "subject-math".to_owned(),
+                material_id: None,
+                concepts: vec![knowledge_point_admin::BatchConcept {
+                    name: "泰勒展开".to_owned(),
+                    parent_name: None,
+                    source_ref: Some("第3段".to_owned()),
+                }],
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), "tool_schema_invalid");
+        tx.rollback().await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM knowledge_points")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
         );
     });
 }

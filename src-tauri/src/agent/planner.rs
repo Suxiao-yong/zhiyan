@@ -955,7 +955,7 @@ mod tests {
         let offering = planner.tool_offering().await.unwrap();
         // Task 13: every registered tool is Rust-owned and offered to the
         // model (R3 writes stay approval-gated by their descriptor).
-        assert_eq!(offering.len(), 14);
+        assert_eq!(offering.len(), 15);
         // The provider-facing name is the dot-free alias (DeepSeek rejects
         // dotted function names), while the registry keeps the dotted name.
         let today = offering
@@ -981,7 +981,7 @@ mod tests {
             .await
             .unwrap();
         let offering = planner.tool_offering().await.unwrap();
-        assert_eq!(offering.len(), 14);
+        assert_eq!(offering.len(), 15);
         let checkin = offering
             .iter()
             .find(|t| t["function"]["name"] == "record_checkin_plan")

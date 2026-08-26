@@ -15,6 +15,7 @@ use super::{
     policy::{self, PolicyContext, PolicyDecision},
     tools::{
         exam,
+        knowledge_point_admin::{self, KnowledgePointCreateBatchInput},
         material::{self, MaterialCreateInput},
         plan::{
             self, PlanApplyPreviewInput, PlanGenerateInput, PlanGetRangeInput, PlanGetTodayInput,
@@ -967,6 +968,18 @@ impl ToolDispatcher {
                     let input: RecordCreateFreeInput =
                         serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
                     let output = record::create_free(tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "knowledge_point.create_batch" => {
+                    let input: KnowledgePointCreateBatchInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = knowledge_point_admin::create_batch(tx, input).await?;
                     Ok(DispatchResult {
                         output: serde_json::to_value(output)
                             .map_err(|_| AgentError::ToolSchemaInvalid)?,
@@ -2901,6 +2914,52 @@ async fn build_approval_preview(
                 json!([]),
                 date.to_owned(),
                 json!({"subject_id": subject_id, "duration_min": duration, "date": date}),
+            )
+        }
+        "knowledge_point.create_batch" => {
+            let concepts = input
+                .get("concepts")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            // Tree-indented preview: a concept whose parent_name matches an
+            // earlier entry is nested under it; every line carries its
+            // optional source_ref.
+            let mut depths: Vec<(String, usize)> = Vec::new();
+            let mut lines: Vec<String> = Vec::new();
+            for concept in &concepts {
+                let name = concept["name"].as_str().unwrap_or("");
+                let parent_name = concept["parent_name"].as_str();
+                let depth = parent_name
+                    .and_then(|parent| {
+                        depths
+                            .iter()
+                            .rev()
+                            .find(|(candidate, _)| candidate == parent)
+                            .map(|(_, depth)| *depth + 1)
+                    })
+                    .unwrap_or(0);
+                let source_ref = concept["source_ref"].as_str().unwrap_or("");
+                lines.push(format!(
+                    "{}{}{}",
+                    "  ".repeat(depth),
+                    name,
+                    if source_ref.is_empty() {
+                        String::new()
+                    } else {
+                        format!("（{source_ref}）")
+                    }
+                ));
+                depths.push((name.to_owned(), depth));
+            }
+            let count = concepts.len() as i64;
+            (
+                "批量新增知识点".to_owned(),
+                count,
+                format!("新建 {count} 个知识点：\n{}", lines.join("\n")),
+                json!([]),
+                String::new(),
+                json!({"lines": lines}),
             )
         }
         "material.create" => {
