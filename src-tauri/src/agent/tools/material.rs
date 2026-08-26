@@ -34,6 +34,10 @@ pub async fn create(
     tx: &mut Transaction<'_, Sqlite>,
     input: MaterialCreateInput,
 ) -> Result<MaterialCreateOutput, AgentError> {
+    // 执行层兑底：schema 校验在 dispatcher 层，直调本函数（如测试）也必须拦住超长 content。
+    if input.content.chars().count() > 50_000 {
+        return Err(AgentError::ToolSchemaInvalid);
+    }
     let subject_exam: Option<String> =
         sqlx::query_scalar("SELECT exam_id FROM subjects WHERE id = ?")
             .bind(&input.subject_id)
