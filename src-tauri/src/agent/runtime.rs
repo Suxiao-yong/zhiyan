@@ -557,7 +557,7 @@ mod tests {
     async fn runtime_is_the_public_tool_execution_boundary() {
         let (runtime, pool) = test_runtime().await;
         let listed = runtime.list_tools().await.unwrap();
-        assert_eq!(listed.len(), 15);
+        assert_eq!(listed.len(), 18);
         assert_eq!(
             listed
                 .iter()
@@ -652,7 +652,7 @@ mod tests {
 
         // Every listed tool is Rust-owned regardless of the legacy setting.
         let listed = runtime.list_tools().await.unwrap();
-        assert_eq!(listed.len(), 15);
+        assert_eq!(listed.len(), 18);
         for tool in &listed {
             assert_eq!(
                 tool.ownership,

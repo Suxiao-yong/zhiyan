@@ -7,6 +7,7 @@ use serde_json::Value;
 use crate::agent::error::AgentError;
 
 pub mod exam;
+pub mod flashcard;
 pub mod knowledge_point_admin;
 pub mod material;
 pub mod plan;
@@ -92,6 +93,9 @@ impl ToolRegistry {
             record::get_history_descriptor(),
             record::create_free_descriptor(),
             exam::descriptor(),
+            flashcard::create_batch_descriptor(),
+            flashcard::get_due_descriptor(),
+            flashcard::complete_descriptor(),
             knowledge_point_admin::create_batch_descriptor(),
             material::create_descriptor(),
             wrong_question::create_descriptor(),
@@ -168,6 +172,9 @@ mod tests {
             names,
             [
                 "exam.get_active",
+                "flashcard.complete",
+                "flashcard.create_batch",
+                "flashcard.get_due",
                 "knowledge_point.create_batch",
                 "material.create",
                 "plan.apply_preview",

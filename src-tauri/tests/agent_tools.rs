@@ -18,7 +18,7 @@ use zhiyan_lib::{
     agent::error::AgentError,
     agent::model::{ToolCallRequest, ToolCallResponse},
     agent::tools::{
-        knowledge_point_admin, material,
+        flashcard, knowledge_point_admin, material,
         plan::{self, PlanGetTodayInput},
     },
     agent::{
@@ -3658,5 +3658,427 @@ fn kp_create_batch_rejects_bad_source_ref_format() {
                 .unwrap(),
             1
         );
+    });
+}
+
+// --- flashcard.* (v0.3.0 Task 5: create_batch / get_due / complete) ---
+
+async fn seed_flashcard_fixture(pool: &SqlitePool) {
+    seed_exam_tree(pool).await;
+    seed_agent_run(pool).await;
+    // Four flashcards under the bound exam:
+    // - fc-due: overdue, carries kp/material/source_ref provenance
+    // - fc-null: never scheduled (NULL next_review_at counts as due)
+    // - fc-future: scheduled in the future (not due)
+    // - fc-done: mastered, excluded even though overdue
+    sqlx::raw_sql(
+        r#"
+        INSERT INTO materials (id, exam_id, subject_id, title, content)
+        VALUES ('mat-1', 'exam-1', 'subject-math', '讲义', '正文');
+        INSERT INTO flashcards (id, subject_id, knowledge_point_id, material_id, source_ref, front, back, next_review_at) VALUES
+            ('fc-due', 'subject-math', 'kp-function', 'mat-1', '§1', 'Overdue card', '答案A', '2000-01-01'),
+            ('fc-null', 'subject-math', NULL, NULL, NULL, 'Never scheduled', '答案B', NULL),
+            ('fc-future', 'subject-math', NULL, NULL, NULL, 'Future card', '答案C', '2999-01-01'),
+            ('fc-done', 'subject-math', NULL, NULL, NULL, 'Mastered card', '答案D', '2000-01-01');
+        UPDATE flashcards SET mastered = 1 WHERE id = 'fc-done';
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[test]
+fn flashcard_create_batch_applies_and_persists_schedule_defaults() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_flashcard_fixture(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+
+        let ToolCallResponse::WaitingApproval {
+            approval_id,
+            preview,
+            ..
+        } = executor
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "flashcard.create_batch".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({
+                    "exam_id": EXAM_ID,
+                    "subject_id": "subject-math",
+                    "cards": [
+                        {"front": "什么是泰勒级数？", "back": "函数在某点的幂级数展开"},
+                        {"front": "导数定义", "back": "极限", "knowledge_point_id": "kp-function", "material_id": "mat-1", "source_ref": "§2-§3"}
+                    ]
+                }),
+                idempotency_key: Some("flashcard/create/1".to_owned()),
+                approval_id: None,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("flashcard.create_batch must request approval")
+        };
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM flashcards WHERE front LIKE '%泰勒%'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0,
+            "no business write before approval"
+        );
+        // Approval preview lists every front plus the total count.
+        assert_eq!(preview["affected_count"], 2);
+        let lines = preview["fields"]["lines"].as_array().unwrap();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "什么是泰勒级数？");
+        assert!(serde_json::to_string(&preview)
+            .unwrap()
+            .contains("泰勒级数"));
+
+        let approved = executor.resolve_approval(&approval_id, true).await.unwrap();
+        assert_eq!(approved.status, "approved");
+
+        // Both cards persist; scheduling columns keep their defaults.
+        let plain: (String, Option<String>, Option<String>, Option<String>, f64, f64) = sqlx::query_as(
+            "SELECT id, knowledge_point_id, material_id, source_ref, review_interval_days, ease_factor \
+             FROM flashcards WHERE front = '什么是泰勒级数？'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!plain.0.is_empty());
+        assert_eq!(plain.1, None);
+        assert_eq!(plain.2, None);
+        assert_eq!(plain.3, None);
+        assert!((plain.4 - 0.0).abs() < 1e-9);
+        assert!((plain.5 - 2.5).abs() < 1e-9);
+
+        let sourced: (Option<String>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT knowledge_point_id, material_id, source_ref FROM flashcards WHERE front = '导数定义'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(sourced.0.as_deref(), Some("kp-function"));
+        assert_eq!(sourced.1.as_deref(), Some("mat-1"));
+        assert_eq!(sourced.2.as_deref(), Some("§2-§3"));
+        let next_review_at: Option<String> =
+            sqlx::query_scalar("SELECT next_review_at FROM flashcards WHERE front = '导数定义'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(next_review_at, None);
+    });
+}
+
+#[test]
+fn flashcard_create_batch_rejects_empty_or_oversized() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_flashcard_fixture(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+
+        let oversized = "长".repeat(501);
+        let thirty_one: Vec<Value> = (0..31)
+            .map(|_| serde_json::json!({"front": "a", "back": "b"}))
+            .collect();
+        let inputs = vec![
+            serde_json::json!({"exam_id": EXAM_ID, "subject_id": "subject-math", "cards": []}),
+            serde_json::json!({"exam_id": EXAM_ID, "subject_id": "subject-math", "cards": thirty_one}),
+            serde_json::json!({"exam_id": EXAM_ID, "subject_id": "subject-math", "cards": [{"front": oversized.clone(), "back": "b"}]}),
+            serde_json::json!({"exam_id": EXAM_ID, "subject_id": "subject-math", "cards": [{"front": "a", "back": oversized}]}),
+        ];
+        for input in inputs {
+            let error = executor
+                .execute(ToolCallRequest {
+                    run_id: "run-checkin".to_owned(),
+                    step_index: 0,
+                    tool_name: "flashcard.create_batch".to_owned(),
+                    tool_version: "1".to_owned(),
+                    input,
+                    idempotency_key: None,
+                    approval_id: None,
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), "tool_schema_invalid");
+        }
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM flashcards")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            4,
+            "rejected batches must never be written"
+        );
+
+        // 执行层兜底：direct calls bypass dispatcher schema validation and
+        // must hit the same guards (oversized field + bad source_ref).
+        let mut tx = pool.begin().await.unwrap();
+        for source_ref in [Some("第3段".to_owned()), None] {
+            let error = flashcard::create_batch(
+                &mut tx,
+                flashcard::FlashcardCreateBatchInput {
+                    exam_id: Some(EXAM_ID.to_owned()),
+                    subject_id: "subject-math".to_owned(),
+                    cards: vec![flashcard::NewFlashcard {
+                        front: "a".to_owned(),
+                        back: "长".repeat(501),
+                        knowledge_point_id: None,
+                        material_id: None,
+                        source_ref,
+                    }],
+                },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.code(), "tool_schema_invalid");
+        }
+        tx.rollback().await.unwrap();
+    });
+}
+
+#[test]
+fn flashcard_get_due_returns_mastered_false_and_due_or_null() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_flashcard_fixture(&pool).await;
+
+        let response = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "flashcard.get_due".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"exam_id": EXAM_ID}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let ToolCallResponse::Completed {
+            output,
+            replayed,
+            undo_available,
+            ..
+        } = response
+        else {
+            panic!("R0 must complete")
+        };
+        assert!(!replayed);
+        assert!(!undo_available);
+        assert_eq!(output["count"], 2);
+        let ids: Vec<&str> = output["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect();
+        // Never-scheduled first, then oldest next_review_at.
+        assert_eq!(ids, vec!["fc-null", "fc-due"]);
+        let items = output["items"].as_array().unwrap();
+        assert_eq!(items[0]["front"], "Never scheduled");
+        assert!(items[0]["knowledge_point_name"].is_null());
+        assert_eq!(items[0]["source_ref"].as_str(), None);
+        assert_eq!(items[1]["front"], "Overdue card");
+        assert_eq!(items[1]["source_ref"], "§1");
+        assert_eq!(items[1]["knowledge_point_name"], "函数");
+    });
+}
+
+#[test]
+fn flashcard_complete_first_success_schedules_one_day() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_flashcard_fixture(&pool).await;
+
+        let response = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "flashcard.complete".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"flashcard_id": "fc-due", "quality": 4}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap();
+        let ToolCallResponse::Completed {
+            output,
+            replayed,
+            undo_available,
+            ..
+        } = response
+        else {
+            panic!("R1 must complete")
+        };
+        assert!(!replayed);
+        assert!(undo_available);
+        assert_eq!(output["interval_days"], 1.0);
+
+        let (count, ease, mastered): (i64, f64, i64) = sqlx::query_as(
+            "SELECT review_count, ease_factor, mastered FROM flashcards WHERE id='fc-due'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(mastered, 0);
+        assert!((ease - 2.5).abs() < 1e-9); // q=4 keeps the initial ease
+        let due_offset: i64 = sqlx::query_scalar(
+            "SELECT CAST(julianday(next_review_at) - julianday(date('now','localtime')) AS INTEGER) \
+             FROM flashcards WHERE id='fc-due'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(due_offset, 1);
+    });
+}
+
+#[test]
+fn flashcard_complete_quality_five_masters_card() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_flashcard_fixture(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+
+        let ToolCallResponse::Completed { .. } = executor
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "flashcard.complete".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"flashcard_id": "fc-due", "quality": 5}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("R1 must complete")
+        };
+        let mastered: i64 = sqlx::query_scalar("SELECT mastered FROM flashcards WHERE id='fc-due'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(mastered, 1);
+
+        // A mastered card leaves the due list entirely.
+        let ToolCallResponse::Completed { output, .. } = executor
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 1,
+                tool_name: "flashcard.get_due".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"exam_id": EXAM_ID}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("R0 must complete")
+        };
+        assert_eq!(output["count"], 1);
+        assert_eq!(output["items"][0]["id"], "fc-null");
+    });
+}
+
+#[test]
+fn flashcard_complete_updates_and_undo_restores() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_flashcard_fixture(&pool).await;
+        // Custom pre-review scheduling state for all six receipt columns.
+        sqlx::query(
+            "UPDATE flashcards SET review_interval_days = 6.0, ease_factor = 2.8, \
+             review_count = 3, last_review_at = '2026-08-01 10:00:00' WHERE id = 'fc-due'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let executor = AgentExecutor::new(pool.clone());
+
+        let ToolCallResponse::Completed {
+            step_id, output, ..
+        } = executor
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "flashcard.complete".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"flashcard_id": "fc-due", "quality": 4}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("R1 must complete")
+        };
+        // schedule({6.0, 2.8}, 4): ease stays 2.8 (delta=0), interval 6*2.8=16.8.
+        assert!((output["interval_days"].as_f64().unwrap() - 16.8).abs() < 1e-9);
+        let updated: (i64, f64, f64, i64, String) = sqlx::query_as(
+            "SELECT review_count, ease_factor, review_interval_days, mastered, last_review_at \
+             FROM flashcards WHERE id='fc-due'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(updated.0, 4);
+        assert!((updated.1 - 2.8).abs() < 1e-9);
+        assert!((updated.2 - 16.8).abs() < 1e-9);
+        assert_eq!(updated.3, 0);
+        assert_ne!(updated.4, "2026-08-01 10:00:00");
+
+        // Undo restores all six pre-review values, including the NULL-free
+        // provenance of last_review_at and next_review_at.
+        executor.undo(&step_id).await.unwrap();
+        let restored: (Option<String>, i64, f64, f64, i64, String) = sqlx::query_as(
+            "SELECT next_review_at, review_count, ease_factor, review_interval_days, \
+             mastered, last_review_at FROM flashcards WHERE id='fc-due'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(restored.0.as_deref(), Some("2000-01-01"));
+        assert_eq!(restored.1, 3);
+        assert!((restored.2 - 2.8).abs() < 1e-9);
+        assert!((restored.3 - 6.0).abs() < 1e-9);
+        assert_eq!(restored.4, 0);
+        assert_eq!(restored.5, "2026-08-01 10:00:00");
+
+        // A repeated undo is a conflict.
+        let error = executor.undo(&step_id).await.unwrap_err();
+        assert_eq!(error.code(), "conflict");
+    });
+}
+
+#[test]
+fn flashcard_complete_rejects_quality_out_of_range() {
+    block_on(async {
+        let pool = migrated_pool().await;
+        seed_flashcard_fixture(&pool).await;
+
+        let error = AgentExecutor::new(pool.clone())
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "flashcard.complete".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"flashcard_id": "fc-due", "quality": 9}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "tool_schema_invalid");
     });
 }
