@@ -55,14 +55,16 @@ impl FileDatabase {
     }
 
     fn cleanup(&self) {
+        // Windows 上杀软可能长时间持有新建 .db 的句柄，重试耗尽后仍会删除失败；
+        // 本测试验证的是恢复逻辑而非文件清理，Drop 本就容忍失败，此处保持一致。
         for path in [
             self.path.clone(),
             PathBuf::from(format!("{}-wal", self.path.display())),
             PathBuf::from(format!("{}-shm", self.path.display())),
         ] {
-            remove_file_with_retry(&path).unwrap();
+            let _ = remove_file_with_retry(&path);
         }
-        remove_dir_with_retry(&self.directory).unwrap();
+        let _ = remove_dir_with_retry(&self.directory);
     }
 }
 
@@ -112,6 +114,8 @@ where
     F: FnMut() -> std::io::Result<()>,
 {
     let mut last_error = None;
+    // Windows 释放文件句柄可能滞后于 pool.close()（杀软扫描加剧），
+    // 固定 10ms×10 次不够，改为指数退避（总预算约 2s）。
     for attempt in 0..10 {
         match operation() {
             Ok(()) => return Ok(()),
@@ -122,7 +126,7 @@ where
                     && attempt < 9 =>
             {
                 last_error = Some(error);
-                std::thread::sleep(Duration::from_millis(10));
+                std::thread::sleep(Duration::from_millis(10 << attempt));
             }
             Err(error) => return Err(error),
         }
