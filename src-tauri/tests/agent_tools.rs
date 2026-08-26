@@ -4082,3 +4082,71 @@ fn flashcard_complete_rejects_quality_out_of_range() {
         assert_eq!(error.code(), "tool_schema_invalid");
     });
 }
+
+#[test]
+fn flashcard_complete_and_undo_round_trip_on_null_scheduled_card() {
+    block_on(async {
+        // A never-scheduled card (e.g. fresh from create_batch): all six
+        // scheduling columns start at their defaults, two of them NULL.
+        let pool = migrated_pool().await;
+        seed_flashcard_fixture(&pool).await;
+        let executor = AgentExecutor::new(pool.clone());
+
+        let before: (Option<String>, f64, f64, i64, Option<String>, i64) = sqlx::query_as(
+            "SELECT next_review_at, ease_factor, review_interval_days, review_count, \
+             last_review_at, mastered FROM flashcards WHERE id='fc-null'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(before.0, None);
+        assert!((before.1 - 2.5).abs() < 1e-9);
+        assert!((before.2 - 0.0).abs() < 1e-9);
+        assert_eq!(before.3, 0);
+        assert_eq!(before.4, None);
+        assert_eq!(before.5, 0);
+
+        let ToolCallResponse::Completed { step_id, .. } = executor
+            .execute(ToolCallRequest {
+                run_id: "run-checkin".to_owned(),
+                step_index: 0,
+                tool_name: "flashcard.complete".to_owned(),
+                tool_version: "1".to_owned(),
+                input: serde_json::json!({"flashcard_id": "fc-null", "quality": 4}),
+                idempotency_key: None,
+                approval_id: None,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("R1 must complete")
+        };
+        let after_complete: (Option<String>, i64, Option<String>) = sqlx::query_as(
+            "SELECT next_review_at, review_count, last_review_at FROM flashcards WHERE id='fc-null'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            after_complete.0.is_some(),
+            "complete must schedule the card"
+        );
+        assert_eq!(after_complete.1, 1);
+        assert!(after_complete.2.is_some());
+
+        executor.undo(&step_id).await.unwrap();
+        let restored: (Option<String>, f64, f64, i64, Option<String>, i64) = sqlx::query_as(
+            "SELECT next_review_at, ease_factor, review_interval_days, review_count, \
+             last_review_at, mastered FROM flashcards WHERE id='fc-null'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(restored.0, None);
+        assert!((restored.1 - 2.5).abs() < 1e-9);
+        assert!((restored.2 - 0.0).abs() < 1e-9);
+        assert_eq!(restored.3, 0);
+        assert_eq!(restored.4, None);
+        assert_eq!(restored.5, 0);
+    });
+}
