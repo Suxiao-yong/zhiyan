@@ -38,10 +38,20 @@ vi.mock('@/services/db', async (importOriginal) => ({
 }))
 
 import KnowledgeMindMap from './KnowledgeMindMap.vue'
-import { masteryColor, parseSourceRef, splitMaterialParagraphs, buildTreeOption } from './knowledge-map'
+import {
+  masteryColor,
+  parseSourceRef,
+  splitMaterialParagraphs,
+  buildTreeOption,
+} from './knowledge-map'
 import type { KnowledgePointNode, KnowledgeTreeSubject } from '@/services/agent-client'
 
-const kp = (id: string, name: string, mastery: number, extra: Partial<KnowledgePointNode> = {}): KnowledgePointNode => ({
+const kp = (
+  id: string,
+  name: string,
+  mastery: number,
+  extra: Partial<KnowledgePointNode> = {},
+): KnowledgePointNode => ({
   id,
   name,
   mastery,
@@ -126,6 +136,8 @@ describe('KnowledgeMindMap', () => {
 
     const stub = chartStubs[0]
     expect(stub).toBeTruthy()
+    // 有 exam 时 header 图例可见（M-1：exam_id 必须来自命令返回值）。
+    expect(wrapper.find('.legend').exists()).toBe(true)
     // option 组装走组件同一路径：series.data 即科目森林。
     expect(stub.props.option.series[0].orient).toBe('LR')
     expect(stub.props.option.series[0].data[0].children[0].raw.source_ref).toBe('§2-§3')
@@ -144,6 +156,8 @@ describe('KnowledgeMindMap', () => {
 
     expect(chartStubs).toHaveLength(0)
     expect(wrapper.text()).toContain('请先完成考试配置')
+    // 无考试时图例隐藏（exam_id 为 null，M-1 回归点）。
+    expect(wrapper.find('.legend').exists()).toBe(false)
   })
 
   it('loads referenced material paragraphs and highlights §N-§M ranges', async () => {

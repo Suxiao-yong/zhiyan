@@ -400,6 +400,13 @@ pub async fn knowledge_tree_impl(
     // Assemble in memory: rows arrive sorted by sort_order, so per-parent child
     // order is already correct; index by parent then link recursively so any
     // parent/child declaration order works.
+    //
+    // Data-integrity note: orphan parent_id nodes (parent missing/foreign) end
+    // up as roots only when parent_id is NULL; dangling or cross-subject
+    // parent_id values simply fall out of the reachable tree and are silently
+    // dropped — this read does not validate them. Integrity is guaranteed by
+    // the create_batch write side; parent_id cycles (unreachable by the same
+    // argument) are additionally cut by the visited-path guard in to_node.
     let mut children_of: std::collections::HashMap<&str, Vec<&KnowledgeTreeRow>> =
         std::collections::HashMap::new();
     let mut roots_per_subject: std::collections::HashMap<&str, Vec<&KnowledgeTreeRow>> =
@@ -415,9 +422,12 @@ pub async fn knowledge_tree_impl(
         }
     }
 
+    /// Build one node; `path` holds the ids on the current recursion stack so a
+    /// parent_id cycle cuts the offending edge instead of overflowing the stack.
     fn to_node<'a>(
         row: &'a KnowledgeTreeRow,
         children_of: &std::collections::HashMap<&str, Vec<&'a KnowledgeTreeRow>>,
+        path: &mut std::collections::HashSet<&'a str>,
     ) -> KnowledgePointNode {
         KnowledgePointNode {
             id: row.id.clone(),
@@ -428,7 +438,18 @@ pub async fn knowledge_tree_impl(
             source_ref: row.source_ref.clone(),
             children: children_of
                 .get(row.id.as_str())
-                .map(|kids| kids.iter().map(|kid| to_node(kid, children_of)).collect())
+                .map(|kids| {
+                    let mut built = Vec::with_capacity(kids.len());
+                    for kid in kids {
+                        // Cycle guard: skip a child already on the current path.
+                        if !path.insert(kid.id.as_str()) {
+                            continue;
+                        }
+                        built.push(to_node(kid, children_of, path));
+                        path.remove(kid.id.as_str());
+                    }
+                    built
+                })
                 .unwrap_or_default(),
         }
     }
@@ -440,7 +461,11 @@ pub async fn knowledge_tree_impl(
                 .remove(id.as_str())
                 .unwrap_or_default()
                 .into_iter()
-                .map(|row| to_node(row, &children_of))
+                .map(|row| {
+                    let mut path = std::collections::HashSet::new();
+                    path.insert(row.id.as_str());
+                    to_node(row, &children_of, &mut path)
+                })
                 .collect(),
             id,
             name,

@@ -659,3 +659,42 @@ async fn knowledge_tree_assembles_parent_tree_sorted_with_wrong_counts() {
     assert_eq!(explicit.exam_id.as_deref(), Some("exam-t"));
     assert_eq!(explicit.subjects.len(), 3);
 }
+
+#[tokio::test]
+async fn knowledge_tree_survives_parent_id_cycles_without_recursing_forever() {
+    let pool = business_test_pool().await;
+    sqlx::raw_sql(
+        r#"
+        INSERT INTO exams (id, name, exam_date) VALUES ('exam-c', 'Cycle', '2030-01-01');
+        INSERT INTO subjects (id, exam_id, name, sort_order)
+            VALUES ('sub-1', 'exam-c', 'Math', 1);
+        -- A reachable chain plus a two-node mutual cycle; the cycle members are
+        -- not roots (non-null parent_id), so they must be dropped from the output
+        -- without crashing or looping.
+        INSERT INTO knowledge_points (id, subject_id, name, parent_id, current_mastery, sort_order)
+            VALUES ('kp-root', 'sub-1', '可达根', NULL, 3, 1),
+                   ('kp-child', 'sub-1', '可达子', 'kp-root', 3, 2),
+                   ('kp-x', 'sub-1', '环甲', 'kp-y', 3, 3),
+                   ('kp-y', 'sub-1', '环乙', 'kp-x', 3, 4),
+                   ('kp-self', 'sub-1', '自指', 'kp-self', 3, 5);
+        INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-c');
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Must return Ok promptly (no stack overflow on the mutual/self cycles).
+    let out = knowledge_tree_impl(&pool, None).await.unwrap();
+    assert_eq!(out.exam_id.as_deref(), Some("exam-c"));
+
+    // Only the reachable root survives; the cycle members and self-loop node
+    // never appear anywhere in the tree.
+    assert_eq!(out.subjects.len(), 1);
+    let math = &out.subjects[0];
+    assert_eq!(math.children.len(), 1);
+    assert_eq!(math.children[0].id, "kp-root");
+    assert_eq!(math.children[0].children.len(), 1);
+    assert_eq!(math.children[0].children[0].id, "kp-child");
+    assert!(math.children[0].children[0].children.is_empty());
+}

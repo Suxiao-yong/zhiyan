@@ -13,13 +13,14 @@ const emit = defineEmits<{ (e: 'select', node: KnowledgePointNode): void }>()
 const loading = ref(true)
 const failed = ref(false)
 const subjects = ref<KnowledgeTreeSubject[]>([])
-const chartData = computed(() => ({ exam_id: null as string | null, subjects: subjects.value }))
+const examId = ref<string | null>(null)
 const option = computed(() => buildTreeOption(subjects.value))
 
 onMounted(async () => {
   try {
     const out = await knowledgeTree()
     subjects.value = out.subjects
+    examId.value = out.exam_id
   } catch {
     failed.value = true
   } finally {
@@ -73,7 +74,7 @@ const rangeText = computed(() => {
       <template #header>
         <div class="map-head">
           <span>知识点思维导图（颜色 = 掌握度：红 1-2 / 黄 3 / 绿 4-5）</span>
-          <span v-if="chartData.exam_id" class="legend">
+          <span v-if="examId" class="legend">
             <i class="dot" :style="{ background: masteryColor(1) }" />薄弱
             <i class="dot" :style="{ background: masteryColor(3) }" />一般
             <i class="dot" :style="{ background: masteryColor(5) }" />扎实
