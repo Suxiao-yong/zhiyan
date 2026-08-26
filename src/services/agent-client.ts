@@ -119,6 +119,23 @@ export function reviewListDue(examId?: string | null): Promise<ReviewListDueOutp
   return invoke<ReviewListDueOutput>('review_list_due', { examId: examId ?? null })
 }
 
+export interface FlashcardDueItem {
+  id: string
+  front: string
+  source_ref: string | null
+  knowledge_point_name: string | null
+}
+
+export interface FlashcardListDueOutput {
+  count: number
+  items: FlashcardDueItem[]
+}
+
+/** Today's due flashcards (SM-2) for the workbench card; preview-safe like reviewListDue. */
+export function flashcardListDue(examId?: string | null): Promise<FlashcardListDueOutput> {
+  return invoke<FlashcardListDueOutput>('flashcard_list_due', { examId: examId ?? null })
+}
+
 /** Read-only knowledge-tree node for the mind-map view (v0.3.0 Task 8). */
 export interface KnowledgePointNode {
   id: string
