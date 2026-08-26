@@ -144,6 +144,8 @@ pub async fn create_batch(
                     Some(id.clone())
                 } else {
                     sqlx::query_scalar(
+                        // 同名多 kp 时取插入序最早者（rowid 序），行为确定；
+                        // 预览缩进逻辑（executor build_approval_preview）依赖此约定。
                         "SELECT id FROM knowledge_points WHERE subject_id = ? AND name = ? ORDER BY rowid LIMIT 1",
                     )
                     .bind(&input.subject_id)

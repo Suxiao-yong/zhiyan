@@ -2924,7 +2924,10 @@ async fn build_approval_preview(
                 .unwrap_or_default();
             // Tree-indented preview: a concept whose parent_name matches an
             // earlier entry is nested under it; every line carries its
-            // optional source_ref.
+            // optional source_ref. Depth resolution must mirror the executor's
+            // batch_ids lookup exactly: first matching earlier entry (not
+            // last), so preview indentation equals real parent-child on
+            // duplicate names.
             let mut depths: Vec<(String, usize)> = Vec::new();
             let mut lines: Vec<String> = Vec::new();
             for concept in &concepts {
@@ -2934,7 +2937,6 @@ async fn build_approval_preview(
                     .and_then(|parent| {
                         depths
                             .iter()
-                            .rev()
                             .find(|(candidate, _)| candidate == parent)
                             .map(|(_, depth)| *depth + 1)
                     })
