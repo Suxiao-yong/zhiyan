@@ -88,6 +88,21 @@ describe('ReviewWorkbench', () => {
     expect(wrapper.find('[data-test=review-start]').exists()).toBe(true)
   })
 
+  it('renders the flashcard section when the wrong-question command fails', async () => {
+    client.reviewListDue.mockRejectedValue(new Error('boom'))
+    client.flashcardListDue.mockResolvedValue({
+      count: 2,
+      items: [flashcard('fc-1', '动量守恒'), flashcard('fc-2', '楞次定律')],
+    })
+    const wrapper = mountCard()
+    await flushPromises()
+
+    expect(wrapper.find('[data-test=wrong-section]').exists()).toBe(false)
+    expect(wrapper.get('[data-test=flashcard-section]').text()).toContain('闪卡(2)')
+    expect(wrapper.get('[data-test=review-total]').text()).toContain('2')
+    expect(wrapper.find('[data-test=review-start]').exists()).toBe(true)
+  })
+
   it('shows the empty state and no start button when nothing at all is due', async () => {
     client.reviewListDue.mockResolvedValue({ count: 0, items: [] })
     client.flashcardListDue.mockResolvedValue({ count: 0, items: [] })

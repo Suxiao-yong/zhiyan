@@ -78,6 +78,7 @@ pub fn run() {
             agent::commands::agent_context_audit_list,
             agent::commands::agent_brief_preview,
             agent::commands::review_list_due,
+            agent::commands::flashcard_list_due,
             agent::commands::knowledge_tree,
             agent::commands::agent_session_list,
             agent::commands::agent_session_messages,

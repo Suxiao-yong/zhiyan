@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { v4 as uuidv4 } from 'uuid'
 import { insert } from '@/services/db'
@@ -68,9 +69,13 @@ watch(
 )
 
 async function submit(): Promise<void> {
-  // 显式上限守卫：不依赖 el-form 规则管道，确保超限正文绝不入库。
-  if (charCount.value > MAX_CHARS) {
-    error.value = `正文不能超过 ${MAX_CHARS} 字符`
+  // 显式守卫：不依赖 el-form 规则管道（jsdom 下其聚合校验不可靠），确保非法输入绝不入库。
+  if (!form.title.trim() || !form.subject_id || charCount.value > MAX_CHARS) {
+    error.value = !form.title.trim()
+      ? '请输入材料标题'
+      : !form.subject_id
+        ? '请选择科目'
+        : `正文不能超过 ${MAX_CHARS} 字符`
     return
   }
   const valid = await formRef.value?.validate().catch(() => false)
@@ -78,18 +83,25 @@ async function submit(): Promise<void> {
   submitting.value = true
   error.value = ''
   try {
-    const id = uuidv4()
+    // insert 成功即视为导入成功：后续消息失败不再阻塞关闭/emit，避免用户重试产生重复行。
     await insert('materials', {
-      id,
+      id: uuidv4(),
       title: form.title.trim(),
       content: form.content,
       subject_id: form.subject_id,
     })
-    // 空行分段：按连续空行切段并丢弃空白段，得到有效段落数。
-    const segments = form.content.split(/\n{2,}/).filter((seg) => seg.trim().length > 0).length
-    await agent.sendMessage(`已导入材料《${form.title.trim()}》共 ${segments} 段，请拆解概念并生成闪卡`)
     emit('update:modelValue', false)
     emit('imported')
+    // 空行分段：按连续空行切段并丢弃空白段，得到有效段落数。
+    const segments = form.content.split(/\n{2,}/).filter((seg) => seg.trim().length > 0).length
+    try {
+      const sent = await agent.sendMessage(
+        `已导入材料《${form.title.trim()}》共 ${segments} 段，请拆解概念并生成闪卡`,
+      )
+      if (!sent) ElMessage.warning('材料已入库，但复习消息发送失败')
+    } catch {
+      ElMessage.warning('材料已入库，但复习消息发送失败')
+    }
   } catch (caught) {
     error.value = String(caught)
   } finally {

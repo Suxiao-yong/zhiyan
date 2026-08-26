@@ -99,6 +99,22 @@ describe('ImportMaterialDialog', () => {
     wrapper.unmount()
   })
 
+  it('does not insert when no subject is selected', async () => {
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    await wrapper.get('[data-test=title-input]').setValue('考研数学重点')
+    await wrapper.get('[data-test=content-input]').setValue('第一段\n\n第二段')
+
+    await wrapper.get('[data-test=confirm]').trigger('click')
+    await flushPromises()
+
+    expect(db.insert).not.toHaveBeenCalled()
+    expect(agentStore.sendMessage).not.toHaveBeenCalled()
+    expect(wrapper.emitted('imported')).toBeUndefined()
+    wrapper.unmount()
+  })
+
   it('shows a live character counter and blocks over-limit content', async () => {
     const wrapper = mountDialog()
     await flushPromises()
