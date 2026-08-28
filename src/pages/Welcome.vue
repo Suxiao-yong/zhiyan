@@ -189,11 +189,11 @@ async function saveLlmForOnboarding(): Promise<boolean> {
         model: llmForm.model,
         temperature: llmForm.temperature,
       } as never
-      if (
-        llmApiKey.value.trim()
-      ) // Pinia setup store refs are unwrapped — direct assignment, not .value
-      ;
-      ;(settingsStore as unknown as { keyConfigured: boolean }).keyConfigured = true as never
+      if (llmApiKey.value.trim()) {
+        // Pinia setup store refs are unwrapped — direct assignment, not .value
+        ;(settingsStore as unknown as { keyConfigured: boolean }).keyConfigured = true as never
+      }
+      // above leading semicolon guards against ASI after the comment block
       llmApiKey.value = ''
       ElMessage.warning('浏览器预览模式：配置已临时保存，请在桌面应用中重新配置以持久化')
       return true
