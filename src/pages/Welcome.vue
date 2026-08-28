@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { invoke } from '@tauri-apps/api/core'
 import {
   ArrowRight,
   ArrowLeft,
@@ -11,14 +12,17 @@ import {
   Aim,
   Lock,
   ChatDotRound,
+  Loading,
 } from '@element-plus/icons-vue'
 import { useExamStore } from '@/stores/exam'
+import { useSettingsStore } from '@/stores/settings'
 import { setSetting } from '@/services/db'
 import { validateExamDate } from '@/services/exam-service'
 import { markOnboardingDone } from '@/router'
 
 const router = useRouter()
 const store = useExamStore()
+const settingsStore = useSettingsStore()
 
 const current = ref(0)
 const saving = ref(false)
@@ -55,6 +59,157 @@ const subjects = reactive<SubjectDraft[]>([
 
 const levelLabels = ['', '入门', '基础', '一般', '熟练', '精通']
 
+// ---- LLM 配置（步骤 1，强制）----
+const llmProviders = [
+  { value: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
+  { value: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com', model: 'gpt-4o' },
+  { value: 'qwen', label: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode', model: 'qwen-plus' },
+  { value: 'kimi', label: 'Kimi', baseUrl: 'https://api.moonshot.cn', model: 'moonshot-v1-8k' },
+  { value: 'custom', label: '自定义', baseUrl: '', model: '' },
+]
+const llmForm = reactive({
+  provider: 'deepseek',
+  baseUrl: 'https://api.deepseek.com',
+  model: 'deepseek-chat',
+  temperature: 0.7,
+})
+const llmApiKey = ref('')
+const llmShowKey = ref(false)
+const llmSaving = ref(false)
+const llmTesting = ref(false)
+
+function syncLlmFormFromStore() {
+  const c = settingsStore.llmConfig
+  if (!c) return
+  llmForm.provider = c.provider
+  llmForm.baseUrl = c.baseUrl
+  llmForm.model = c.model
+  llmForm.temperature = c.temperature
+}
+watch(() => settingsStore.llmConfig, syncLlmFormFromStore, { immediate: true })
+onMounted(async () => {
+  await settingsStore.loadSettings()
+  syncLlmFormFromStore()
+})
+function onLlmProviderChange(v: string) {
+  if (v === 'custom') return
+  const p = llmProviders.find((x) => x.value === v)
+  if (p) {
+    llmForm.baseUrl = p.baseUrl
+    llmForm.model = p.model
+  }
+  void settingsStore.refreshKeyState(v)
+}
+function validateLlmForm(): string | null {
+  if (!/^https?:\/\/.+/i.test(llmForm.baseUrl.trim())) return 'API 地址必须是完整的 http/https 地址'
+  if (!llmForm.model.trim()) return '模型名不能为空'
+  if (!settingsStore.keyConfigured && !llmApiKey.value.trim()) return '请填写 API Key'
+  return null
+}
+async function saveLlmForOnboarding(): Promise<boolean> {
+  const problem = validateLlmForm()
+  if (problem) {
+    ElMessage.warning(problem)
+    return false
+  }
+  llmSaving.value = true
+  try {
+    await settingsStore.saveLlmConfig(
+      {
+        provider: llmForm.provider,
+        baseUrl: llmForm.baseUrl,
+        model: llmForm.model,
+        temperature: llmForm.temperature,
+      },
+      llmApiKey.value.trim(),
+    )
+    llmApiKey.value = ''
+    ElMessage.success('大模型配置已保存')
+    return true
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '保存失败')
+    return false
+  } finally {
+    llmSaving.value = false
+  }
+}
+async function testLlmForOnboarding() {
+  const problem = validateLlmForm()
+  if (problem) return ElMessage.warning(problem)
+  // 先保存再测试，保证测试走已落盘的配置
+  const ok = await saveLlmForOnboarding()
+  if (!ok) return
+  llmTesting.value = true
+  try {
+    const { testAgentProvider } = await import('@/services/agent-client')
+    const r = await testAgentProvider()
+    if (r.error_code) {
+      const labels: Record<string, string> = {
+        provider_unavailable: '未配置或密钥缺失',
+        provider_auth_failed: '认证失败，请检查 API Key',
+        provider_rate_limited: '限流，请稍后重试',
+        provider_timeout: '超时，请检查网络或地址',
+        provider_protocol_error: '协议错误',
+        provider_request_failed: '网络或服务端错误',
+        consent_required: '需确认数据出境',
+      }
+      ElMessage.error(`连接失败：${labels[r.error_code] ?? r.error_code}`)
+    } else {
+      ElMessage.success(`连接成功：${r.model}（${r.latency_ms}ms）`)
+    }
+  } catch (e) {
+    ElMessage.error((e as Error).message ?? '连接失败')
+  } finally {
+    llmTesting.value = false
+  }
+}
+
+// ---- 知识点自动搜集（进入水平评估时触发）----
+const kpSuggesting = ref(false)
+const kpSuggestError = ref('')
+async function autoSuggestKps() {
+  const validSubjects = subjects.filter((s) => s.name.trim())
+  if (!validSubjects.length) return
+  // 若已有知识点则不覆盖，避免重复触发
+  const hasExisting = validSubjects.some((s) => s.knowledgePoints.length > 0)
+  if (hasExisting) return
+  kpSuggesting.value = true
+  kpSuggestError.value = ''
+  try {
+    const resp = await invoke<{ suggestions: Array<Array<{ name: string; chapter: string | null }>> }>('suggest_knowledge_points', {
+      input: {
+        exam_type: exam.exam_type,
+        exam_name: exam.name.trim(),
+        subjects: validSubjects.map((s) => s.name.trim()),
+      },
+    })
+    const suggestions = resp.suggestions ?? []
+    validSubjects.forEach((s, idx) => {
+      const list = suggestions[idx] ?? []
+      s.knowledgePoints = list.slice(0, 8).map((kp) => ({
+        name: kp.name?.trim() || '',
+        chapter: kp.chapter?.trim() || '',
+        mastery: 3,
+      })).filter((k) => k.name)
+    })
+    if (validSubjects.every((s) => !s.knowledgePoints.length)) {
+      kpSuggestError.value = '未能自动获取知识点，请手动添加'
+    }
+  } catch (e) {
+    kpSuggestError.value = (e as Error).message ?? '自动获取失败，可手动添加'
+  } finally {
+    kpSuggesting.value = false
+  }
+}
+
+// 欢迎页步骤与描述由同一数据源派生，避免硬编码漂移
+// 步骤 1 为强制 LLM 配置（进入应用第一件事），未配置无法继续
+const welcomeSteps = ['欢迎', '配置大模型', '创建考试', '添加科目', '水平评估', '确认完成'] as const
+const welcomeStepCount = welcomeSteps.length - 1 // 排除“欢迎”本身
+const welcomeIntro = computed(
+  () => `用 ${welcomeStepCount} 步完成你的考试配置：${welcomeSteps.slice(1).join(' → ')}。`,
+)
+
 const disabledDate = (date: Date) => {
   const t = new Date()
   t.setHours(0, 0, 0, 0)
@@ -74,8 +229,19 @@ function removeKp(s: SubjectDraft, i: number) {
   s.knowledgePoints.splice(i, 1)
 }
 
-function next() {
+async function next() {
+  // 步骤 1：LLM 配置为强制关卡，未配置无法继续
   if (current.value === 1) {
+    const isConfigured = !!settingsStore.llmConfig && settingsStore.keyConfigured
+    const hasUnsavedInput = !!llmApiKey.value.trim() || !isConfigured
+    if (hasUnsavedInput) {
+      const ok = await saveLlmForOnboarding()
+      if (!ok) return
+    }
+    const stillNotReady = !settingsStore.llmConfig || !settingsStore.keyConfigured
+    if (stillNotReady) return ElMessage.warning('请先完成大模型配置')
+  }
+  if (current.value === 2) {
     if (!exam.name.trim()) return ElMessage.warning('请输入考试名称')
     try {
       validateExamDate(exam.exam_date)
@@ -83,12 +249,16 @@ function next() {
       return ElMessage.error((e as Error).message)
     }
   }
-  if (current.value === 2) {
+  if (current.value === 3) {
     const valid = subjects.filter((s) => s.name.trim())
     if (!valid.length) return ElMessage.warning('至少添加一个科目')
     subjects.splice(0, subjects.length, ...valid)
   }
   current.value++
+  // 进入水平评估页时自动联网搜集知识点（由前面三步信息驱动）
+  if (current.value === 4) {
+    void autoSuggestKps()
+  }
 }
 function prev() {
   if (current.value > 0) current.value--
@@ -154,18 +324,14 @@ async function finish() {
       </div>
 
       <el-steps :active="current" finish-status="success" align-center>
-        <el-step title="欢迎" />
-        <el-step title="创建考试" />
-        <el-step title="添加科目" />
-        <el-step title="水平评估" />
-        <el-step title="确认完成" />
+        <el-step v-for="title in welcomeSteps" :key="title" :title="title" />
       </el-steps>
 
       <div class="welcome__body">
         <!-- 步骤 0：欢迎 -->
         <div v-show="current === 0" class="step step-intro">
           <h2>欢迎使用智研</h2>
-          <p>用 4 步完成你的考试配置：建立考试 → 添加科目 → 评估当前水平 → 进入智研主界面。</p>
+          <p>{{ welcomeIntro }}</p>
           <ul class="features">
             <li>
               <el-icon class="features__icon"><Aim /></el-icon>
@@ -191,8 +357,42 @@ async function finish() {
           </ul>
         </div>
 
-        <!-- 步骤 1：创建考试 -->
+        <!-- 步骤 1：配置大模型（强制，未配置无法继续） -->
         <div v-show="current === 1" class="step">
+          <h2>配置大模型</h2>
+          <p class="muted" style="margin-bottom: var(--sp-4)">
+            进入应用的第一步：配置大模型后才能使用 AI 规划、知识点智能填充等能力。未配置无法继续下一步。
+          </p>
+          <el-alert v-if="settingsStore.keyConfigured && settingsStore.llmConfig" type="success" :closable="false" show-icon title="已配置大模型，可直接继续或修改后保存" style="margin-bottom: var(--sp-4)" />
+          <el-form label-width="90px" @submit.prevent>
+            <el-form-item label="Provider">
+              <el-select v-model="llmForm.provider" style="width: 100%" @change="onLlmProviderChange">
+                <el-option v-for="p in llmProviders" :key="p.value" :label="p.label" :value="p.value" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="API 地址">
+              <el-input v-model="llmForm.baseUrl" placeholder="如 https://api.deepseek.com" />
+            </el-form-item>
+            <el-form-item label="模型">
+              <el-input v-model="llmForm.model" placeholder="如 deepseek-chat" />
+            </el-form-item>
+            <el-form-item label="API Key">
+              <el-input v-model="llmApiKey" :type="llmShowKey ? 'text' : 'password'" :placeholder="settingsStore.keyConfigured ? '已配置，留空则保留原 Key' : '必填'">
+                <template #append><el-button @click="llmShowKey = !llmShowKey">{{ llmShowKey ? '隐藏' : '显示' }}</el-button></template>
+              </el-input>
+            </el-form-item>
+            <el-form-item label="Temperature">
+              <el-slider v-model="llmForm.temperature" :min="0" :max="2" :step="0.1" show-input style="max-width: 400px" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="llmSaving" @click="saveLlmForOnboarding">保存配置</el-button>
+              <el-button :loading="llmTesting" @click="testLlmForOnboarding">连接测试</el-button>
+            </el-form-item>
+          </el-form>
+        </div>
+
+        <!-- 步骤 2：创建考试 -->
+        <div v-show="current === 2" class="step">
           <h2>创建你的考试</h2>
           <el-form label-width="90px">
             <el-form-item label="考试类型">
@@ -238,8 +438,8 @@ async function finish() {
           </el-form>
         </div>
 
-        <!-- 步骤 2：添加科目 -->
-        <div v-show="current === 2" class="step">
+        <!-- 步骤 3：添加科目 -->
+        <div v-show="current === 3" class="step">
           <div class="step-head">
             <h2>添加考试科目</h2>
             <el-button :icon="Plus" @click="addSubject">添加科目</el-button>
@@ -267,15 +467,18 @@ async function finish() {
           </div>
         </div>
 
-        <!-- 步骤 3：知识点水平评估 -->
-        <div v-show="current === 3" class="step">
+        <!-- 步骤 4：知识点水平评估（进入时自动联网搜集） -->
+        <div v-show="current === 4" class="step">
           <div class="step-head step-head--column">
             <h2>基础水平评估</h2>
             <span class="muted">
-              为各科添加知识点并自评掌握度（1-5 星），作为 AI
-              诊断的初始基准。可跳过，稍后在考试配置中补充。
+              已根据你填写的考试与科目，自动联网搜集各科核心知识点，请确认或修改后自评掌握度（1-5 星）。可跳过，稍后在考试配置中补充。
             </span>
           </div>
+          <el-alert v-if="kpSuggesting" type="info" :closable="false" show-icon title="AI 正在联网搜集知识点，请稍候..." style="margin-bottom: var(--sp-3)" />
+          <el-alert v-if="kpSuggestError" type="warning" :closable="false" :title="kpSuggestError" show-icon style="margin-bottom: var(--sp-3)" />
+          <div v-if="kpSuggesting" style="text-align: center; padding: var(--sp-6)"><el-icon class="is-loading" style="font-size: 24px"><Loading /></el-icon><div class="muted" style="margin-top: var(--sp-2)">正在生成知识点...</div></div>
+          <template v-else>
           <el-collapse v-for="(s, i) in subjects" :key="i" class="kp-collapse">
             <el-collapse-item
               :title="`${s.name || '科目 ' + (i + 1)}（${s.knowledgePoints.length} 个知识点）`"
@@ -290,10 +493,12 @@ async function finish() {
               <el-button :icon="Plus" size="small" @click="addKp(s)">添加知识点</el-button>
             </el-collapse-item>
           </el-collapse>
+          </template>
+          <div style="margin-top: var(--sp-3)"><el-button size="small" :loading="kpSuggesting" @click="autoSuggestKps">重新智能填充</el-button></div>
         </div>
 
-        <!-- 步骤 4：确认完成 -->
-        <div v-show="current === 4" class="step">
+        <!-- 步骤 5：确认完成 -->
+        <div v-show="current === 5" class="step">
           <h2>确认并完成</h2>
           <el-descriptions :column="1" border>
             <el-descriptions-item label="考试类型">
@@ -316,11 +521,11 @@ async function finish() {
 
       <div class="welcome__footer">
         <el-button v-if="current > 0" :icon="ArrowLeft" @click="prev">上一步</el-button>
-        <el-button v-if="current < 4" type="primary" :icon="ArrowRight" @click="next">
+        <el-button v-if="current < 5" type="primary" :icon="ArrowRight" @click="next">
           下一步
         </el-button>
         <el-button
-          v-if="current === 4"
+          v-if="current === 5"
           type="primary"
           :icon="Check"
           :loading="saving"

@@ -6,6 +6,7 @@ pub mod brief;
 mod credentials;
 pub mod db;
 pub mod notify;
+pub mod suggest;
 pub mod review;
 pub mod scheduler;
 pub mod tray;
@@ -83,6 +84,7 @@ pub fn run() {
             agent::commands::agent_session_list,
             agent::commands::agent_session_messages,
             agent::commands::agent_approval_list,
+            suggest::suggest_knowledge_points,
         ])
         .setup(|app| {
             db::init_db(app.handle())?;

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import en from 'element-plus/es/locale/lang/en'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useExamStore } from '@/stores/exam'
@@ -12,6 +14,13 @@ import {
 
 const route = useRoute()
 const isFullScreen = computed(() => route.meta.layout === 'full')
+
+// 日历/日期选择器语言跟随系统：系统为中文时用 zhCn，否则默认英语（与截图要求一致）
+const locale = computed(() => {
+  if (typeof navigator === 'undefined') return zhCn
+  const lang = (navigator.language || '').toLowerCase()
+  return lang.startsWith('zh') ? zhCn : en
+})
 
 const settingsStore = useSettingsStore()
 const examStore = useExamStore()
@@ -54,8 +63,10 @@ async function sendStartupReminder() {
 </script>
 
 <template>
-  <router-view v-if="isFullScreen" />
-  <AppLayout v-else>
-    <router-view />
-  </AppLayout>
+  <el-config-provider :locale="locale">
+    <router-view v-if="isFullScreen" />
+    <AppLayout v-else>
+      <router-view />
+    </AppLayout>
+  </el-config-provider>
 </template>
