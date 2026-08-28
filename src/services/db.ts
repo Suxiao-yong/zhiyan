@@ -23,6 +23,7 @@ const ALLOWED_TABLES = [
   'study_plans',
   'wrong_questions',
   'ai_analyses',
+  'materials',
   'settings',
 ] as const
 
@@ -129,6 +130,8 @@ const COLUMNS: Record<string, readonly string[]> = {
     'created_at',
   ],
   settings: ['key', 'value', 'description', 'updated_at'],
+  // v0.3.0 Task 8: read-only provenance lookup from the knowledge mind map.
+  materials: ['id', 'title', 'content', 'subject_id'],
 }
 
 function assertTable(table: string): void {
@@ -167,6 +170,8 @@ export async function query<T = any>(sql: string, params: QueryParams = []): Pro
 export async function execute(sql: string, params: QueryParams = []): Promise<QueryResult> {
   const db = await getDb()
   const r = await db.execute(sql, params)
+  // SAFETY: tauri-plugin-sql returns an untyped result object; the plugin
+  // contract guarantees lastInsertId/rowsAffected on execute().
   return r as unknown as QueryResult
 }
 

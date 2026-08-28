@@ -1,6 +1,6 @@
 use serde::Serialize;
 use serde_json::json;
-use sqlx::SqlitePool;
+use sqlx::{FromRow, SqlitePool};
 use tauri::{Emitter, State};
 
 use super::context::{ContextAudit, ContextAuditRow};
@@ -301,6 +301,227 @@ async fn review_list_due_impl(
         .map_err(Into::into)
 }
 
+/// Today's due flashcards (SM-2) for the workbench card. Mirrors
+/// `review_list_due`: pure local read with the active-exam fallback; no exam
+/// at all is an empty result, not an error, so the card can render its empty
+/// state.
+#[tauri::command]
+pub async fn flashcard_list_due(
+    pool: State<'_, SqlitePool>,
+    exam_id: Option<String>,
+) -> Result<super::tools::flashcard::FlashcardGetDueOutput, CommandError> {
+    flashcard_list_due_impl(pool.inner(), exam_id).await
+}
+
+async fn flashcard_list_due_impl(
+    pool: &SqlitePool,
+    exam_id: Option<String>,
+) -> Result<super::tools::flashcard::FlashcardGetDueOutput, CommandError> {
+    let exam_id = match exam_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(id) => Some(id.to_owned()),
+        None => active_exam_fallback(pool).await?,
+    };
+    let Some(exam_id) = exam_id else {
+        return Ok(super::tools::flashcard::FlashcardGetDueOutput {
+            count: 0,
+            items: Vec::new(),
+        });
+    };
+    super::tools::flashcard::list_due(pool, &exam_id)
+        .await
+        .map_err(Into::into)
+}
+
+/// One node of the read-only knowledge tree (v0.3.0 Task 8). Children follow
+/// the `knowledge_points.parent_id` self-reference; leaves carry an empty list.
+#[derive(Debug, Clone, Serialize)]
+pub struct KnowledgePointNode {
+    pub id: String,
+    pub name: String,
+    pub mastery: i64,
+    pub wrong_count: i64,
+    pub material_id: Option<String>,
+    pub source_ref: Option<String>,
+    pub children: Vec<KnowledgePointNode>,
+}
+
+/// A subject with its root-level knowledge points (empty when the subject has none).
+#[derive(Debug, Clone, Serialize)]
+pub struct KnowledgeTreeSubject {
+    pub id: String,
+    pub name: String,
+    pub children: Vec<KnowledgePointNode>,
+}
+
+/// Read-only mind-map payload for the study-plan page.
+#[derive(Debug, Clone, Serialize)]
+pub struct KnowledgeTreeOutput {
+    pub exam_id: Option<String>,
+    pub subjects: Vec<KnowledgeTreeSubject>,
+}
+
+#[derive(Debug, FromRow)]
+struct KnowledgeTreeRow {
+    id: String,
+    subject_id: String,
+    name: String,
+    parent_id: Option<String>,
+    mastery: i64,
+    wrong_count: i64,
+    material_id: Option<String>,
+    source_ref: Option<String>,
+}
+
+/// Mind-map tree for an exam (pure local read): subjects ordered by sort_order,
+/// knowledge points assembled by parent_id and sorted by sort_order. No exam at
+/// all is an empty structure, not an error (mirrors review_list_due).
+pub async fn knowledge_tree_impl(
+    pool: &SqlitePool,
+    exam_id: Option<String>,
+) -> Result<KnowledgeTreeOutput, CommandError> {
+    let exam_id = match exam_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(id) => Some(id.to_owned()),
+        None => active_exam_fallback(pool).await?,
+    };
+    let Some(exam_id) = exam_id else {
+        return Ok(KnowledgeTreeOutput {
+            exam_id: None,
+            subjects: Vec::new(),
+        });
+    };
+
+    let subjects: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, name FROM subjects WHERE exam_id = ? ORDER BY sort_order, created_at, id",
+    )
+    .bind(&exam_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| CommandError {
+        code: "persistence_error".to_owned(),
+        message: "knowledge tree subject lookup failed".to_owned(),
+    })?;
+
+    // One SQL pass; wrong_count is a scalar subquery over unmastered wrong
+    // questions (same shape as plan.preview_generate).
+    let rows: Vec<KnowledgeTreeRow> = sqlx::query_as(
+        r#"
+        SELECT kp.id, kp.subject_id, kp.name, kp.parent_id,
+               COALESCE(kp.current_mastery, 0) AS mastery,
+               (SELECT COUNT(*) FROM wrong_questions wq
+                 WHERE wq.knowledge_point_id = kp.id AND wq.mastered = 0) AS wrong_count,
+               kp.material_id, kp.source_ref
+        FROM knowledge_points kp
+        JOIN subjects s ON s.id = kp.subject_id
+        WHERE s.exam_id = ?
+        ORDER BY kp.sort_order, kp.created_at, kp.id
+        "#,
+    )
+    .bind(&exam_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| CommandError {
+        code: "persistence_error".to_owned(),
+        message: "knowledge tree point lookup failed".to_owned(),
+    })?;
+
+    // Assemble in memory: rows arrive sorted by sort_order, so per-parent child
+    // order is already correct; index by parent then link recursively so any
+    // parent/child declaration order works.
+    //
+    // Data-integrity note: orphan parent_id nodes (parent missing/foreign) end
+    // up as roots only when parent_id is NULL; dangling or cross-subject
+    // parent_id values simply fall out of the reachable tree and are silently
+    // dropped — this read does not validate them. Integrity is guaranteed by
+    // the create_batch write side; parent_id cycles (unreachable by the same
+    // argument) are additionally cut by the visited-path guard in to_node.
+    let mut children_of: std::collections::HashMap<&str, Vec<&KnowledgeTreeRow>> =
+        std::collections::HashMap::new();
+    let mut roots_per_subject: std::collections::HashMap<&str, Vec<&KnowledgeTreeRow>> =
+        std::collections::HashMap::new();
+    for row in &rows {
+        if let Some(parent_id) = row.parent_id.as_deref() {
+            children_of.entry(parent_id).or_default().push(row);
+        } else {
+            roots_per_subject
+                .entry(row.subject_id.as_str())
+                .or_default()
+                .push(row);
+        }
+    }
+
+    /// Build one node; `path` holds the ids on the current recursion stack so a
+    /// parent_id cycle cuts the offending edge instead of overflowing the stack.
+    fn to_node<'a>(
+        row: &'a KnowledgeTreeRow,
+        children_of: &std::collections::HashMap<&str, Vec<&'a KnowledgeTreeRow>>,
+        path: &mut std::collections::HashSet<&'a str>,
+    ) -> KnowledgePointNode {
+        KnowledgePointNode {
+            id: row.id.clone(),
+            name: row.name.clone(),
+            mastery: row.mastery,
+            wrong_count: row.wrong_count,
+            material_id: row.material_id.clone(),
+            source_ref: row.source_ref.clone(),
+            children: children_of
+                .get(row.id.as_str())
+                .map(|kids| {
+                    let mut built = Vec::with_capacity(kids.len());
+                    for kid in kids {
+                        // Cycle guard: skip a child already on the current path.
+                        if !path.insert(kid.id.as_str()) {
+                            continue;
+                        }
+                        built.push(to_node(kid, children_of, path));
+                        path.remove(kid.id.as_str());
+                    }
+                    built
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    let subjects_out = subjects
+        .into_iter()
+        .map(|(id, name)| KnowledgeTreeSubject {
+            children: roots_per_subject
+                .remove(id.as_str())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|row| {
+                    let mut path = std::collections::HashSet::new();
+                    path.insert(row.id.as_str());
+                    to_node(row, &children_of, &mut path)
+                })
+                .collect(),
+            id,
+            name,
+        })
+        .collect();
+
+    Ok(KnowledgeTreeOutput {
+        exam_id: Some(exam_id),
+        subjects: subjects_out,
+    })
+}
+
+/// Read-only knowledge-tree command backing the mind-map view.
+#[tauri::command]
+pub async fn knowledge_tree(
+    pool: State<'_, SqlitePool>,
+    exam_id: Option<String>,
+) -> Result<KnowledgeTreeOutput, CommandError> {
+    knowledge_tree_impl(pool.inner(), exam_id).await
+}
+
 /// Resolve the exam a brief targets: the persisted `agent_active_exam_id`, or
 /// the most recently active exam as a fallback (mirrors the Scheduler helper).
 async fn active_exam_fallback(pool: &SqlitePool) -> Result<Option<String>, CommandError> {
@@ -516,8 +737,8 @@ mod tests {
     use super::{
         agent_approval_list, agent_brief_preview, agent_context_audit_list, agent_decide_approval,
         agent_execute_tool, agent_list_tools, agent_run_planner, agent_session_list,
-        agent_session_messages, agent_undo_tool, provider_test_result_from_error,
-        review_list_due_impl, trimmed_required, CommandError,
+        agent_session_messages, agent_undo_tool, flashcard_list_due_impl,
+        provider_test_result_from_error, review_list_due_impl, trimmed_required, CommandError,
     };
     use crate::agent::error::AgentError;
 
@@ -587,6 +808,51 @@ mod tests {
 
         // An explicit exam id bypasses the fallback.
         let explicit = review_list_due_impl(&pool, Some("exam-due".to_owned()))
+            .await
+            .unwrap();
+        assert_eq!(explicit.count, 1);
+    }
+
+    #[tokio::test]
+    async fn flashcard_list_due_returns_active_exam_due_cards_or_empty() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for migration in crate::db::migrations() {
+            sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+        }
+
+        // No exams at all: an empty result, not an error.
+        let empty = flashcard_list_due_impl(&pool, None).await.unwrap();
+        assert_eq!(empty.count, 0);
+        assert!(empty.items.is_empty());
+
+        // Seed an exam with one due and one already-mastered flashcard; the
+        // active-exam fallback must surface only the due one.
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO exams (id, name, exam_date) VALUES ('exam-due', 'Due', '2030-01-01');
+            INSERT INTO subjects (id, exam_id, name) VALUES ('sub-due', 'exam-due', 'Math');
+            INSERT INTO flashcards (id, subject_id, front, back, mastered, next_review_at)
+                VALUES ('fc-a', 'sub-due', 'due card', 'back', 0, '2000-01-01'),
+                       ('fc-b', 'sub-due', 'mastered card', 'back', 1, NULL);
+            UPDATE flashcards SET next_review_at = NULL WHERE id = 'fc-b' AND mastered = 1;
+            INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-due');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let out = flashcard_list_due_impl(&pool, None).await.unwrap();
+        assert_eq!(out.count, 1);
+        assert_eq!(out.items[0].id, "fc-a");
+        assert_eq!(out.items[0].front, "due card");
+
+        // An explicit exam id bypasses the fallback.
+        let explicit = flashcard_list_due_impl(&pool, Some("exam-due".to_owned()))
             .await
             .unwrap();
         assert_eq!(explicit.count, 1);

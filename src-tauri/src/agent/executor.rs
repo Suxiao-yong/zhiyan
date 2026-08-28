@@ -15,6 +15,11 @@ use super::{
     policy::{self, PolicyContext, PolicyDecision},
     tools::{
         exam,
+        flashcard::{
+            self, FlashcardCompleteInput, FlashcardCreateBatchInput, FlashcardGetDueInput,
+        },
+        knowledge_point_admin::{self, KnowledgePointCreateBatchInput},
+        material::{self, MaterialCreateInput},
         plan::{
             self, PlanApplyPreviewInput, PlanGenerateInput, PlanGetRangeInput, PlanGetTodayInput,
         },
@@ -34,6 +39,9 @@ const RECORD_CHECKIN_TOOL: &str = "record.checkin_plan";
 const RECORD_CHECKIN_VERSION: &str = "1";
 const RECORD_CHECKIN_UNDO_KIND: &str = "record.checkin_plan.v1";
 const REVIEW_COMPLETE_UNDO_KIND: &str = "review.complete.v1";
+const FLASHCARD_COMPLETE_UNDO_KIND: &str = "flashcard.complete.v1";
+/// Pre-review snapshot of all six scheduling columns captured for undo.
+type FlashcardPriorScheduling = (Option<String>, f64, f64, i64, Option<String>, i64);
 
 #[derive(Debug, Clone)]
 pub struct RecordCheckinExecutionRequest {
@@ -974,6 +982,30 @@ impl ToolDispatcher {
                         undo_available: false,
                     })
                 }
+                "knowledge_point.create_batch" => {
+                    let input: KnowledgePointCreateBatchInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = knowledge_point_admin::create_batch(tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "material.create" => {
+                    let input: MaterialCreateInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = material::create(tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
                 "wrong_question.create" => {
                     let input: WrongQuestionCreateInput =
                         serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
@@ -1053,6 +1085,74 @@ impl ToolDispatcher {
                             "ease_factor": ease_factor,
                             "review_interval_days": review_interval_days,
                             "next_review_at": next_review_at,
+                        })),
+                        undo_available: true,
+                    })
+                }
+                "flashcard.create_batch" => {
+                    let input: FlashcardCreateBatchInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = flashcard::create_batch(tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "flashcard.get_due" => {
+                    let input: FlashcardGetDueInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    let output = flashcard::get_due(tx, input).await?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: None,
+                        undo_available: false,
+                    })
+                }
+                "flashcard.complete" => {
+                    let input: FlashcardCompleteInput =
+                        serde_json::from_value(input).map_err(|_| AgentError::ToolSchemaInvalid)?;
+                    // Snapshot all six scheduling columns before the write so
+                    // the undo receipt can restore the full prior state
+                    // (including a never-scheduled card's NULL columns).
+                    let prior: Option<FlashcardPriorScheduling> = sqlx::query_as(
+                        "SELECT next_review_at, ease_factor, review_interval_days, review_count, \
+                         last_review_at, mastered FROM flashcards WHERE id = ?",
+                    )
+                    .bind(&input.flashcard_id)
+                    .fetch_optional(&mut **tx)
+                    .await
+                    .map_err(map_sqlx)?;
+                    let output = flashcard::complete(tx, input.clone()).await?;
+                    // The tool already rejected missing/mastered rows; the
+                    // snapshot below is only taken for undo bookkeeping.
+                    let (
+                        next_review_at,
+                        ease_factor,
+                        review_interval_days,
+                        review_count,
+                        last_review_at,
+                        mastered,
+                    ) = prior.ok_or_else(|| {
+                        AgentError::Persistence("flashcard not found or mastered".to_owned())
+                    })?;
+                    Ok(DispatchResult {
+                        output: serde_json::to_value(output)
+                            .map_err(|_| AgentError::ToolSchemaInvalid)?,
+                        receipt: Some(json!({"delivery":"rust"})),
+                        undo: Some(json!({
+                            "kind": FLASHCARD_COMPLETE_UNDO_KIND,
+                            "flashcard_id": input.flashcard_id,
+                            "next_review_at": next_review_at,
+                            "ease_factor": ease_factor,
+                            "review_interval_days": review_interval_days,
+                            "review_count": review_count,
+                            "last_review_at": last_review_at,
+                            "mastered": mastered,
                         })),
                         undo_available: true,
                     })
@@ -1294,6 +1394,7 @@ pub(crate) async fn undo_in_transaction(
         }
         ("plan.apply_preview", "1") => undo_apply_preview_in_transaction(tx, &step).await,
         ("review.complete", "1") => undo_review_complete_in_transaction(tx, &step).await,
+        ("flashcard.complete", "1") => undo_flashcard_complete_in_transaction(tx, &step).await,
         _ => Err(AgentError::ToolSchemaInvalid),
     }
 }
@@ -1375,6 +1476,107 @@ async fn undo_review_complete_in_transaction(
         json!({
             "step_id": step.id,
             "tool_name": "review.complete",
+            "tool_version": "1",
+            "result": "undone"
+        })
+        .to_string(),
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    Ok(ToolUndoResponse {
+        step_id: step.id.clone(),
+        output: undo,
+    })
+}
+
+/// Undo for `flashcard.complete`: restore the six columns captured before
+/// the review (including `mastered`, so a quality=5 graduation rolls back to
+/// an active card — no `mastered = 0` filter here). A repeated undo is a
+/// conflict; a deleted card refuses to roll back silently.
+async fn undo_flashcard_complete_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    step: &UndoStep,
+) -> Result<ToolUndoResponse, AgentError> {
+    if step.undone_at.is_some() {
+        return Err(AgentError::Conflict);
+    }
+    let undo: Value = serde_json::from_str(
+        step.undo_json
+            .as_deref()
+            .ok_or(AgentError::ToolSchemaInvalid)?,
+    )
+    .map_err(|_| AgentError::ToolSchemaInvalid)?;
+    if undo["kind"].as_str() != Some(FLASHCARD_COMPLETE_UNDO_KIND) {
+        return Err(AgentError::ToolSchemaInvalid);
+    }
+    let flashcard_id = undo["flashcard_id"]
+        .as_str()
+        .ok_or(AgentError::ToolSchemaInvalid)?;
+    // 收据字段缺失时 fail-closed：拒绝撤销而不是把调度列静默清零。
+    let review_count = undo["review_count"]
+        .as_i64()
+        .ok_or(AgentError::ToolSchemaInvalid)?;
+    let ease_factor = undo["ease_factor"]
+        .as_f64()
+        .ok_or(AgentError::ToolSchemaInvalid)?;
+    let review_interval_days = undo["review_interval_days"]
+        .as_f64()
+        .ok_or(AgentError::ToolSchemaInvalid)?;
+    let mastered = undo["mastered"]
+        .as_i64()
+        .ok_or(AgentError::ToolSchemaInvalid)?;
+    // next_review_at / last_review_at are legitimately nullable (a never-
+    // scheduled card has NULL next_review_at), so null is a valid restore.
+    let updated = sqlx::query(
+        r#"
+        UPDATE flashcards
+        SET next_review_at = ?,
+            ease_factor = ?,
+            review_interval_days = ?,
+            review_count = ?,
+            last_review_at = ?,
+            mastered = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(undo["next_review_at"].as_str())
+    .bind(ease_factor)
+    .bind(review_interval_days)
+    .bind(review_count)
+    .bind(undo["last_review_at"].as_str())
+    .bind(mastered)
+    .bind(flashcard_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    if updated.rows_affected() != 1 {
+        return Err(AgentError::Conflict);
+    }
+
+    let updated_step = sqlx::query(
+        "UPDATE agent_steps SET undone_at=datetime('now','localtime') \
+         WHERE id=? AND undone_at IS NULL",
+    )
+    .bind(&step.id)
+    .execute(&mut **tx)
+    .await
+    .map_err(map_sqlx)?;
+    if updated_step.rows_affected() != 1 {
+        return Err(AgentError::IdempotencyConflict);
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO agent_events(run_id, step_id, event_type, payload_json)
+        VALUES(?, ?, 'tool.undone', ?)
+        "#,
+    )
+    .bind(&step.run_id)
+    .bind(&step.id)
+    .bind(
+        json!({
+            "step_id": step.id,
+            "tool_name": "flashcard.complete",
             "tool_version": "1",
             "result": "undone"
         })
@@ -2103,6 +2305,24 @@ async fn enforce_run_scope(
             }
         }
     }
+    // `flashcard.complete` references a flashcard through a dedicated field.
+    if tool_name == "flashcard.complete" {
+        if let Some(fc_id) = input.get("flashcard_id").and_then(Value::as_str) {
+            let fc_exam: Option<String> = sqlx::query_scalar(
+                "SELECT s.exam_id FROM flashcards f JOIN subjects s ON s.id = f.subject_id \
+                 WHERE f.id = ?",
+            )
+            .bind(fc_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(map_sqlx)?;
+            if let Some(fc_exam) = fc_exam {
+                if fc_exam != exam {
+                    return Err(scope_error());
+                }
+            }
+        }
+    }
     // `plan.apply_preview` carries no business id, but its persisted draft is
     // exam-scoped: the draft's exam must equal the bound exam.
     if tool_name == "plan.apply_preview" {
@@ -2145,6 +2365,9 @@ fn input_references_business_data(tool_name: &str, input: &Value) -> bool {
         return true;
     }
     if tool_name == "review.complete" && input.get("wrong_question_id").is_some() {
+        return true;
+    }
+    if tool_name == "flashcard.complete" && input.get("flashcard_id").is_some() {
         return true;
     }
     if tool_name == "plan.apply_preview" {
@@ -2888,6 +3111,101 @@ async fn build_approval_preview(
                 json!([]),
                 date.to_owned(),
                 json!({"subject_id": subject_id, "duration_min": duration, "date": date}),
+            )
+        }
+        "knowledge_point.create_batch" => {
+            let concepts = input
+                .get("concepts")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            // Tree-indented preview: a concept whose parent_name matches an
+            // earlier entry is nested under it; every line carries its
+            // optional source_ref. Depth resolution must mirror the executor's
+            // batch_ids lookup exactly: first matching earlier entry (not
+            // last), so preview indentation equals real parent-child on
+            // duplicate names.
+            let mut depths: Vec<(String, usize)> = Vec::new();
+            let mut lines: Vec<String> = Vec::new();
+            for concept in &concepts {
+                let name = concept["name"].as_str().unwrap_or("");
+                let parent_name = concept["parent_name"].as_str();
+                let depth = parent_name
+                    .and_then(|parent| {
+                        depths
+                            .iter()
+                            .find(|(candidate, _)| candidate == parent)
+                            .map(|(_, depth)| *depth + 1)
+                    })
+                    .unwrap_or(0);
+                let source_ref = concept["source_ref"].as_str().unwrap_or("");
+                lines.push(format!(
+                    "{}{}{}",
+                    "  ".repeat(depth),
+                    name,
+                    if source_ref.is_empty() {
+                        String::new()
+                    } else {
+                        format!("（{source_ref}）")
+                    }
+                ));
+                depths.push((name.to_owned(), depth));
+            }
+            let count = concepts.len() as i64;
+            (
+                "批量新增知识点".to_owned(),
+                count,
+                format!("新建 {count} 个知识点：\n{}", lines.join("\n")),
+                json!([]),
+                String::new(),
+                json!({"lines": lines}),
+            )
+        }
+        "flashcard.create_batch" => {
+            let cards = input
+                .get("cards")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            // Flat front list: the backs and provenance never enter the
+            // approval preview, only what will be shown face-up.
+            let lines: Vec<String> = cards
+                .iter()
+                .map(|card| {
+                    let front = card["front"].as_str().unwrap_or("");
+                    // Preview UX: truncate long fronts so 30×500 chars doesn't blow up the card.
+                    let truncated: String = front.chars().take(80).collect();
+                    if truncated.chars().count() < front.chars().count() {
+                        format!("{truncated}…")
+                    } else {
+                        truncated
+                    }
+                })
+                .collect();
+            let count = cards.len() as i64;
+            (
+                "批量新增闪卡".to_owned(),
+                count,
+                format!("新建 {count} 张闪卡：\n{}", lines.join("\n")),
+                json!([]),
+                String::new(),
+                json!({"lines": lines}),
+            )
+        }
+        "material.create" => {
+            let title = input.get("title").and_then(Value::as_str).unwrap_or("");
+            let content = input.get("content").and_then(Value::as_str).unwrap_or("");
+            let char_count = content.chars().count();
+            // Only the first 120 characters are excerpted; the full body never
+            // enters the approval preview.
+            let excerpt: String = content.chars().take(120).collect();
+            (
+                "新增学习资料".to_owned(),
+                1_i64,
+                format!("新增资料《{title}》共 {char_count} 字"),
+                json!([]),
+                String::new(),
+                json!({"title": title, "char_count": char_count, "excerpt": excerpt}),
             )
         }
         "wrong_question.create" => {

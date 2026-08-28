@@ -6,6 +6,7 @@ use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::SqlitePool;
 use uuid::Uuid;
+use zhiyan_lib::agent::commands::knowledge_tree_impl;
 use zhiyan_lib::agent::error::AgentError;
 use zhiyan_lib::agent::model::RunStatus;
 use zhiyan_lib::agent::repository::AgentRepository;
@@ -55,14 +56,16 @@ impl FileDatabase {
     }
 
     fn cleanup(&self) {
+        // Windows 上杀软可能长时间持有新建 .db 的句柄，重试耗尽后仍会删除失败；
+        // 本测试验证的是恢复逻辑而非文件清理，Drop 本就容忍失败，此处保持一致。
         for path in [
             self.path.clone(),
             PathBuf::from(format!("{}-wal", self.path.display())),
             PathBuf::from(format!("{}-shm", self.path.display())),
         ] {
-            remove_file_with_retry(&path).unwrap();
+            let _ = remove_file_with_retry(&path);
         }
-        remove_dir_with_retry(&self.directory).unwrap();
+        let _ = remove_dir_with_retry(&self.directory);
     }
 }
 
@@ -112,6 +115,8 @@ where
     F: FnMut() -> std::io::Result<()>,
 {
     let mut last_error = None;
+    // Windows 释放文件句柄可能滞后于 pool.close()（杀软扫描加剧），
+    // 固定 10ms×10 次不够，改为指数退避（总预算约 2s）。
     for attempt in 0..10 {
         match operation() {
             Ok(()) => return Ok(()),
@@ -122,7 +127,7 @@ where
                     && attempt < 9 =>
             {
                 last_error = Some(error);
-                std::thread::sleep(Duration::from_millis(10));
+                std::thread::sleep(Duration::from_millis(10 << attempt));
             }
             Err(error) => return Err(error),
         }
@@ -556,4 +561,140 @@ async fn append_event_persists_json_and_missing_get_maps_to_not_found() {
         repo.get_run("missing").await,
         Err(AgentError::NotFound(_))
     ));
+}
+
+/// Full-schema in-memory pool (business tables + agent tables) for the
+/// knowledge_tree read command.
+async fn business_test_pool() -> SqlitePool {
+    let options = SqliteConnectOptions::from_str("sqlite::memory:")
+        .unwrap()
+        .foreign_keys(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap();
+    for migration in zhiyan_lib::db::migrations() {
+        sqlx::raw_sql(&migration.sql).execute(&pool).await.unwrap();
+    }
+    pool
+}
+
+#[tokio::test]
+async fn knowledge_tree_returns_empty_without_any_exam() {
+    let pool = business_test_pool().await;
+    let empty = knowledge_tree_impl(&pool, None).await.unwrap();
+    assert_eq!(empty.exam_id, None);
+    assert!(empty.subjects.is_empty());
+}
+
+#[tokio::test]
+async fn knowledge_tree_assembles_parent_tree_sorted_with_wrong_counts() {
+    let pool = business_test_pool().await;
+    sqlx::raw_sql(
+        r#"
+        INSERT INTO exams (id, name, exam_date) VALUES ('exam-t', 'Tree', '2030-01-01');
+        INSERT INTO subjects (id, exam_id, name, sort_order)
+            VALUES ('sub-2', 'exam-t', 'English', 2),
+                   ('sub-1', 'exam-t', 'Math', 1),
+                   ('sub-3', 'exam-t', 'History', 3);
+        -- Math tree: root with two children declared out of order to prove sort_order wins.
+        INSERT INTO materials (id, exam_id, subject_id, title, content)
+            VALUES ('mat-1', 'exam-t', 'sub-1', '讲义', '第一节\n\n第二节');
+        INSERT INTO knowledge_points (id, subject_id, name, parent_id, current_mastery, sort_order, material_id, source_ref)
+            VALUES ('kp-b', 'sub-1', '导数应用', 'kp-root', 2, 2, NULL, NULL),
+                   ('kp-root', 'sub-1', '微积分', NULL, 3, 1, 'mat-1', '§1'),
+                   ('kp-a', 'sub-1', '极限', 'kp-root', 5, 3, NULL, NULL),
+                   ('kp-e', 'sub-2', '语法', NULL, 4, 1, NULL, NULL);
+        -- kp-a has one unmastered and one mastered wrong question => wrong_count = 1.
+        INSERT INTO wrong_questions (id, subject_id, question_desc, knowledge_point_id, mastered)
+            VALUES ('wq-1', 'sub-1', 'q1', 'kp-a', 0),
+                   ('wq-2', 'sub-1', 'q2', 'kp-a', 1),
+                   ('wq-3', 'sub-1', 'q3', 'kp-b', 0);
+        INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-t');
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Active-exam fallback resolves the only exam.
+    let out = knowledge_tree_impl(&pool, None).await.unwrap();
+    assert_eq!(out.exam_id.as_deref(), Some("exam-t"));
+
+    // Subjects ordered by sort_order; History has no knowledge points => children=[].
+    assert_eq!(out.subjects.len(), 3);
+    assert_eq!(out.subjects[0].name, "Math");
+    assert_eq!(out.subjects[1].name, "English");
+    assert_eq!(out.subjects[2].name, "History");
+    assert!(out.subjects[2].children.is_empty());
+
+    // English keeps its own single root.
+    assert_eq!(out.subjects[1].children.len(), 1);
+    assert_eq!(out.subjects[1].children[0].name, "语法");
+    assert_eq!(out.subjects[1].children[0].mastery, 4);
+    assert_eq!(out.subjects[1].children[0].wrong_count, 0);
+
+    // Math: one root, children sorted by sort_order (导数应用 before 极限).
+    let math = &out.subjects[0];
+    assert_eq!(math.children.len(), 1);
+    let root = &math.children[0];
+    assert_eq!(root.name, "微积分");
+    assert_eq!(root.mastery, 3);
+    assert_eq!(root.wrong_count, 0);
+    assert_eq!(root.source_ref.as_deref(), Some("§1"));
+    assert_eq!(root.material_id.as_deref(), Some("mat-1"));
+    assert_eq!(root.children.len(), 2);
+    assert_eq!(root.children[0].name, "导数应用");
+    assert_eq!(root.children[0].mastery, 2);
+    assert_eq!(root.children[0].wrong_count, 1);
+    assert_eq!(root.children[1].name, "极限");
+    assert_eq!(root.children[1].mastery, 5);
+    assert_eq!(root.children[1].wrong_count, 1); // mastered wq excluded
+
+    // Explicit exam id bypasses the fallback and yields the same tree.
+    let explicit = knowledge_tree_impl(&pool, Some("exam-t".to_owned()))
+        .await
+        .unwrap();
+    assert_eq!(explicit.exam_id.as_deref(), Some("exam-t"));
+    assert_eq!(explicit.subjects.len(), 3);
+}
+
+#[tokio::test]
+async fn knowledge_tree_survives_parent_id_cycles_without_recursing_forever() {
+    let pool = business_test_pool().await;
+    sqlx::raw_sql(
+        r#"
+        INSERT INTO exams (id, name, exam_date) VALUES ('exam-c', 'Cycle', '2030-01-01');
+        INSERT INTO subjects (id, exam_id, name, sort_order)
+            VALUES ('sub-1', 'exam-c', 'Math', 1);
+        -- A reachable chain plus a two-node mutual cycle; the cycle members are
+        -- not roots (non-null parent_id), so they must be dropped from the output
+        -- without crashing or looping.
+        INSERT INTO knowledge_points (id, subject_id, name, parent_id, current_mastery, sort_order)
+            VALUES ('kp-root', 'sub-1', '可达根', NULL, 3, 1),
+                   ('kp-child', 'sub-1', '可达子', 'kp-root', 3, 2),
+                   ('kp-x', 'sub-1', '环甲', 'kp-y', 3, 3),
+                   ('kp-y', 'sub-1', '环乙', 'kp-x', 3, 4),
+                   ('kp-self', 'sub-1', '自指', 'kp-self', 3, 5);
+        INSERT INTO settings(key,value) VALUES('agent_active_exam_id','exam-c');
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Must return Ok promptly (no stack overflow on the mutual/self cycles).
+    let out = knowledge_tree_impl(&pool, None).await.unwrap();
+    assert_eq!(out.exam_id.as_deref(), Some("exam-c"));
+
+    // Only the reachable root survives; the cycle members and self-loop node
+    // never appear anywhere in the tree.
+    assert_eq!(out.subjects.len(), 1);
+    let math = &out.subjects[0];
+    assert_eq!(math.children.len(), 1);
+    assert_eq!(math.children[0].id, "kp-root");
+    assert_eq!(math.children[0].children.len(), 1);
+    assert_eq!(math.children[0].children[0].id, "kp-child");
+    assert!(math.children[0].children[0].children.is_empty());
 }

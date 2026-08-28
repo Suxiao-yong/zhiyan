@@ -28,7 +28,10 @@ const SYSTEM_PROMPT: &str = "你是智研的 AI 学习助手，帮助用户真�
 2. 用户答错或求助时，不直接给答案：用反问引导其自己推导（苏格拉底式），逐步缩小范围，直到用户说出关键步骤再确认。\
 3. 根据检查结果如实给出 mastery_rating（1-5）：全对且轻松=5，全对=4，部分对=3，多数不会=2，完全不懂=1，并把它用于 record.checkin_plan。\
 4. 用户做错的题，主动建议用 wrong_question.create 记入错题库；复习巩固用 review.get_due 查询今日应复习项、review.complete 记录复习结果；已彻底掌握的用 mark_mastered 标记。\
-5. 利用提供的工具回答用户目标；获取到信息后给出不含 tool_calls 的最终答复，使用中文。";
+5. 用户粘贴学习材料时：若消息表明材料已导入（如“已导入《X》共 N 段”），直接基于该材料提出概念拆解方案；否则先调 material.create 存储原文。拆解方案中每个概念标注出处段号 §N，经确认后先用 1 道检查题验证用户对该概念的理解（答错则先引导弄懂，测过才前进），再用 knowledge_point.create_batch 落库并主动建议为每个概念生成 1-2 张闪卡（flashcard.create_batch），闪卡正面=问题/术语，背面=答案，必须带 source_ref。\
+6. 引用规范：所有基于材料内容的讲解、检查题、闪卡，必须标注出处段号（如 §2）；用户问“为什么/出自哪”时，回答 material 的 §N 段原文要点。\
+7. 分段约定：材料按空行分段，段号从 1 开始；拆解概念时先在心里给材料分段再引用段号。source_ref 只能写 §N 或 §N-§M 格式。\
+8. 利用提供的工具回答用户目标；获取到信息后给出不含 tool_calls 的最终答复，使用中文。";
 
 /// Version of the data-export consent policy. Bumping it invalidates every
 /// previously granted consent, forcing users to re-confirm the data scope.
@@ -880,6 +883,14 @@ mod tests {
         assert!(SYSTEM_PROMPT.contains("变式"));
         assert!(SYSTEM_PROMPT.contains("mastery_rating"));
     }
+
+    #[test]
+    fn system_prompt_contains_material_import_and_citation_rules() {
+        assert!(SYSTEM_PROMPT.contains("material.create"));
+        assert!(SYSTEM_PROMPT.contains("flashcard.create_batch"));
+        assert!(SYSTEM_PROMPT.contains("§"));
+        assert!(SYSTEM_PROMPT.contains("分段"));
+    }
     use crate::agent::executor::AgentExecutor;
     use crate::agent::llm::{LlmProvider, ProviderResponse, ProviderUsage, SyntheticProvider};
     use crate::agent::model::RunEvent;
@@ -955,7 +966,7 @@ mod tests {
         let offering = planner.tool_offering().await.unwrap();
         // Task 13: every registered tool is Rust-owned and offered to the
         // model (R3 writes stay approval-gated by their descriptor).
-        assert_eq!(offering.len(), 13);
+        assert_eq!(offering.len(), 18);
         // The provider-facing name is the dot-free alias (DeepSeek rejects
         // dotted function names), while the registry keeps the dotted name.
         let today = offering
@@ -981,7 +992,7 @@ mod tests {
             .await
             .unwrap();
         let offering = planner.tool_offering().await.unwrap();
-        assert_eq!(offering.len(), 13);
+        assert_eq!(offering.len(), 18);
         let checkin = offering
             .iter()
             .find(|t| t["function"]["name"] == "record_checkin_plan")

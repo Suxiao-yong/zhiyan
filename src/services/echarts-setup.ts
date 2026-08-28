@@ -3,7 +3,15 @@
 // 从而保证 Today/Agent 首屏不加载 ECharts。use() 幂等,重复 import 无害。
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { BarChart, LineChart, PieChart, GaugeChart, RadarChart, HeatmapChart } from 'echarts/charts'
+import {
+  BarChart,
+  LineChart,
+  PieChart,
+  GaugeChart,
+  RadarChart,
+  HeatmapChart,
+  TreeChart,
+} from 'echarts/charts'
 import {
   GridComponent,
   TooltipComponent,
@@ -26,6 +34,7 @@ export function ensureECharts(): void {
     GaugeChart,
     RadarChart,
     HeatmapChart,
+    TreeChart,
     GridComponent,
     TooltipComponent,
     LegendComponent,
