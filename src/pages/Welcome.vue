@@ -3,6 +3,43 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
+
+function isTauri(): boolean {
+  return typeof window !== 'undefined' && !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+}
+function heuristicKps(subject: string): Array<{ name: string; chapter: string | null }> {
+  const s = subject.trim().toLowerCase()
+  if (s.includes('数学') || s.includes('math'))
+    return [
+      { name: '函数与极限', chapter: '第一章' },
+      { name: '导数与微分', chapter: '第二章' },
+      { name: '积分学', chapter: '第三章' },
+      { name: '线性代数', chapter: '第四章' },
+      { name: '概率统计', chapter: '第五章' },
+    ]
+  if (s.includes('英语') || s.includes('english'))
+    return [
+      { name: '词汇', chapter: '第一章' },
+      { name: '语法', chapter: '第二章' },
+      { name: '阅读理解', chapter: '第三章' },
+      { name: '写作', chapter: '第四章' },
+      { name: '翻译', chapter: '第五章' },
+    ]
+  if (s.includes('政治'))
+    return [
+      { name: '马克思主义原理', chapter: '第一章' },
+      { name: '毛泽东思想', chapter: '第二章' },
+      { name: '中国特色社会主义', chapter: '第三章' },
+      { name: '时政', chapter: '第四章' },
+    ]
+  return [
+    { name: '基础概念', chapter: '第一章' },
+    { name: '核心原理', chapter: '第二章' },
+    { name: '重点难点', chapter: '第三章' },
+    { name: '综合应用', chapter: '第四章' },
+    { name: '真题要点', chapter: '第五章' },
+  ]
+}
 import {
   ArrowRight,
   ArrowLeft,
@@ -13,6 +50,7 @@ import {
   Lock,
   ChatDotRound,
   Loading,
+  Notebook,
 } from '@element-plus/icons-vue'
 import { useExamStore } from '@/stores/exam'
 import { useSettingsStore } from '@/stores/settings'
@@ -61,9 +99,19 @@ const levelLabels = ['', '入门', '基础', '一般', '熟练', '精通']
 
 // ---- LLM 配置（步骤 1，强制）----
 const llmProviders = [
-  { value: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
+  {
+    value: 'deepseek',
+    label: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com',
+    model: 'deepseek-chat',
+  },
   { value: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com', model: 'gpt-4o' },
-  { value: 'qwen', label: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode', model: 'qwen-plus' },
+  {
+    value: 'qwen',
+    label: '通义千问',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode',
+    model: 'qwen-plus',
+  },
   { value: 'kimi', label: 'Kimi', baseUrl: 'https://api.moonshot.cn', model: 'moonshot-v1-8k' },
   { value: 'custom', label: '自定义', baseUrl: '', model: '' },
 ]
@@ -106,6 +154,7 @@ function validateLlmForm(): string | null {
   if (!settingsStore.keyConfigured && !llmApiKey.value.trim()) return '请填写 API Key'
   return null
 }
+
 async function saveLlmForOnboarding(): Promise<boolean> {
   const problem = validateLlmForm()
   if (problem) {
@@ -127,7 +176,22 @@ async function saveLlmForOnboarding(): Promise<boolean> {
     ElMessage.success('大模型配置已保存')
     return true
   } catch (e) {
-    ElMessage.error((e as Error).message ?? '保存失败')
+    const msg = (e as Error)?.message ?? ''
+    // 浏览器预览（vite）下 __TAURI_INTERNALS__ 不存在，invoke 会抛 Cannot read properties of undefined
+    if (!isTauri() || msg.includes('invoke') || msg.includes('__TAURI')) {
+      // 降级：仅内存保存，供引导流程继续；提示用户在桌面端重新配置
+      settingsStore.llmConfig = {
+        provider: llmForm.provider,
+        baseUrl: llmForm.baseUrl,
+        model: llmForm.model,
+        temperature: llmForm.temperature,
+      } as never
+      if (llmApiKey.value.trim()) (settingsStore as unknown as { keyConfigured: { value: boolean } }).keyConfigured.value = true
+      llmApiKey.value = ''
+      ElMessage.warning('浏览器预览模式：配置已临时保存，请在桌面应用中重新配置以持久化')
+      return true
+    }
+    ElMessage.error(msg || '保存失败')
     return false
   } finally {
     llmSaving.value = false
@@ -176,27 +240,52 @@ async function autoSuggestKps() {
   kpSuggesting.value = true
   kpSuggestError.value = ''
   try {
-    const resp = await invoke<{ suggestions: Array<Array<{ name: string; chapter: string | null }>> }>('suggest_knowledge_points', {
-      input: {
-        exam_type: exam.exam_type,
-        exam_name: exam.name.trim(),
-        subjects: validSubjects.map((s) => s.name.trim()),
-      },
-    })
-    const suggestions = resp.suggestions ?? []
+    let suggestions: Array<Array<{ name: string; chapter: string | null }>>
+    if (!isTauri()) {
+      // 浏览器预览（无 Tauri/LLM）直接用本地启发式，避免 invoke 报错
+      suggestions = validSubjects.map((s) => heuristicKps(s.name.trim()))
+    } else {
+      const resp = await invoke<{
+        suggestions: Array<Array<{ name: string; chapter: string | null }>>
+      }>('suggest_knowledge_points', {
+        input: {
+          exam_type: exam.exam_type,
+          exam_name: exam.name.trim(),
+          subjects: validSubjects.map((s) => s.name.trim()),
+        },
+      })
+      suggestions = resp.suggestions ?? []
+    }
     validSubjects.forEach((s, idx) => {
       const list = suggestions[idx] ?? []
-      s.knowledgePoints = list.slice(0, 8).map((kp) => ({
-        name: kp.name?.trim() || '',
-        chapter: kp.chapter?.trim() || '',
-        mastery: 3,
-      })).filter((k) => k.name)
+      s.knowledgePoints = list
+        .slice(0, 8)
+        .map((kp) => ({
+          name: kp.name?.trim() || '',
+          chapter: kp.chapter?.trim() || '',
+          mastery: 3,
+        }))
+        .filter((k) => k.name)
     })
     if (validSubjects.every((s) => !s.knowledgePoints.length)) {
       kpSuggestError.value = '未能自动获取知识点，请手动添加'
     }
   } catch (e) {
-    kpSuggestError.value = (e as Error).message ?? '自动获取失败，可手动添加'
+    // 降级到本地启发式，避免阻塞流程
+    try {
+      validSubjects.forEach((s) => {
+        if (!s.knowledgePoints.length) {
+          s.knowledgePoints = heuristicKps(s.name.trim()).map((kp) => ({
+            name: kp.name,
+            chapter: kp.chapter ?? '',
+            mastery: 3,
+          }))
+        }
+      })
+      kpSuggestError.value = ''
+    } catch {
+      kpSuggestError.value = (e as Error).message ?? '自动获取失败，可手动添加'
+    }
   } finally {
     kpSuggesting.value = false
   }
@@ -209,6 +298,30 @@ const welcomeStepCount = welcomeSteps.length - 1 // 排除“欢迎”本身
 const welcomeIntro = computed(
   () => `用 ${welcomeStepCount} 步完成你的考试配置：${welcomeSteps.slice(1).join(' → ')}。`,
 )
+// 顶部品牌简介跟随项目情况动态生成（考试类型数/步骤数/核心能力）
+const brandIntro = computed(() => {
+  const examN = examTypes.length
+  const cap = '材料导入 · 概念拆解 · 闪卡记忆 · 思维导图'
+  return `AI 驱动 · ${welcomeStepCount} 步完成配置 · 支持 ${examN} 类考试 · 本地 SQLite · 半 Agent 决策 · ${cap}`
+})
+const introFeatures = computed(() => [
+  {
+    icon: Aim,
+    title: '通用化',
+    desc: `支持 ${examTypes.map((t) => t.label).join('、')} 等 ${examTypes.length} 类考试，自定义扩展`,
+  },
+  {
+    icon: Lock,
+    title: '本地优先',
+    desc: '所有数据存于本地 SQLite（含材料/闪卡/知识点），你完全掌控',
+  },
+  {
+    icon: ChatDotRound,
+    title: '半 Agent',
+    desc: `${welcomeSteps.slice(1, 3).join('/')} 后，AI 按需联网搜集知识点并生成复习计划，是否采纳由你决定`,
+  },
+  { icon: Notebook, title: '内容智能', desc: '材料导入 · 知识点拆解 · 闪卡复习 · 思维导图' },
+])
 
 const disabledDate = (date: Date) => {
   const t = new Date()
@@ -320,7 +433,7 @@ async function finish() {
       <div class="welcome__brand">
         <span class="brand-mark" />
         <h1>智研</h1>
-        <p>AI 驱动的个性化学习规划 · 半 Agent 模式：AI 提建议，你做决策</p>
+        <p>{{ brandIntro }}</p>
       </div>
 
       <el-steps :active="current" finish-status="success" align-center>
@@ -333,26 +446,9 @@ async function finish() {
           <h2>欢迎使用智研</h2>
           <p>{{ welcomeIntro }}</p>
           <ul class="features">
-            <li>
-              <el-icon class="features__icon"><Aim /></el-icon>
-              <span>
-                <b>通用化</b>
-                ：支持考研、考公、考证与自定义考试
-              </span>
-            </li>
-            <li>
-              <el-icon class="features__icon"><Lock /></el-icon>
-              <span>
-                <b>本地优先</b>
-                ：所有数据存于本地 SQLite，你完全掌控
-              </span>
-            </li>
-            <li>
-              <el-icon class="features__icon"><ChatDotRound /></el-icon>
-              <span>
-                <b>半 Agent</b>
-                ：AI 提建议，是否采纳由你决定
-              </span>
+            <li v-for="f in introFeatures" :key="f.title">
+              <el-icon class="features__icon"><component :is="f.icon" /></el-icon>
+              <span><b>{{ f.title }}</b>：{{ f.desc }}</span>
             </li>
           </ul>
         </div>
@@ -361,13 +457,30 @@ async function finish() {
         <div v-show="current === 1" class="step">
           <h2>配置大模型</h2>
           <p class="muted" style="margin-bottom: var(--sp-4)">
-            进入应用的第一步：配置大模型后才能使用 AI 规划、知识点智能填充等能力。未配置无法继续下一步。
+            进入应用的第一步：配置大模型后才能使用 AI
+            规划、知识点智能填充等能力。未配置无法继续下一步。
           </p>
-          <el-alert v-if="settingsStore.keyConfigured && settingsStore.llmConfig" type="success" :closable="false" show-icon title="已配置大模型，可直接继续或修改后保存" style="margin-bottom: var(--sp-4)" />
+          <el-alert
+            v-if="settingsStore.keyConfigured && settingsStore.llmConfig"
+            type="success"
+            :closable="false"
+            show-icon
+            title="已配置大模型，可直接继续或修改后保存"
+            style="margin-bottom: var(--sp-4)"
+          />
           <el-form label-width="90px" @submit.prevent>
             <el-form-item label="Provider">
-              <el-select v-model="llmForm.provider" style="width: 100%" @change="onLlmProviderChange">
-                <el-option v-for="p in llmProviders" :key="p.value" :label="p.label" :value="p.value" />
+              <el-select
+                v-model="llmForm.provider"
+                style="width: 100%"
+                @change="onLlmProviderChange"
+              >
+                <el-option
+                  v-for="p in llmProviders"
+                  :key="p.value"
+                  :label="p.label"
+                  :value="p.value"
+                />
               </el-select>
             </el-form-item>
             <el-form-item label="API 地址">
@@ -377,15 +490,32 @@ async function finish() {
               <el-input v-model="llmForm.model" placeholder="如 deepseek-chat" />
             </el-form-item>
             <el-form-item label="API Key">
-              <el-input v-model="llmApiKey" :type="llmShowKey ? 'text' : 'password'" :placeholder="settingsStore.keyConfigured ? '已配置，留空则保留原 Key' : '必填'">
-                <template #append><el-button @click="llmShowKey = !llmShowKey">{{ llmShowKey ? '隐藏' : '显示' }}</el-button></template>
+              <el-input
+                v-model="llmApiKey"
+                :type="llmShowKey ? 'text' : 'password'"
+                :placeholder="settingsStore.keyConfigured ? '已配置，留空则保留原 Key' : '必填'"
+              >
+                <template #append>
+                  <el-button @click="llmShowKey = !llmShowKey">
+                    {{ llmShowKey ? '隐藏' : '显示' }}
+                  </el-button>
+                </template>
               </el-input>
             </el-form-item>
             <el-form-item label="Temperature">
-              <el-slider v-model="llmForm.temperature" :min="0" :max="2" :step="0.1" show-input style="max-width: 400px" />
+              <el-slider
+                v-model="llmForm.temperature"
+                :min="0"
+                :max="2"
+                :step="0.1"
+                show-input
+                style="max-width: 400px"
+              />
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" :loading="llmSaving" @click="saveLlmForOnboarding">保存配置</el-button>
+              <el-button type="primary" :loading="llmSaving" @click="saveLlmForOnboarding">
+                保存配置
+              </el-button>
               <el-button :loading="llmTesting" @click="testLlmForOnboarding">连接测试</el-button>
             </el-form-item>
           </el-form>
@@ -472,29 +602,55 @@ async function finish() {
           <div class="step-head step-head--column">
             <h2>基础水平评估</h2>
             <span class="muted">
-              已根据你填写的考试与科目，自动联网搜集各科核心知识点，请确认或修改后自评掌握度（1-5 星）。可跳过，稍后在考试配置中补充。
+              已根据你填写的考试与科目，自动联网搜集各科核心知识点，请确认或修改后自评掌握度（1-5
+              星）。可跳过，稍后在考试配置中补充。
             </span>
           </div>
-          <el-alert v-if="kpSuggesting" type="info" :closable="false" show-icon title="AI 正在联网搜集知识点，请稍候..." style="margin-bottom: var(--sp-3)" />
-          <el-alert v-if="kpSuggestError" type="warning" :closable="false" :title="kpSuggestError" show-icon style="margin-bottom: var(--sp-3)" />
-          <div v-if="kpSuggesting" style="text-align: center; padding: var(--sp-6)"><el-icon class="is-loading" style="font-size: 24px"><Loading /></el-icon><div class="muted" style="margin-top: var(--sp-2)">正在生成知识点...</div></div>
+          <el-alert
+            v-if="kpSuggesting"
+            type="info"
+            :closable="false"
+            show-icon
+            title="AI 正在联网搜集知识点，请稍候..."
+            style="margin-bottom: var(--sp-3)"
+          />
+          <el-alert
+            v-if="kpSuggestError"
+            type="warning"
+            :closable="false"
+            :title="kpSuggestError"
+            show-icon
+            style="margin-bottom: var(--sp-3)"
+          />
+          <div v-if="kpSuggesting" style="text-align: center; padding: var(--sp-6)">
+            <el-icon class="is-loading" style="font-size: 24px"><Loading /></el-icon>
+            <div class="muted" style="margin-top: var(--sp-2)">正在生成知识点...</div>
+          </div>
           <template v-else>
-          <el-collapse v-for="(s, i) in subjects" :key="i" class="kp-collapse">
-            <el-collapse-item
-              :title="`${s.name || '科目 ' + (i + 1)}（${s.knowledgePoints.length} 个知识点）`"
-              :name="i"
-            >
-              <div v-for="(kp, j) in s.knowledgePoints" :key="j" class="kp-row">
-                <el-input v-model="kp.name" placeholder="知识点名称" class="kp-row__name" />
-                <el-input v-model="kp.chapter" placeholder="章节（可选）" class="kp-row__chapter" />
-                <el-rate v-model="kp.mastery" />
-                <el-button :icon="Delete" type="danger" circle @click="removeKp(s, j)" />
-              </div>
-              <el-button :icon="Plus" size="small" @click="addKp(s)">添加知识点</el-button>
-            </el-collapse-item>
-          </el-collapse>
+            <el-collapse v-for="(s, i) in subjects" :key="i" class="kp-collapse">
+              <el-collapse-item
+                :title="`${s.name || '科目 ' + (i + 1)}（${s.knowledgePoints.length} 个知识点）`"
+                :name="i"
+              >
+                <div v-for="(kp, j) in s.knowledgePoints" :key="j" class="kp-row">
+                  <el-input v-model="kp.name" placeholder="知识点名称" class="kp-row__name" />
+                  <el-input
+                    v-model="kp.chapter"
+                    placeholder="章节（可选）"
+                    class="kp-row__chapter"
+                  />
+                  <el-rate v-model="kp.mastery" />
+                  <el-button :icon="Delete" type="danger" circle @click="removeKp(s, j)" />
+                </div>
+                <el-button :icon="Plus" size="small" @click="addKp(s)">添加知识点</el-button>
+              </el-collapse-item>
+            </el-collapse>
           </template>
-          <div style="margin-top: var(--sp-3)"><el-button size="small" :loading="kpSuggesting" @click="autoSuggestKps">重新智能填充</el-button></div>
+          <div style="margin-top: var(--sp-3)">
+            <el-button size="small" :loading="kpSuggesting" @click="autoSuggestKps">
+              重新智能填充
+            </el-button>
+          </div>
         </div>
 
         <!-- 步骤 5：确认完成 -->

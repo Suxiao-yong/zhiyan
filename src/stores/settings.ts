@@ -11,6 +11,16 @@ import { invoke } from '@tauri-apps/api/core'
 import { getSetting, setSetting, deleteSetting, hasSetting } from '@/services/db'
 import type { LLMConfig } from '@/types'
 
+function isTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+function lsKey(provider: string): string {
+  return `zhiyan_api_key_${provider}`
+}
+function settingsLsKey(key: string): string {
+  return `zhiyan_settings_${key}`
+}
+
 /** settings 表中旧 fallback key 的键名（仅用于检测并提示重输） */
 function fallbackKey(provider: string): string {
   return `${provider}_api_key_fallback`
@@ -28,6 +38,10 @@ async function hasLegacyFallback(provider: string): Promise<boolean> {
 /** 保存用户新输入的 apiKey：只写 keyring；成功后清理旧 fallback */
 async function saveApiKey(provider: string, key: string): Promise<void> {
   if (!key) return
+  if (!isTauri()) {
+    try { localStorage.setItem(lsKey(provider), key) } catch { /* ignore */ }
+    return
+  }
   await invoke('store_api_key', { provider, key })
   // 用户成功保存到 keyring 后，删除旧的 fallback 键（新代码不得创建/读取 fallback）
   try {
@@ -48,16 +62,29 @@ export const useSettingsStore = defineStore('settings', () => {
   const legacyFallbackDetected = ref(false)
 
   async function loadSettings() {
-    const t = await getSetting('theme')
-    theme.value = t === 'dark' ? 'dark' : 'light'
-    reminderTime.value = await getSetting('reminder_time')
-    notificationEnabled.value = (await getSetting('notification_enabled')) !== 'false'
+    try {
+      const t = await getSetting('theme')
+      theme.value = t === 'dark' ? 'dark' : 'light'
+      reminderTime.value = await getSetting('reminder_time')
+      notificationEnabled.value = (await getSetting('notification_enabled')) !== 'false'
+    } catch {
+      // 浏览器预览（无 Tauri/DB）时回退到 localStorage/默认值
+      try {
+        const t = localStorage.getItem(settingsLsKey('theme'))
+        theme.value = t === 'dark' ? 'dark' : 'light'
+      } catch { /* ignore */ }
+    }
     await loadLlmConfig()
   }
 
   /** 按 provider 刷新 key 状态（keyring 布尔 + 旧 fallback 键检测）。
    *  provider 切换时表单已改但未保存，不能依赖 llm_provider 的已存值。 */
   async function refreshKeyState(provider: string) {
+    if (!isTauri()) {
+      try { keyConfigured.value = !!localStorage.getItem(lsKey(provider)) } catch { keyConfigured.value = false }
+      legacyFallbackDetected.value = false
+      return
+    }
     try {
       keyConfigured.value = await invoke<boolean>('has_api_key', { provider })
     } catch {
@@ -68,16 +95,35 @@ export const useSettingsStore = defineStore('settings', () => {
 
   /** 从 settings 表加载非敏感配置；key 的存在性只通过 has_api_key 布尔结果获知 */
   async function loadLlmConfig() {
-    const provider = await getSetting('llm_provider')
+    let provider: string | null = null
+    let baseUrl = ''
+    let model = ''
+    let tempRaw: string | null = null
+    try {
+      provider = await getSetting('llm_provider')
+      if (provider) {
+        baseUrl = (await getSetting('llm_base_url')) ?? ''
+        model = (await getSetting('llm_model')) ?? ''
+        tempRaw = await getSetting('llm_temperature')
+      }
+    } catch {
+      // 浏览器预览：从 localStorage 回退
+      try {
+        provider = localStorage.getItem(settingsLsKey('llm_provider'))
+        if (provider) {
+          baseUrl = localStorage.getItem(settingsLsKey('llm_base_url')) ?? ''
+          model = localStorage.getItem(settingsLsKey('llm_model')) ?? ''
+          tempRaw = localStorage.getItem(settingsLsKey('llm_temperature'))
+        }
+      } catch { /* ignore */ }
+    }
     if (!provider) {
       llmConfig.value = null
       keyConfigured.value = false
       legacyFallbackDetected.value = false
       return
     }
-    const baseUrl = (await getSetting('llm_base_url')) ?? ''
-    const model = (await getSetting('llm_model')) ?? ''
-    const temperature = Number(await getSetting('llm_temperature')) || 0.7
+    const temperature = Number(tempRaw) || 0.7
     llmConfig.value = { provider, baseUrl, model, temperature }
     await refreshKeyState(provider)
   }
@@ -88,6 +134,18 @@ export const useSettingsStore = defineStore('settings', () => {
   async function saveLlmConfig(form: LLMConfig, apiKeyInput = '') {
     if (apiKeyInput) {
       await saveApiKey(form.provider, apiKeyInput)
+    }
+    if (!isTauri()) {
+      try {
+        localStorage.setItem(settingsLsKey('llm_provider'), form.provider)
+        localStorage.setItem(settingsLsKey('llm_base_url'), form.baseUrl)
+        localStorage.setItem(settingsLsKey('llm_model'), form.model)
+        localStorage.setItem(settingsLsKey('llm_temperature'), String(form.temperature))
+      } catch { /* ignore */ }
+      llmConfig.value = { ...form }
+      if (apiKeyInput) keyConfigured.value = true
+      legacyFallbackDetected.value = false
+      return
     }
     await setSetting('llm_provider', form.provider, 'LLM Provider')
     await setSetting('llm_base_url', form.baseUrl, 'LLM baseUrl')
@@ -101,16 +159,24 @@ export const useSettingsStore = defineStore('settings', () => {
   async function clearLlmConfig() {
     if (llmConfig.value) {
       const provider = llmConfig.value.provider
-      try {
-        await invoke('delete_api_key', { provider })
-      } catch {
-        /* ignore */
-      }
-      // 同时清除旧 fallback 键
-      try {
-        await deleteSetting(fallbackKey(provider))
-      } catch {
-        /* ignore */
+      if (!isTauri()) {
+        try { localStorage.removeItem(lsKey(provider)) } catch { /* ignore */ }
+        try { localStorage.removeItem(settingsLsKey('llm_provider')) } catch { /* ignore */ }
+        try { localStorage.removeItem(settingsLsKey('llm_base_url')) } catch { /* ignore */ }
+        try { localStorage.removeItem(settingsLsKey('llm_model')) } catch { /* ignore */ }
+        try { localStorage.removeItem(settingsLsKey('llm_temperature')) } catch { /* ignore */ }
+      } else {
+        try {
+          await invoke('delete_api_key', { provider })
+        } catch {
+          /* ignore */
+        }
+        // 同时清除旧 fallback 键
+        try {
+          await deleteSetting(fallbackKey(provider))
+        } catch {
+          /* ignore */
+        }
       }
     }
     llmConfig.value = null
