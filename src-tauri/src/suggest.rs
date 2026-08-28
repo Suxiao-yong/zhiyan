@@ -175,11 +175,7 @@ pub async fn suggest_knowledge_points(
         }
     };
 
-    let text = resp
-        .content
-        .as_deref()
-        .unwrap_or(streamed.as_str())
-        .trim();
+    let text = resp.content.as_deref().unwrap_or(streamed.as_str()).trim();
     if let Some(parsed) = parse_llm_json(text, subjects.len()) {
         return Ok(SuggestKpOutput {
             suggestions: parsed,
