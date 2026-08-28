@@ -70,6 +70,11 @@ watch(
 
 async function submit(): Promise<void> {
   // 显式守卫：不依赖 el-form 规则管道（jsdom 下其聚合校验不可靠），确保非法输入绝不入库。
+  const activeExamId = examStore.activeExamId
+  if (!activeExamId) {
+    error.value = '请先选择考试'
+    return
+  }
   if (!form.title.trim() || !form.subject_id || charCount.value > MAX_CHARS) {
     error.value = !form.title.trim()
       ? '请输入材料标题'
@@ -86,6 +91,7 @@ async function submit(): Promise<void> {
     // insert 成功即视为导入成功：后续消息失败不再阻塞关闭/emit，避免用户重试产生重复行。
     await insert('materials', {
       id: uuidv4(),
+      exam_id: activeExamId,
       title: form.title.trim(),
       content: form.content,
       subject_id: form.subject_id,
@@ -139,7 +145,9 @@ async function submit(): Promise<void> {
             data-test="content-input"
             placeholder="粘贴材料正文（空行分段）"
           />
-          <span class="char-count tnum" data-test="char-count">{{ charCount }} / {{ MAX_CHARS }}</span>
+          <span class="char-count tnum" data-test="char-count">
+            {{ charCount }} / {{ MAX_CHARS }}
+          </span>
         </div>
       </el-form-item>
     </el-form>

@@ -63,6 +63,8 @@ export async function getExamCascadeCounts(examId: string): Promise<{
   study_records: number
   study_plans: number
   wrong_questions: number
+  materials: number
+  flashcards: number
 }> {
   const subjects = await query<{ id: string }>('SELECT id FROM subjects WHERE exam_id = ?', [
     examId,
@@ -75,6 +77,8 @@ export async function getExamCascadeCounts(examId: string): Promise<{
       study_records: 0,
       study_plans: 0,
       wrong_questions: 0,
+      materials: 0,
+      flashcards: 0,
     }
   }
   const ph = subjectIds.map(() => '?').join(',')
@@ -84,6 +88,8 @@ export async function getExamCascadeCounts(examId: string): Promise<{
     study_records: await count('study_records', `subject_id IN (${ph})`, subjectIds),
     study_plans: await count('study_plans', 'exam_id = ?', [examId]),
     wrong_questions: await count('wrong_questions', `subject_id IN (${ph})`, subjectIds),
+    materials: await count('materials', `subject_id IN (${ph})`, subjectIds),
+    flashcards: await count('flashcards', `subject_id IN (${ph})`, subjectIds),
   }
 }
 
@@ -104,11 +110,13 @@ export async function deleteExam(id: string): Promise<void> {
   await remove('exams', id)
 }
 
-/** 按科目级联清理其下的错题/计划/记录/知识点，再删科目本身 */
+/** 按科目级联清理其下的错题/计划/记录/知识点/材料/闪卡，再删科目本身 */
 async function deleteSubjectCascade(subjectId: string): Promise<void> {
   await execute('DELETE FROM wrong_questions WHERE subject_id = ?', [subjectId])
   await execute('DELETE FROM study_plans WHERE subject_id = ?', [subjectId])
   await execute('DELETE FROM study_records WHERE subject_id = ?', [subjectId])
+  await execute('DELETE FROM flashcards WHERE subject_id = ?', [subjectId])
+  await execute('DELETE FROM materials WHERE subject_id = ?', [subjectId])
   await execute('DELETE FROM knowledge_points WHERE subject_id = ?', [subjectId])
   await remove('subjects', subjectId)
 }
@@ -153,12 +161,16 @@ export async function getSubjectCascadeCounts(subjectId: string): Promise<{
   study_records: number
   study_plans: number
   wrong_questions: number
+  materials: number
+  flashcards: number
 }> {
   return {
     knowledge_points: await count('knowledge_points', 'subject_id = ?', [subjectId]),
     study_records: await count('study_records', 'subject_id = ?', [subjectId]),
     study_plans: await count('study_plans', 'subject_id = ?', [subjectId]),
     wrong_questions: await count('wrong_questions', 'subject_id = ?', [subjectId]),
+    materials: await count('materials', 'subject_id = ?', [subjectId]),
+    flashcards: await count('flashcards', 'subject_id = ?', [subjectId]),
   }
 }
 

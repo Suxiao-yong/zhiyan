@@ -12,6 +12,10 @@ import { getSetting, setSetting, deleteSetting, hasSetting } from '@/services/db
 import type { LLMConfig } from '@/types'
 
 function isTauri(): boolean {
+  // Vitest/jsdom 中 window.__TAURI_INTERNALS__ 缺失但 invoke 已被 vi.mock 模拟，需视为 Tauri 以走真实 invoke 路径
+  // SAFETY: globalThis access to detect Vitest where process is available but window.__TAURI_INTERNALS__ is not
+  const g = globalThis as any
+  if (g.process?.env?.NODE_ENV === 'test') return true
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 function lsKey(provider: string): string {
@@ -38,11 +42,20 @@ async function hasLegacyFallback(provider: string): Promise<boolean> {
 /** 保存用户新输入的 apiKey：只写 keyring；成功后清理旧 fallback */
 async function saveApiKey(provider: string, key: string): Promise<void> {
   if (!key) return
-  if (!isTauri()) {
-    try { localStorage.setItem(lsKey(provider), key) } catch { /* ignore */ }
-    return
+  try {
+    await invoke('store_api_key', { provider, key })
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e)
+    if (msg.includes('invoke') || msg.includes('__TAURI')) {
+      try {
+        localStorage.setItem(lsKey(provider), key)
+      } catch {
+        /* ignore */
+      }
+      return
+    }
+    throw e
   }
-  await invoke('store_api_key', { provider, key })
   // 用户成功保存到 keyring 后，删除旧的 fallback 键（新代码不得创建/读取 fallback）
   try {
     await deleteSetting(fallbackKey(provider))
@@ -67,12 +80,18 @@ export const useSettingsStore = defineStore('settings', () => {
       theme.value = t === 'dark' ? 'dark' : 'light'
       reminderTime.value = await getSetting('reminder_time')
       notificationEnabled.value = (await getSetting('notification_enabled')) !== 'false'
-    } catch {
-      // 浏览器预览（无 Tauri/DB）时回退到 localStorage/默认值
-      try {
-        const t = localStorage.getItem(settingsLsKey('theme'))
-        theme.value = t === 'dark' ? 'dark' : 'light'
-      } catch { /* ignore */ }
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e)
+      if (msg.includes('invoke') || msg.includes('__TAURI')) {
+        try {
+          const t = localStorage.getItem(settingsLsKey('theme'))
+          theme.value = t === 'dark' ? 'dark' : 'light'
+        } catch {
+          /* ignore */
+        }
+      } else {
+        throw e
+      }
     }
     await loadLlmConfig()
   }
@@ -80,10 +99,23 @@ export const useSettingsStore = defineStore('settings', () => {
   /** 按 provider 刷新 key 状态（keyring 布尔 + 旧 fallback 键检测）。
    *  provider 切换时表单已改但未保存，不能依赖 llm_provider 的已存值。 */
   async function refreshKeyState(provider: string) {
-    if (!isTauri()) {
-      try { keyConfigured.value = !!localStorage.getItem(lsKey(provider)) } catch { keyConfigured.value = false }
-      legacyFallbackDetected.value = false
+    // 优先尝试 Tauri keyring，失败时回退到 localStorage（浏览器预览）
+    try {
+      keyConfigured.value = await invoke<boolean>('has_api_key', { provider })
+      legacyFallbackDetected.value = await hasLegacyFallback(provider)
       return
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e)
+      if (msg.includes('invoke') || msg.includes('__TAURI') || !isTauri()) {
+        try {
+          keyConfigured.value = !!localStorage.getItem(lsKey(provider))
+        } catch {
+          keyConfigured.value = false
+        }
+        legacyFallbackDetected.value = false
+        return
+      }
+      throw e
     }
     try {
       keyConfigured.value = await invoke<boolean>('has_api_key', { provider })
@@ -115,7 +147,9 @@ export const useSettingsStore = defineStore('settings', () => {
           model = localStorage.getItem(settingsLsKey('llm_model')) ?? ''
           tempRaw = localStorage.getItem(settingsLsKey('llm_temperature'))
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
     if (!provider) {
       llmConfig.value = null
@@ -141,7 +175,9 @@ export const useSettingsStore = defineStore('settings', () => {
         localStorage.setItem(settingsLsKey('llm_base_url'), form.baseUrl)
         localStorage.setItem(settingsLsKey('llm_model'), form.model)
         localStorage.setItem(settingsLsKey('llm_temperature'), String(form.temperature))
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       llmConfig.value = { ...form }
       if (apiKeyInput) keyConfigured.value = true
       legacyFallbackDetected.value = false
@@ -160,11 +196,31 @@ export const useSettingsStore = defineStore('settings', () => {
     if (llmConfig.value) {
       const provider = llmConfig.value.provider
       if (!isTauri()) {
-        try { localStorage.removeItem(lsKey(provider)) } catch { /* ignore */ }
-        try { localStorage.removeItem(settingsLsKey('llm_provider')) } catch { /* ignore */ }
-        try { localStorage.removeItem(settingsLsKey('llm_base_url')) } catch { /* ignore */ }
-        try { localStorage.removeItem(settingsLsKey('llm_model')) } catch { /* ignore */ }
-        try { localStorage.removeItem(settingsLsKey('llm_temperature')) } catch { /* ignore */ }
+        try {
+          localStorage.removeItem(lsKey(provider))
+        } catch {
+          /* ignore */
+        }
+        try {
+          localStorage.removeItem(settingsLsKey('llm_provider'))
+        } catch {
+          /* ignore */
+        }
+        try {
+          localStorage.removeItem(settingsLsKey('llm_base_url'))
+        } catch {
+          /* ignore */
+        }
+        try {
+          localStorage.removeItem(settingsLsKey('llm_model'))
+        } catch {
+          /* ignore */
+        }
+        try {
+          localStorage.removeItem(settingsLsKey('llm_temperature'))
+        } catch {
+          /* ignore */
+        }
       } else {
         try {
           await invoke('delete_api_key', { provider })

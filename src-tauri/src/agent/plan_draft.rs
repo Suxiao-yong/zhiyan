@@ -34,7 +34,7 @@ pub struct DraftKnowledgePoint {
     /// 该知识点下未掌握错题数（查询时以标量子查询统计）。
     pub wrong_count: i64,
     /// 材料出处（§N / §N-§M）；无关联材料时为 None。
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_ref: Option<String>,
 }
 

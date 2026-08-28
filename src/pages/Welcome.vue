@@ -5,7 +5,10 @@ import { ElMessage } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
 
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+  return (
+    typeof window !== 'undefined' &&
+    !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+  )
 }
 function heuristicKps(subject: string): Array<{ name: string; chapter: string | null }> {
   const s = subject.trim().toLowerCase()
@@ -186,7 +189,11 @@ async function saveLlmForOnboarding(): Promise<boolean> {
         model: llmForm.model,
         temperature: llmForm.temperature,
       } as never
-      if (llmApiKey.value.trim()) (settingsStore as unknown as { keyConfigured: { value: boolean } }).keyConfigured.value = true
+      if (
+        llmApiKey.value.trim()
+      ) // Pinia setup store refs are unwrapped — direct assignment, not .value
+      ;
+      ;(settingsStore as unknown as { keyConfigured: boolean }).keyConfigured = true as never
       llmApiKey.value = ''
       ElMessage.warning('浏览器预览模式：配置已临时保存，请在桌面应用中重新配置以持久化')
       return true
@@ -198,6 +205,7 @@ async function saveLlmForOnboarding(): Promise<boolean> {
   }
 }
 async function testLlmForOnboarding() {
+  if (!isTauri()) return ElMessage.warning('浏览器预览不支持连接测试，请在桌面端测试')
   const problem = validateLlmForm()
   if (problem) return ElMessage.warning(problem)
   // 先保存再测试，保证测试走已落盘的配置
@@ -231,12 +239,15 @@ async function testLlmForOnboarding() {
 // ---- 知识点自动搜集（进入水平评估时触发）----
 const kpSuggesting = ref(false)
 const kpSuggestError = ref('')
-async function autoSuggestKps() {
+async function autoSuggestKps(force = false) {
   const validSubjects = subjects.filter((s) => s.name.trim())
   if (!validSubjects.length) return
-  // 若已有知识点则不覆盖，避免重复触发
-  const hasExisting = validSubjects.some((s) => s.knowledgePoints.length > 0)
-  if (hasExisting) return
+  if (kpSuggesting.value) return
+  // 按科目幂等：仅跳过已有数据的科目，空科目仍回填；force=true 时全量覆盖（“重新智能填充”按钮）
+  const targets = force
+    ? validSubjects
+    : validSubjects.filter((s) => s.knowledgePoints.length === 0)
+  if (!targets.length) return
   kpSuggesting.value = true
   kpSuggestError.value = ''
   try {
@@ -256,8 +267,11 @@ async function autoSuggestKps() {
       })
       suggestions = resp.suggestions ?? []
     }
-    validSubjects.forEach((s, idx) => {
-      const list = suggestions[idx] ?? []
+    // 将 suggestions 按 targets 顺序回填，仅填充空科目（force 时除外，已在 targets 中过滤）
+    const targetIndexMap = new Map(targets.map((t) => [t, validSubjects.indexOf(t)]))
+    targets.forEach((s) => {
+      const idx = targetIndexMap.get(s)!
+      const list = suggestions[idx] ?? heuristicKps(s.name.trim())
       s.knowledgePoints = list
         .slice(0, 8)
         .map((kp) => ({
@@ -343,10 +357,18 @@ function removeKp(s: SubjectDraft, i: number) {
 }
 
 async function next() {
+  if (saving.value || kpSuggesting.value || llmSaving.value) return
   // 步骤 1：LLM 配置为强制关卡，未配置无法继续
   if (current.value === 1) {
     const isConfigured = !!settingsStore.llmConfig && settingsStore.keyConfigured
-    const hasUnsavedInput = !!llmApiKey.value.trim() || !isConfigured
+    const isDirty =
+      !isConfigured ||
+      llmApiKey.value.trim().length > 0 ||
+      settingsStore.llmConfig?.provider !== llmForm.provider ||
+      settingsStore.llmConfig?.baseUrl !== llmForm.baseUrl ||
+      settingsStore.llmConfig?.model !== llmForm.model ||
+      settingsStore.llmConfig?.temperature !== llmForm.temperature
+    const hasUnsavedInput = isDirty
     if (hasUnsavedInput) {
       const ok = await saveLlmForOnboarding()
       if (!ok) return
@@ -365,6 +387,8 @@ async function next() {
   if (current.value === 3) {
     const valid = subjects.filter((s) => s.name.trim())
     if (!valid.length) return ElMessage.warning('至少添加一个科目')
+    const names = valid.map((s) => s.name.trim())
+    if (new Set(names).size !== names.length) return ElMessage.warning('科目名不能重复')
     subjects.splice(0, subjects.length, ...valid)
   }
   current.value++
@@ -381,6 +405,7 @@ const totalKpCount = () =>
   subjects.reduce((acc, s) => acc + s.knowledgePoints.filter((k) => k.name.trim()).length, 0)
 
 async function finish() {
+  if (!isTauri()) return ElMessage.warning('浏览器预览不支持持久化，请在桌面应用完成引导')
   saving.value = true
   try {
     // 1. 创建考试
@@ -448,7 +473,10 @@ async function finish() {
           <ul class="features">
             <li v-for="f in introFeatures" :key="f.title">
               <el-icon class="features__icon"><component :is="f.icon" /></el-icon>
-              <span><b>{{ f.title }}</b>：{{ f.desc }}</span>
+              <span>
+                <b>{{ f.title }}</b>
+                ：{{ f.desc }}
+              </span>
             </li>
           </ul>
         </div>
@@ -647,7 +675,7 @@ async function finish() {
             </el-collapse>
           </template>
           <div style="margin-top: var(--sp-3)">
-            <el-button size="small" :loading="kpSuggesting" @click="autoSuggestKps">
+            <el-button size="small" :loading="kpSuggesting" @click="autoSuggestKps(true)">
               重新智能填充
             </el-button>
           </div>

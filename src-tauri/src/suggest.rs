@@ -138,10 +138,14 @@ pub async fn suggest_knowledge_points(
         });
     }
 
-    // 尝试走 LLM；失败或未配置则回退到启发式，避免阻塞引导
-    let provider = crate::agent::planner::Planner::build_provider_from(pool.inner())
-        .await
-        .map_err(|e| e.to_string())?;
+    // 尝试走 LLM；失败或未配置则回退到启发式，避免阻塞引导（不向上抛 String 错误）
+    let provider = match crate::agent::planner::Planner::build_provider_from(pool.inner()).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("suggest: build_provider failed, fallback to heuristic: {e}");
+            None
+        }
+    };
     let Some(provider) = provider else {
         return Ok(SuggestKpOutput {
             suggestions: subjects.iter().map(|s| heuristic_kps(s)).collect(),
@@ -156,12 +160,20 @@ pub async fn suggest_knowledge_points(
         tool_call_id: None,
     }];
 
-    // 单轮调用，不使用工具
+    // 单轮调用，不使用工具；失败则回退启发式而非上抛
     let mut streamed = String::new();
-    let resp = provider
+    let resp = match provider
         .chat_stream(&messages, &[], &mut |chunk: &str| streamed.push_str(chunk))
         .await
-        .map_err(|e| e.to_string())?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("suggest: chat_stream failed, fallback to heuristic: {e}");
+            return Ok(SuggestKpOutput {
+                suggestions: subjects.iter().map(|s| heuristic_kps(s)).collect(),
+            });
+        }
+    };
 
     let text = resp
         .content

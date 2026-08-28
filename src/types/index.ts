@@ -39,6 +39,8 @@ export interface KnowledgePoint {
   current_mastery: number // 1-5：Welcome 自评初始化，学习记录聚合更新
   chapter: string | null
   sort_order: number
+  material_id?: string | null // v12 新增：关联材料
+  source_ref?: string | null // v12 新增：出处 §N
   created_at: string
   updated_at: string
   children?: KnowledgePoint[] // 树形构建用

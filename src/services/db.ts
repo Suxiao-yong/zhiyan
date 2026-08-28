@@ -24,6 +24,7 @@ const ALLOWED_TABLES = [
   'wrong_questions',
   'ai_analyses',
   'materials',
+  'flashcards',
   'settings',
 ] as const
 
@@ -60,6 +61,8 @@ const COLUMNS: Record<string, readonly string[]> = {
     'current_mastery',
     'chapter',
     'sort_order',
+    'material_id',
+    'source_ref',
     'created_at',
     'updated_at',
   ],
@@ -111,6 +114,9 @@ const COLUMNS: Record<string, readonly string[]> = {
     'error_reason',
     'review_count',
     'mastered',
+    'next_review_at',
+    'review_interval_days',
+    'ease_factor',
     'created_at',
     'last_review_at',
   ],
@@ -130,8 +136,24 @@ const COLUMNS: Record<string, readonly string[]> = {
     'created_at',
   ],
   settings: ['key', 'value', 'description', 'updated_at'],
-  // v0.3.0 Task 8: read-only provenance lookup from the knowledge mind map.
-  materials: ['id', 'title', 'content', 'subject_id'],
+  // v0.3.0: content pipeline tables
+  materials: ['id', 'exam_id', 'subject_id', 'title', 'content', 'created_at'],
+  flashcards: [
+    'id',
+    'subject_id',
+    'knowledge_point_id',
+    'material_id',
+    'source_ref',
+    'front',
+    'back',
+    'review_count',
+    'mastered',
+    'next_review_at',
+    'review_interval_days',
+    'ease_factor',
+    'created_at',
+    'last_review_at',
+  ],
 }
 
 function assertTable(table: string): void {

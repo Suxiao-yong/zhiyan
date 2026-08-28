@@ -35,7 +35,7 @@ describe('agent runtime client', () => {
     expect(invoke).toHaveBeenCalledWith('agent_health')
   })
 
-  it('uses camelCase Tauri arguments for agent session and run commands', async () => {
+  it('uses snake_case Tauri arguments for agent session and run commands', async () => {
     const session = { id: 'session-1' }
     const run = { id: 'run-1' }
     vi.mocked(invoke).mockResolvedValueOnce(session).mockResolvedValue(run)
@@ -44,16 +44,16 @@ describe('agent runtime client', () => {
     await expect(createAgentRun('session-1', 'Plan today')).resolves.toBe(run)
 
     expect(invoke).toHaveBeenNthCalledWith(1, 'agent_create_session', {
-      examId: 'exam-1',
+      exam_id: 'exam-1',
       title: 'First session',
     })
     expect(invoke).toHaveBeenNthCalledWith(2, 'agent_create_run', {
-      sessionId: 'session-1',
+      session_id: 'session-1',
       goal: 'Plan today',
     })
   })
 
-  it('uses camelCase Tauri arguments to start and cancel a run', async () => {
+  it('uses snake_case Tauri arguments to start and cancel a run', async () => {
     const started = { id: 'run-1', status: 'running' }
     const cancelled = { id: 'run-1', status: 'cancelled' }
     vi.mocked(invoke).mockResolvedValueOnce(started).mockResolvedValue(cancelled)
@@ -61,8 +61,8 @@ describe('agent runtime client', () => {
     await expect(startAgentRun('run-1')).resolves.toBe(started)
     await expect(cancelAgentRun('run-1')).resolves.toBe(cancelled)
 
-    expect(invoke).toHaveBeenNthCalledWith(1, 'agent_start_run', { runId: 'run-1' })
-    expect(invoke).toHaveBeenNthCalledWith(2, 'agent_cancel_run', { runId: 'run-1' })
+    expect(invoke).toHaveBeenNthCalledWith(1, 'agent_start_run', { run_id: 'run-1' })
+    expect(invoke).toHaveBeenNthCalledWith(2, 'agent_cancel_run', { run_id: 'run-1' })
   })
 
   it('preserves Tauri command errors', async () => {
@@ -90,14 +90,14 @@ describe('agent runtime client', () => {
     expect(invoke).toHaveBeenLastCalledWith('agent_execute_tool', { request })
     await decideAgentApproval('approval-1', true)
     expect(invoke).toHaveBeenLastCalledWith('agent_decide_approval', {
-      approvalId: 'approval-1',
+      approval_id: 'approval-1',
       approve: true,
     })
     await undoAgentTool('step-1')
-    expect(invoke).toHaveBeenLastCalledWith('agent_undo_tool', { stepId: 'step-1' })
+    expect(invoke).toHaveBeenLastCalledWith('agent_undo_tool', { step_id: 'step-1' })
   })
 
-  it('invokes the hidden planner command with camelCase arguments', async () => {
+  it('invokes the hidden planner command with snake_case arguments', async () => {
     const turn = {
       mode: 'local',
       final_text: 'ok',
@@ -111,7 +111,7 @@ describe('agent runtime client', () => {
 
     await expect(runAgentPlanner('run-1', '看今天的计划')).resolves.toBe(turn)
     expect(invoke).toHaveBeenLastCalledWith('agent_run_planner', {
-      runId: 'run-1',
+      run_id: 'run-1',
       goal: '看今天的计划',
     })
   })
@@ -133,12 +133,12 @@ describe('agent runtime client', () => {
 
     await expect(resolveAgentApproval('approval-1', true)).resolves.toBe(resolved)
     expect(invoke).toHaveBeenLastCalledWith('agent_resolve_approval', {
-      approvalId: 'approval-1',
+      approval_id: 'approval-1',
       approve: true,
     })
     await resolveAgentApproval('approval-1', false)
     expect(invoke).toHaveBeenLastCalledWith('agent_resolve_approval', {
-      approvalId: 'approval-1',
+      approval_id: 'approval-1',
       approve: false,
     })
   })
