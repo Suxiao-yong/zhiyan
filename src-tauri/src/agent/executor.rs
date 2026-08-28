@@ -3171,7 +3171,16 @@ async fn build_approval_preview(
             // approval preview, only what will be shown face-up.
             let lines: Vec<String> = cards
                 .iter()
-                .map(|card| card["front"].as_str().unwrap_or("").to_owned())
+                .map(|card| {
+                    let front = card["front"].as_str().unwrap_or("");
+                    // Preview UX: truncate long fronts so 30×500 chars doesn't blow up the card.
+                    let truncated: String = front.chars().take(80).collect();
+                    if truncated.chars().count() < front.chars().count() {
+                        format!("{truncated}…")
+                    } else {
+                        truncated
+                    }
+                })
                 .collect();
             let count = cards.len() as i64;
             (

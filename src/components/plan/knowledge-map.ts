@@ -83,5 +83,7 @@ export function buildTreeOption(subjects: KnowledgeTreeSubject[]) {
         })),
       },
     ],
+  // SAFETY: echarts tree option shape is validated at runtime by echarts; importing full EChartsOption
+  // types for this one call site would add heavy type deps for no safety gain.
   } as any
 }
