@@ -44,7 +44,7 @@ async function aggregateBySubject(
       .join(',')}) AND date >= ? ORDER BY date`,
     [...subjectIds, fmtDate(from)],
   )
-  // 按科目聚合 + 前后半段对比看趋势
+  // 按科目聚合 + 前后半段对比看投入趋势（时长口径，非正确率/掌握度）
   const half = Math.floor(days / 2)
   const midDate = fmtDate(new Date(today.getTime() - half * 86400000))
   const stats: SubjectStat[] = subjects.map((s) => {
@@ -56,7 +56,7 @@ async function aggregateBySubject(
     const firstMin = rs.filter((r) => r.date < midDate).reduce((a, r) => a + r.duration_min, 0)
     const lastMin = rs.filter((r) => r.date >= midDate).reduce((a, r) => a + r.duration_min, 0)
     const trend: SubjectStat['trend'] =
-      lastMin > firstMin * 1.15 ? '上升' : lastMin < firstMin * 0.85 ? '下降' : '平稳'
+      lastMin > firstMin * 1.15 ? '上升' : lastMin < firstMin * 0.85 ? '下降' : '平稳' // ponytail: 时长趋势，正确率趋势需另算
     return {
       subjectId: s.id,
       subject: subjectName.get(s.id) ?? s.name,

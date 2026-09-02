@@ -1,6 +1,6 @@
-# Agent 产品验收矩阵
+# AI 应用验收矩阵
 
-> 目标：以 Agent 为唯一 AI 入口、云端 LLM 负责理解与生成、本地 Rust/SQLite 负责事实与提交。
+> 目标：以 Agent 为 AI 应用内部的唯一 AI 入口、云端 LLM 负责理解与生成、本地 Rust/SQLite 负责事实与提交。
 > 手工验收时使用 OpenAI-compatible mock server 或测试 provider；仓库、截图、日志和测试
 > fixture 中不得出现真实 API Key。每项通过后勾选并记录日期/构建号。
 > 更新：2026-08-16。A–G 为打包手测项（未在本环境执行，保持未勾选，不得用静态检查代替）；

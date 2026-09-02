@@ -2,7 +2,7 @@
 // 核心业务规则：跨天 04:00 归一化（实时记录在 00:00-03:59 提交→归属前一天；补记=用户手动选日期→不归一化）。
 // 严格在此专属函数处理，不污染 db.ts 通用 insert。本地时间，与 DB datetime('now','localtime') 一致。
 
-import { count, execute, getById, insert, query, remove, setSetting, update } from './db'
+import { execute, getById, insert, query, remove, update } from './db'
 import type { StudyPlan, StudyRecord, WrongQuestion } from '@/types'
 
 // ---------------- 工具 ----------------
@@ -22,6 +22,11 @@ export function businessToday(): string {
     return fmtDate(prev)
   }
   return fmtDate(now)
+}
+
+/** 日历今日（不受 04:00 归一影响，用于“未来计划”守卫与 UI 展示） */
+export function calendarToday(): string {
+  return fmtDate(new Date())
 }
 
 /**
@@ -81,23 +86,8 @@ export async function createRecord(input: RecordInput): Promise<StudyRecord> {
     mood: input.mood ?? null,
     session_time: input.session_time ?? null,
   }
-  // 诊断：记录入参与报错到 settings，便于排查"录入失败"
-  try {
-    await setSetting('last_record_attempt', JSON.stringify(data))
-  } catch {
-    /* ignore */
-  }
-  try {
-    const id = await insert('study_records', data)
-    return (await getById<StudyRecord>('study_records', id))!
-  } catch (e) {
-    try {
-      await setSetting('last_record_error', `${(e as Error).message}`)
-    } catch {
-      /* ignore */
-    }
-    throw e
-  }
+  const id = await insert('study_records', data)
+  return (await getById<StudyRecord>('study_records', id))!
 }
 
 export type PlanCheckinInput = Omit<RecordInput, 'date' | 'subject_id' | 'knowledge_point_id'>
@@ -167,7 +157,7 @@ export async function createPlanCheckin(
   const plan = await getById<StudyPlan>('study_plans', planId)
   if (!plan) throw new Error('计划已被删除或重新生成')
   if (plan.status === 'skipped') throw new Error('该任务已跳过，请先恢复任务')
-  if (plan.date > businessToday()) throw new Error('未来计划不能提前打卡')
+  if (plan.date > calendarToday()) throw new Error('未来计划不能提前打卡')
   if (input.duration_min <= 0) throw new Error('学习时长须大于 0')
   const questions = input.questions_count ?? 0
   const correct = input.correct_count ?? 0
@@ -249,6 +239,7 @@ export async function updateRecord(id: string, input: Partial<RecordInput>): Pro
     delete data.date
     delete data.subject_id
     delete data.knowledge_point_id
+    delete data.plan_id
   }
   await update('study_records', id, data)
   if (existing?.plan_id) await recalculatePlanProgress(existing.plan_id)
@@ -289,10 +280,14 @@ export async function getRecords(
   filter: RecordFilter,
 ): Promise<{ rows: RecordWithNames[]; total: number }> {
   const { cond, params } = buildRecordCond(filter)
-  const total = cond
-    ? await count('study_records', cond.replace(/r\./g, ''), params)
-    : await count('study_records')
-  const offset = (filter.page - 1) * filter.pageSize
+  const totalRows = await query<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM study_records r ${cond ? 'WHERE ' + cond : ''}`,
+    params,
+  )
+  const total = totalRows[0]?.c ?? 0
+  const page = Math.max(1, filter.page)
+  const pageSize = Math.min(100, Math.max(1, filter.pageSize))
+  const offset = (page - 1) * pageSize
   const rows = await query<RecordWithNames>(
     `SELECT r.*, s.name AS subject_name, k.name AS knowledge_point_name,
             p.planned_tasks AS plan_tasks
@@ -303,7 +298,7 @@ export async function getRecords(
      ${cond ? 'WHERE ' + cond : ''}
      ORDER BY r.date DESC, r.created_at DESC
      LIMIT ? OFFSET ?`,
-    [...params, filter.pageSize, offset],
+    [...params, pageSize, offset],
   )
   return { rows, total }
 }
@@ -399,10 +394,14 @@ export async function getWrongQuestions(
   filter: WrongFilter,
 ): Promise<{ rows: WrongWithNames[]; total: number }> {
   const { cond, params } = buildWrongCond(filter)
-  const total = cond
-    ? await count('wrong_questions', cond.replace(/w\./g, ''), params)
-    : await count('wrong_questions')
-  const offset = (filter.page - 1) * filter.pageSize
+  const totalRows = await query<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM wrong_questions w ${cond ? 'WHERE ' + cond : ''}`,
+    params,
+  )
+  const total = totalRows[0]?.c ?? 0
+  const page = Math.max(1, filter.page)
+  const pageSize = Math.min(100, Math.max(1, filter.pageSize))
+  const offset = (page - 1) * pageSize
   const rows = await query<WrongWithNames>(
     `SELECT w.*, s.name AS subject_name, k.name AS knowledge_point_name
      FROM wrong_questions w
@@ -411,7 +410,7 @@ export async function getWrongQuestions(
      ${cond ? 'WHERE ' + cond : ''}
      ORDER BY w.created_at DESC
      LIMIT ? OFFSET ?`,
-    [...params, filter.pageSize, offset],
+    [...params, pageSize, offset],
   )
   return { rows, total }
 }
@@ -422,7 +421,7 @@ export async function setWrongMastered(id: string, mastered: boolean): Promise<v
 
 export async function incrementWrongReview(id: string): Promise<void> {
   await execute(
-    'UPDATE wrong_questions SET review_count = review_count + 1, last_review_at = ? WHERE id = ?',
-    [new Date().toISOString(), id],
+    "UPDATE wrong_questions SET review_count = review_count + 1, last_review_at = datetime('now','localtime') WHERE id = ?",
+    [id],
   )
 }

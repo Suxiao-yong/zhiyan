@@ -61,7 +61,7 @@ impl AgentRepository {
     ) -> Result<Vec<AgentMessage>, AgentError> {
         sqlx::query_as::<_, AgentMessage>(
             "SELECT id, session_id, run_id, role, text, content_json, prompt_tokens, \
-             completion_tokens, model, created_at \
+             completion_tokens, prompt_cache_hit_tokens, prompt_cache_miss_tokens, model, created_at \
              FROM agent_messages WHERE session_id = ? ORDER BY created_at, rowid",
         )
         .bind(session_id)

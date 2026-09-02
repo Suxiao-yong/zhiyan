@@ -1,6 +1,6 @@
 # 智研（ZhiYan）
 
-> AI 驱动的个性化学习规划桌面应用 —— **纯 Agent 架构**：Agent 是唯一的 AI 入口，所有写操作经审批闭环，你始终掌握最终决策权。
+> AI 驱动的个性化学习规划桌面应用（**AI 应用 · Agent 保证可审计**）—— 所有写操作经审批闭环，你始终掌握最终决策权。Agent 是 AI 能力的唯一入口，不是产品本身。
 
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License" /></a>
@@ -36,7 +36,7 @@
 
 智研是一个 Tauri 桌面应用，把"AI 学习助手"做成了一套**可审计、可撤回**的工程系统：
 
-- **纯 Agent**：计划生成、计划调整、学习记录、错题、材料导入与闪卡——所有 AI 能力都收敛到 Agent 对话，通过 18 个注册工具与你的数据交互
+- **AI 应用（Agent 保证可审计）**：计划生成、计划调整、学习记录、错题、材料导入与闪卡——所有 AI 能力通过 Agent 的 18 个工具与你的数据交互，Agent 是实现，不是产品
 - **半自主**：Agent 可以自由读取（R0），但**写操作必须经你确认**（R2 设置确认 / R3 审批卡），执行后还可整体撤销
 - **本地优先**：学习数据只存本地 SQLite；LLM API Key 存 OS 凭据管理器；发送给云端的是你确认过的聚合摘要
 
@@ -78,13 +78,13 @@
 
 策略落地：
 
-| 级别   | 策略                         | 典型工具                                                                              |
-| ------ | ---------------------------- | ------------------------------------------------------------------------------------- |
-| **R0** | 只读，自动执行               | `plan.get_today`、`record.get_history`、`plan.preview_generate`                       |
-| **R1** | 低风险写，自动 + 可撤销      | `review.complete`、`flashcard.complete`                                               |
-| **R2** | 写，需设置确认               | `plan.generate`                                                                       |
+| 级别   | 策略                         | 典型工具                                                                                                                                                           |
+| ------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **R0** | 只读，自动执行               | `plan.get_today`、`record.get_history`、`plan.preview_generate`                                                                                                    |
+| **R1** | 低风险写，自动 + 可撤销      | `review.complete`、`flashcard.complete`                                                                                                                            |
+| **R2** | 写，需设置/审批确认          | `plan.generate`（确认模式 `required` 走审批卡；设置 `agent_r2_auto_execute` 则自动）                                                                               |
 | **R3** | 写，审批卡确认后执行，可撤销 | `plan.apply_preview`、`record.checkin_plan`、`record.create_free`、`wrong_question.*`、`material.create`、`knowledge_point.create_batch`、`flashcard.create_batch` |
-| **R4** | 仅导航                       | （策略边界，不注册工具）                                                              |
+| **R4** | 仅导航                       | （策略边界，不注册工具）                                                                                                                                           |
 
 ### 审批闭环（R3 写操作的完整生命周期）
 
@@ -136,26 +136,26 @@ executor 校验 schema / 作用域 / 前置条件
 
 工具注册表（`agent/tools/`）内置 18 个工具，全部 Rust 原生执行，输入/输出均经 JSON Schema 校验：
 
-| 工具                           | 风险 | 确认 | 撤销 | 幂等         | 能力                                         |
-| ------------------------------ | ---- | ---- | ---- | ------------ | -------------------------------------------- |
-| `exam.get_active`              | R0   | 自动 | —    | 重试安全     | 当前考试与科目                               |
-| `plan.get_today`               | R0   | 自动 | —    | 重试安全     | 今日计划（04:00 业务日边界）                 |
-| `plan.get_range`               | R0   | 自动 | —    | 重试安全     | 日期范围计划                                 |
-| `plan.preview_generate`        | R0   | 自动 | —    | 重试安全     | 生成周计划草案（只读，不落库）               |
-| `record.get_history`           | R0   | 自动 | —    | 重试安全     | 学习记录历史                                 |
-| `plan.generate`                | R2   | 确认 | —    | exactly-once | 写入周计划（权重分配，每周幂等）             |
-| `plan.apply_preview`           | R3   | 审批 | ✅   | 重试安全     | 应用草案，替换旧计划，可整体撤销             |
-| `record.checkin_plan`          | R3   | 审批 | ✅   | exactly-once | 计划打卡（锁定计划字段、联动错题、聚合更新） |
-| `record.create_free`           | R3   | 审批 | —    | 重试安全     | 自由记录                                     |
-| `wrong_question.create`        | R3   | 审批 | —    | 重试安全     | 录入错题                                     |
-| `wrong_question.mark_mastered` | R3   | 审批 | —    | 重试安全     | 标记掌握                                     |
-| `review.get_due`               | R0   | 自动 | —    | 重试安全     | 今日应复习错题（到期或未安排的未掌握错题）   |
-| `review.complete`              | R1   | 自动 | ✅   | 重试安全     | 错题复习结果写入 SM-2 调度，可撤销           |
-| `material.create`              | R3   | 审批 | —    | 重试安全     | 导入学习材料并按科目归档                     |
-| `knowledge_point.create_batch` | R3   | 审批 | —    | 重试安全     | 从材料拆解的概念批量挂载到知识树             |
-| `flashcard.create_batch`       | R3   | 审批 | —    | 重试安全     | 批量生成闪卡（携带材料引用溯源）             |
-| `flashcard.get_due`            | R0   | 自动 | —    | 重试安全     | 今日到期闪卡（未掌握且 NULL 或已到期）       |
-| `flashcard.complete`           | R1   | 自动 | ✅   | 重试安全     | 闪卡复习结果写入 SM-2 调度，可撤销           |
+| 工具                           | 风险 | 确认 | 撤销 | 幂等         | 能力                                                             |
+| ------------------------------ | ---- | ---- | ---- | ------------ | ---------------------------------------------------------------- |
+| `exam.get_active`              | R0   | 自动 | —    | 重试安全     | 当前考试与科目                                                   |
+| `plan.get_today`               | R0   | 自动 | —    | 重试安全     | 今日计划（04:00 业务日边界）                                     |
+| `plan.get_range`               | R0   | 自动 | —    | 重试安全     | 日期范围计划                                                     |
+| `plan.preview_generate`        | R0   | 自动 | —    | 重试安全     | 生成周计划草案（只读，不落库）                                   |
+| `record.get_history`           | R0   | 自动 | —    | 重试安全     | 学习记录历史                                                     |
+| `plan.generate`                | R2   | 确认 | —    | exactly-once | 写入周计划（权重分配，每周幂等；确认模式 required 经审批卡闭环） |
+| `plan.apply_preview`           | R3   | 审批 | ✅   | 重试安全     | 应用草案，替换旧计划，可整体撤销                                 |
+| `record.checkin_plan`          | R3   | 审批 | ✅   | exactly-once | 计划打卡（锁定计划字段、联动错题、聚合更新）                     |
+| `record.create_free`           | R3   | 审批 | —    | 重试安全     | 自由记录                                                         |
+| `wrong_question.create`        | R3   | 审批 | —    | 重试安全     | 录入错题                                                         |
+| `wrong_question.mark_mastered` | R3   | 审批 | —    | 重试安全     | 标记掌握                                                         |
+| `review.get_due`               | R0   | 自动 | —    | 重试安全     | 今日应复习错题（到期或未安排的未掌握错题）                       |
+| `review.complete`              | R1   | 自动 | ✅   | 重试安全     | 错题复习结果写入 SM-2 调度，可撤销                               |
+| `material.create`              | R3   | 审批 | —    | 重试安全     | 导入学习材料并按科目归档                                         |
+| `knowledge_point.create_batch` | R3   | 审批 | —    | 重试安全     | 从材料拆解的概念批量挂载到知识树                                 |
+| `flashcard.create_batch`       | R3   | 审批 | —    | 重试安全     | 批量生成闪卡（携带材料引用溯源）                                 |
+| `flashcard.get_due`            | R0   | 自动 | —    | 重试安全     | 今日到期闪卡（未掌握且 NULL 或已到期）                           |
+| `flashcard.complete`           | R1   | 自动 | ✅   | 重试安全     | 闪卡复习结果写入 SM-2 调度，可撤销                               |
 
 另有只读 Tauri 命令 `knowledge_tree`（非 Agent 工具），为知识树思维导图视图提供树形数据（掌握度着色）。
 
@@ -163,6 +163,7 @@ executor 校验 schema / 作用域 / 前置条件
 
 - **Schema 双校验**：输入（拒绝未知/锁定字段）与输出（落库前验证）双向把关
 - **字节上限**：上下文快照、工具输出、累计 prompt、序列化请求体均有 UTF-8 字节上限
+- **输入缓存友好**（v0.4）：静态提示词前缀 + 会话历史回放 12 条 + 动态快照置尾，命中率应用内可见（消息下方 `缓存 命中+未命中`）
 - **上下文审计**：每次模型调用记录 `agent_context_audit`（工具清单、数据类别、字段名、token），**不存原文**
 - **稳定错误码**：命令边界返回脱敏、稳定的错误码（如 `provider_protocol_error`、`idempotency_conflict`）
 - **能力探测**：连接测试会实测流式与工具调用能力，失败返回稳定错误码
@@ -184,13 +185,14 @@ executor 校验 schema / 作用域 / 前置条件
 
 主界面就是对话框，直接说你的目标：
 
-| 你说的话                            | Agent 做的事                                                         | 你会看到                               |
-| ----------------------------------- | -------------------------------------------------------------------- | -------------------------------------- |
-| "帮我看今天的计划"                  | `plan.get_today`（R0 只读）                                          | 今日任务列表直接回复                   |
-| "为我的数学制定本周计划"            | `plan.preview_generate` 生成周草案（R0）→ `plan.apply_preview`（R3） | 审批卡展示草案预览 → 确认落库 → 可撤销 |
-| "昨晚做了 30 道题错 5 道，帮我记录" | `record.checkin_plan` / `record.create_free`（R3）                   | 审批卡确认后写入记录与错题             |
-| "这道错题我掌握了"                  | `wrong_question.mark_mastered`（R3）                                 | 审批卡确认后标记                       |
-| "对比我这周和上周的学习情况"        | `plan.get_range` + `record.get_history`（R0）                        | 数据驱动的摘要回复（复盘）             |
+| 你说的话                            | Agent 做的事                                                         | 你会看到                                          |
+| ----------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------- |
+| "帮我看今天的计划"                  | `plan.get_today`（R0 只读）                                          | 今日任务列表直接回复                              |
+| "为我的数学制定本周计划"            | `plan.preview_generate` 生成周草案（R0）→ `plan.apply_preview`（R3） | 审批卡展示草案预览 → 确认落库 → 可撤销            |
+| "昨晚做了 30 道题错 5 道，帮我记录" | `record.checkin_plan` / `record.create_free`（R3）                   | 审批卡确认后写入记录与错题                        |
+| "这道错题我掌握了"                  | `wrong_question.mark_mastered`（R3）                                 | 审批卡确认后标记                                  |
+| "帮我把这份 PDF 讲义导入"           | 「从文件导入」→ `material.create`（R3）→ 拆解概念 → 闪卡             | 自动填充标题正文 → 审批卡确认 → 思维导图/闪卡闭环 |
+| "对比我这周和上周的学习情况"        | `plan.get_range` + `record.get_history`（R0）                        | 数据驱动的摘要回复（复盘）                        |
 
 右栏工作台与对话联动：打卡、改计划、看历史的同时，对话上下文不丢。
 
@@ -209,7 +211,7 @@ executor 校验 schema / 作用域 / 前置条件
 
 ### 📥 材料导入与闪卡复习
 
-- **材料导入**：对话中粘贴学习材料，Agent 经 `material.create`（R3）按科目归档落库
+- **材料导入**：对话中粘贴，或点击「从文件导入」直接解析 **PDF / PPTX / DOCX / TXT / MD**（Rust 侧 `parse_material_file`），经 `material.create`（R3）按科目归档落库
 - **概念拆解**：Agent 将材料拆解为知识点，经 `knowledge_point.create_batch`（R3）批量挂到知识树
 - **闪卡生成与复习**：`flashcard.create_batch`（R3）批量生成闪卡；每日提醒统计到期闪卡，右栏工作台“今日复习”驱动 `flashcard.complete`（R1）写入 SM-2 调度
 - **引用溯源**：闪卡与知识点携带材料出处（`material_id` + `source_ref`），可回跳原文
@@ -244,16 +246,16 @@ SQLite 单文件（WAL 模式，外键强制），19 张表：
 
 ### Agent 运行时
 
-| 表                              | 说明                                       |
-| ------------------------------- | ------------------------------------------ |
-| `agent_sessions` / `agent_runs` | 会话与 Run（状态机含中断恢复）             |
-| `agent_steps` / `agent_events`  | 工具执行步骤（收据 / undo 载荷）与审计事件 |
-| `agent_approvals`               | 审批（过期时间、前置条件 hash、决定状态）  |
-| `agent_context_audit`           | 模型调用数据溯源（不含原文）               |
-| `agent_memories`                | 长期记忆（保留表，新代码不读）             |
-| `agent_jobs` / `agent_messages` | 后台调度 / 会话消息                        |
+| 表                              | 说明                                                |
+| ------------------------------- | --------------------------------------------------- |
+| `agent_sessions` / `agent_runs` | 会话与 Run（状态机含中断恢复）                      |
+| `agent_steps` / `agent_events`  | 工具执行步骤（收据 / undo 载荷）与审计事件          |
+| `agent_approvals`               | 审批（过期时间、前置条件 hash、决定状态）           |
+| `agent_context_audit`           | 模型调用数据溯源（不含原文）                        |
+| `agent_memories`                | 长期记忆（保留表，新代码不读）                      |
+| `agent_jobs` / `agent_messages` | 后台调度 / 会话消息（含缓存命中/未命中 token 计数） |
 
-数据库迁移 v1–v12 **forward-only**（测试强制无 DROP / RENAME / DELETE），升级自动执行，操作手册见 `docs/agent/migration-runbook.md`。
+数据库迁移 v1–v13 **forward-only**（测试强制无 DROP / RENAME / DELETE），升级自动执行，操作手册见 `docs/agent/migration-runbook.md`。
 
 ## 隐私与安全
 
@@ -306,7 +308,7 @@ npx vue-tsc --noEmit
 npx eslint .
 npx prettier --check "src/**/*.{ts,vue}"
 
-# Rust：全部测试（lib 183 + agent_repository 15 + agent_tools 65）
+# Rust：全部测试（lib 191 + agent_repository 15 + agent_tools 65）
 cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 
 # Rust 质量门

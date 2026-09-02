@@ -47,6 +47,14 @@ pub struct ProviderUsage {
     pub prompt_tokens: i64,
     #[serde(default, rename = "completion_tokens")]
     pub completion_tokens: i64,
+    /// Tokens served from the provider's input cache (DeepSeek-style
+    /// `prompt_cache_hit_tokens` accounting, absent on providers without
+    /// prefix caching). Parsed so the UI can report the real cache hit rate
+    /// instead of guessing from prompt_tokens alone.
+    #[serde(default, rename = "prompt_cache_hit_tokens")]
+    pub prompt_cache_hit_tokens: i64,
+    #[serde(default, rename = "prompt_cache_miss_tokens")]
+    pub prompt_cache_miss_tokens: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

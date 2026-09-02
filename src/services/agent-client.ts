@@ -18,19 +18,19 @@ export function agentHealth(): Promise<void> {
 }
 
 export function createAgentSession(examId: string | null, title: string): Promise<AgentSession> {
-  return invoke<AgentSession>('agent_create_session', { exam_id: examId, title })
+  return invoke<AgentSession>('agent_create_session', { examId: examId, title })
 }
 
 export function createAgentRun(sessionId: string, goal: string): Promise<AgentRun> {
-  return invoke<AgentRun>('agent_create_run', { session_id: sessionId, goal })
+  return invoke<AgentRun>('agent_create_run', { sessionId: sessionId, goal })
 }
 
 export function startAgentRun(runId: string): Promise<AgentRun> {
-  return invoke<AgentRun>('agent_start_run', { run_id: runId })
+  return invoke<AgentRun>('agent_start_run', { runId: runId })
 }
 
 export function cancelAgentRun(runId: string): Promise<AgentRun> {
-  return invoke<AgentRun>('agent_cancel_run', { run_id: runId })
+  return invoke<AgentRun>('agent_cancel_run', { runId: runId })
 }
 
 export function listAgentTools(): Promise<ListedAgentTool[]> {
@@ -42,7 +42,7 @@ export function executeAgentTool(request: AgentToolCallRequest): Promise<AgentTo
 }
 
 export function decideAgentApproval(approvalId: string, approve: boolean): Promise<AgentApproval> {
-  return invoke<AgentApproval>('agent_decide_approval', { approval_id: approvalId, approve })
+  return invoke<AgentApproval>('agent_decide_approval', { approvalId: approvalId, approve })
 }
 
 /**
@@ -51,16 +51,16 @@ export function decideAgentApproval(approvalId: string, approve: boolean): Promi
  * The confirm button must use this, never the state-only decideAgentApproval.
  */
 export function resolveAgentApproval(approvalId: string, approve: boolean): Promise<AgentApproval> {
-  return invoke<AgentApproval>('agent_resolve_approval', { approval_id: approvalId, approve })
+  return invoke<AgentApproval>('agent_resolve_approval', { approvalId: approvalId, approve })
 }
 
 export function undoAgentTool(stepId: string): Promise<AgentToolUndoResponse> {
-  return invoke<AgentToolUndoResponse>('agent_undo_tool', { step_id: stepId })
+  return invoke<AgentToolUndoResponse>('agent_undo_tool', { stepId: stepId })
 }
 
 /** Hidden planner entry point (M3 Part 1): run one model -> tool loop. */
 export function runAgentPlanner(runId: string, goal: string): Promise<AgentPlannerTurn> {
-  return invoke<AgentPlannerTurn>('agent_run_planner', { run_id: runId, goal })
+  return invoke<AgentPlannerTurn>('agent_run_planner', { runId: runId, goal })
 }
 
 export interface CloudConsentStatus {
@@ -94,12 +94,12 @@ export function testAgentProvider(): Promise<ProviderTestResult> {
 
 /** Context Inspector (M3 Part 3): every model-call audit row of a run. */
 export function listAgentContextAudit(runId: string): Promise<AgentContextAuditRow[]> {
-  return invoke<AgentContextAuditRow[]>('agent_context_audit_list', { run_id: runId })
+  return invoke<AgentContextAuditRow[]>('agent_context_audit_list', { runId: runId })
 }
 
 /** Daily brief preview (M4). */
 export function agentBriefPreview(examId?: string | null): Promise<AgentBrief> {
-  return invoke<AgentBrief>('agent_brief_preview', { exam_id: examId ?? null })
+  return invoke<AgentBrief>('agent_brief_preview', { examId: examId ?? null })
 }
 
 export interface DueReviewItem {
@@ -116,7 +116,7 @@ export interface ReviewListDueOutput {
 
 /** Today's due wrong-question reviews for the right-pane workbench card. */
 export function reviewListDue(examId?: string | null): Promise<ReviewListDueOutput> {
-  return invoke<ReviewListDueOutput>('review_list_due', { exam_id: examId ?? null })
+  return invoke<ReviewListDueOutput>('review_list_due', { examId: examId ?? null })
 }
 
 export interface FlashcardDueItem {
@@ -133,7 +133,7 @@ export interface FlashcardListDueOutput {
 
 /** Today's due flashcards (SM-2) for the workbench card; preview-safe like reviewListDue. */
 export function flashcardListDue(examId?: string | null): Promise<FlashcardListDueOutput> {
-  return invoke<FlashcardListDueOutput>('flashcard_list_due', { exam_id: examId ?? null })
+  return invoke<FlashcardListDueOutput>('flashcard_list_due', { examId: examId ?? null })
 }
 
 /** Read-only knowledge-tree node for the mind-map view (v0.3.0 Task 8). */
@@ -160,7 +160,7 @@ export interface KnowledgeTreeOutput {
 
 /** Mind-map knowledge tree for the active/explicit exam; empty when no exam. */
 export function knowledgeTree(examId?: string | null): Promise<KnowledgeTreeOutput> {
-  return invoke<KnowledgeTreeOutput>('knowledge_tree', { exam_id: examId ?? null })
+  return invoke<KnowledgeTreeOutput>('knowledge_tree', { examId: examId ?? null })
 }
 
 /** Agent OS reads (M5). */
@@ -169,7 +169,7 @@ export function agentSessionList(limit?: number): Promise<AgentSession[]> {
 }
 
 export function agentSessionMessages(sessionId: string): Promise<AgentMessage[]> {
-  return invoke<AgentMessage[]>('agent_session_messages', { session_id: sessionId })
+  return invoke<AgentMessage[]>('agent_session_messages', { sessionId: sessionId })
 }
 
 export function agentApprovalList(limit?: number): Promise<AgentApproval[]> {

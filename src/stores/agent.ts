@@ -105,6 +105,8 @@ export const useAgentStore = defineStore('agent', () => {
       run.value = await startAgentRun(created.id)
       const turn = await runAgentPlanner(created.id, goal)
       messages.value = await agentSessionMessages(sessionId)
+      // cache-friendly tail snapshot may have landed on WAITING_APPROVAL — surface it immediately
+      await refreshApprovals()
       return turn
     } catch (caught) {
       error.value = String(caught)

@@ -408,6 +408,15 @@ fn parse_usage(value: &Value) -> ProviderUsage {
             .get("completion_tokens")
             .and_then(Value::as_i64)
             .unwrap_or(0),
+        prompt_cache_hit_tokens: value
+            .get("prompt_cache_hit_tokens")
+            .or_else(|| value.get("cached_tokens"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        prompt_cache_miss_tokens: value
+            .get("prompt_cache_miss_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
     }
 }
 

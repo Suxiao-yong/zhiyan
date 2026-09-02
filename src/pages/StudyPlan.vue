@@ -40,7 +40,7 @@ watch(activeTab, (v) => {
   <div>
     <PageHeader title="学习计划" subtitle="查看与编辑计划；生成与调整通过 Agent 完成">
       <template #actions>
-        <el-button @click="importVisible = true" data-test="open-import">导入材料</el-button>
+        <el-button data-test="open-import" @click="importVisible = true">导入材料</el-button>
         <el-button type="primary" @click="router.push('/agent')">在 Agent 中调整计划</el-button>
       </template>
     </PageHeader>

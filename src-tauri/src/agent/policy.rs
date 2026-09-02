@@ -34,8 +34,21 @@ pub fn decide(context: PolicyContext<'_>) -> Result<PolicyDecision, AgentError> 
     match context.risk {
         RiskLevel::R0 => Ok(PolicyDecision::Execute),
         RiskLevel::R1 => Ok(PolicyDecision::ExecuteWithUndo),
-        RiskLevel::R2 if context.user_allows_r2 => Ok(PolicyDecision::Execute),
-        RiskLevel::R2 => Ok(PolicyDecision::PresentSummary),
+        RiskLevel::R2 if context.user_allows_r2 && context.approval.is_none() => {
+            Ok(PolicyDecision::Execute)
+        }
+        RiskLevel::R2 => match context.approval {
+            None => Ok(PolicyDecision::PresentSummary),
+            Some(grant)
+                if grant.status == "approved"
+                    && grant.step_id == grant.expected_step_id
+                    && grant.expires_at > grant.now
+                    && grant.precondition_hash == grant.current_precondition_hash =>
+            {
+                Ok(PolicyDecision::Execute)
+            }
+            Some(_) => Err(AgentError::ApprovalInvalid),
+        },
         RiskLevel::R3 => match context.approval {
             None => Ok(PolicyDecision::AwaitApproval),
             Some(grant)

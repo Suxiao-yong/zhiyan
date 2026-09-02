@@ -71,6 +71,16 @@ let onboardingOk = false
 
 async function checkOnboarding(): Promise<boolean> {
   if (resolved) return onboardingOk
+  // SAFETY: Tauri 运行时检测需访问未类型化的 window 全局，仅做特性探测，不做数据断言
+  // Web 预览：非 Tauri 环境直接放行，便于浏览器 / Playwright 预览所有页面
+  if (
+    typeof window !== 'undefined' &&
+    !(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+  ) {
+    resolved = true
+    onboardingOk = true
+    return true
+  }
   try {
     const done = await getSetting('onboarding_completed')
     onboardingOk = done === '1' && (await count('exams')) > 0

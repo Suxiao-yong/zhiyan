@@ -50,6 +50,8 @@ const message = (id: string, role: 'user' | 'assistant', text: string): AgentMes
   content_json: null,
   prompt_tokens: role === 'assistant' ? 40 : 0,
   completion_tokens: role === 'assistant' ? 5 : 0,
+  prompt_cache_hit_tokens: 0,
+  prompt_cache_miss_tokens: 0,
   model: null,
   created_at: '2026-07-18T00:00:00',
 })
@@ -75,7 +77,10 @@ const turn: AgentPlannerTurn = {
   model_calls: 0,
   prompt_tokens: 0,
   completion_tokens: 0,
+  prompt_cache_hit_tokens: 0,
+  prompt_cache_miss_tokens: 0,
   estimated_cost_usd: 0,
+  context_bytes_cut: 0,
   trace: [{ kind: 'local_fallback', reason: 'no llm provider configured' }],
 }
 

@@ -117,12 +117,6 @@ export const useSettingsStore = defineStore('settings', () => {
       }
       throw e
     }
-    try {
-      keyConfigured.value = await invoke<boolean>('has_api_key', { provider })
-    } catch {
-      keyConfigured.value = false
-    }
-    legacyFallbackDetected.value = await hasLegacyFallback(provider)
   }
 
   /** 从 settings 表加载非敏感配置；key 的存在性只通过 has_api_key 布尔结果获知 */

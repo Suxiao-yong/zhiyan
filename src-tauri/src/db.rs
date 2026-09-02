@@ -147,6 +147,12 @@ pub fn migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 13,
+            description: "add prompt cache hit/miss columns to agent_messages",
+            sql: "ALTER TABLE agent_messages ADD COLUMN prompt_cache_hit_tokens INTEGER NOT NULL DEFAULT 0; ALTER TABLE agent_messages ADD COLUMN prompt_cache_miss_tokens INTEGER NOT NULL DEFAULT 0;",
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -549,9 +555,8 @@ mod tests {
             .collect();
 
         assert!(versions.windows(2).all(|pair| pair[0] < pair[1]));
-        // v1-v11 SQL is unchanged; v12 adds materials, flashcards and
-        // knowledge-point provenance columns and is the current latest.
-        assert_eq!(versions.last(), Some(&12));
+        // v1-v12 SQL is unchanged; v13 adds prompt cache columns and is the current latest.
+        assert_eq!(versions.last(), Some(&13));
     }
 
     #[test]
@@ -679,7 +684,7 @@ mod tests {
                 );
                 assert_eq!(
                     migration_list.last().map(|migration| migration.version),
-                    Some(12)
+                    Some(13)
                 );
             });
     }

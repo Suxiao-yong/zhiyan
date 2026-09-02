@@ -42,9 +42,11 @@ const activeWorkbench = ref<WorkbenchKey>('checkin')
 <style scoped>
 .agent-home {
   display: flex;
-  height: 100vh;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
   width: 100%;
-  overflow: hidden;
+  overflow: auto;
   background: var(--el-bg-color-page);
 }
 .agent-center {
@@ -53,6 +55,7 @@ const activeWorkbench = ref<WorkbenchKey>('checkin')
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  overflow-x: hidden;
   /* Task 15: cap the reading width of the conversation column. */
   max-width: 920px;
   margin: 0 auto;
@@ -61,11 +64,39 @@ const activeWorkbench = ref<WorkbenchKey>('checkin')
 .agent-workbench {
   /* Task 15: the workbench never exceeds 36% of the window width. */
   width: 36%;
-  min-width: 380px;
+  min-width: 320px;
   max-width: 520px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--el-border-color);
+  overflow-y: auto;
+}
+/* 窄窗适配：1024 为 Tauri 最小宽，workbench 过宽会导致横向被裁切无法操作 */
+@media (max-width: 1180px) {
+  .agent-workbench {
+    min-width: 280px;
+    max-width: 360px;
+  }
+}
+@media (max-width: 980px) {
+  .agent-home {
+    flex-direction: column;
+    height: auto;
+    min-height: 100%;
+  }
+  .agent-center {
+    max-width: none;
+    overflow: visible;
+  }
+  .agent-workbench {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    border-left: none;
+    border-top: 1px solid var(--el-border-color);
+    overflow: visible;
+  }
 }
 .workbench-switcher {
   padding: 8px 12px;

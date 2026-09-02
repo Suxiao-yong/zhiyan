@@ -29,7 +29,7 @@ use super::{
         },
         review::{self, ReviewCompleteInput, ReviewGetDueInput},
         wrong_question::{self, WrongQuestionCreateInput, WrongQuestionMarkMasteredInput},
-        Idempotency, ListedTool, RiskLevel, ToolDescriptor, ToolOwnership, ToolRegistry,
+        Idempotency, ListedTool, RiskLevel, ToolDescriptor, ToolOwnership, ToolRegistry, Confirmation,
     },
 };
 
@@ -623,6 +623,18 @@ impl AgentExecutor {
                 approval: None,
             })?,
         };
+        // 修复：R2 写工具若确认模式为 Required（如 plan.generate）且用户未开启
+        // agent_r2_auto_execute，policy 只返回 PresentSummary——之前该分支导致审批
+        // 永不创建、计划永远写不进去（step 停 pending、approvals 表为空）。
+        // 此处把 PresentSummary 升级为 R3 式审批链路；auto_execute=true 仍直接执行。
+        if decision == PolicyDecision::PresentSummary
+            && descriptor.risk == RiskLevel::R2
+            && descriptor.confirmation == Confirmation::Required
+        {
+            return self
+                .handle_r3(tx, request, descriptor, &reserved, input)
+                .await;
+        }
 
         if decision == PolicyDecision::PresentSummary {
             sqlx::query("UPDATE agent_steps SET status='pending', policy_json=? WHERE id=?")
@@ -3067,6 +3079,26 @@ async fn build_approval_preview(
                 ),
             }
         }
+        "plan.generate" => {
+            let capacity = input
+                .get("daily_capacity_min")
+                .and_then(Value::as_i64)
+                .unwrap_or(120);
+            let week_start = input
+                .get("week_start")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            (
+                "生成周计划".to_owned(),
+                7_i64,
+                format!(
+                    "将按权重写入 {week_start} 起的 7 天计划（每天 {capacity} 分钟），已有同周计划则幂等返回",
+                ),
+                json!([]),
+                week_start.to_owned(),
+                Value::Null,
+            )
+        }
         "record.checkin_plan" => {
             let plan_id = input.get("plan_id").and_then(Value::as_str).unwrap_or("");
             let duration = input
@@ -3264,6 +3296,13 @@ async fn create_pending_approval(
 ) -> Result<StoredApproval, AgentError> {
     let approval_id = Uuid::new_v4().to_string();
     let expires_at = (Utc::now() + ChronoDuration::minutes(10)).to_rfc3339();
+    let risk = match descriptor.risk {
+        RiskLevel::R0 => 0_i64,
+        RiskLevel::R1 => 1_i64,
+        RiskLevel::R2 => 2_i64,
+        RiskLevel::R3 => 3_i64,
+        RiskLevel::R4 => 4_i64,
+    };
     sqlx::query(
         r#"
         INSERT INTO agent_approvals(
@@ -3274,7 +3313,7 @@ async fn create_pending_approval(
     .bind(&approval_id)
     .bind(&request.run_id)
     .bind(step_id)
-    .bind(3_i64)
+    .bind(risk)
     .bind(preview.to_string())
     .bind(json!({"hash":precondition_hash}).to_string())
     .bind(&expires_at)
@@ -3668,6 +3707,90 @@ mod policy_executor_tests {
             .unwrap();
         assert!(matches!(completed, ToolCallResponse::Completed { .. }));
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn r2_required_confirmation_plan_generate_approval_flow_writes_rows() {
+        // 回归（真实库证据）：plan.generate 是 R2 + Confirmation::Required；此前
+        // policy 对 R2 无设置时只返回 PresentSummary，审批永不创建、step 停 pending、
+        // approvals 表为空 → 计划永远写不进去。现在 R2 Required 走 handle_r3 审批链。
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for migration in crate::db::migrations() {
+            sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
+        }
+        sqlx::raw_sql(
+            r#"
+            INSERT INTO exams(id,name,exam_date) VALUES('exam-gen','Gen','2030-06-01');
+            INSERT INTO subjects(id,exam_id,name,weight) VALUES
+                ('s1','exam-gen','数学',1.5),('s2','exam-gen','英语',1.0);
+            INSERT INTO agent_sessions(id,exam_id,title) VALUES('session-gen','exam-gen','Gen');
+            INSERT INTO agent_runs(id,session_id,goal,status)
+            VALUES('run-gen','session-gen','generate','running');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let executor = AgentExecutor::new(pool.clone());
+
+        let request = ToolCallRequest {
+            run_id: "run-gen".to_owned(),
+            step_index: 0,
+            tool_name: "plan.generate".to_owned(),
+            tool_version: "1".to_owned(),
+            input: json!({"exam_id":"exam-gen","week_start":"2030-01-07","daily_capacity_min":480}),
+            idempotency_key: Some("planner/run-gen/0".to_owned()),
+            approval_id: None,
+        };
+
+        let waiting = executor.execute(request.clone()).await.unwrap();
+        let ToolCallResponse::WaitingApproval { approval_id, .. } = waiting else {
+            panic!("R2 Required must create an approval, got {waiting:?}")
+        };
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM study_plans")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            0,
+            "nothing may be written before approval"
+        );
+        let approval_risk: i64 = sqlx::query_scalar(
+            "SELECT risk FROM agent_approvals WHERE id=?",
+        )
+        .bind(&approval_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(approval_risk, 2, "R2 approval card must show R2");
+
+        let approved = executor.decide_approval(&approval_id, true).await.unwrap();
+        assert_eq!(approved.status, "approved");
+        let completed = executor
+            .execute(ToolCallRequest {
+                approval_id: Some(approval_id.clone()),
+                ..request
+            })
+            .await
+            .unwrap();
+        assert!(matches!(completed, ToolCallResponse::Completed { .. }));
+        let rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM study_plans WHERE exam_id='exam-gen'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, 7, "approved plan.generate must write 7 plan rows");
+        let step_status: String =
+            sqlx::query_scalar("SELECT status FROM agent_steps WHERE tool_name='plan.generate'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(step_status, "completed");
     }
 
     #[tokio::test]

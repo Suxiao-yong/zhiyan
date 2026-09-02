@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-02
+
+### Added
+
+- **输入缓存可观测（迁移 v13）**：`agent_messages` 新增 `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 列；`ProviderUsage` 解析 DeepSeek 风格缓存字段（兼容 `cached_tokens` 别名）；对话消息下方实时显示 `缓存 命中+未命中`，命中率应用内自证。
+- **文件材料导入**：import dialog 新增「从文件导入」——`parse_material_file` 命令解析 PDF（`pdf-extract`）、PPTX / DOCX（`zip` + XML 文本抽取）、TXT / MD；自动填充标题与正文后走原有入库与闪卡链路。
+- **审批闭环修复**：`plan.generate`（R2 + confirmation Required）此前 policy 只看风险等级、只返回摘要请求，审批卡永不出现；现已按描述符确认模式走 `handle_r3` 审批链（无 `agent_r2_auto_execute` 设置时），审批卡展示周计划预览并真正写入 7 天计划；`agent_r2_auto_execute=true` 仍直接执行不受影响。
+
+### Changed
+
+- **缓存友好消息布局**（抄 Claude Code / Hermes / Pi 的前缀缓存设计）：静态 system 提示词恒定不变 → 会话历史最近 12 条逐字回放为真实 user/assistant 消息 → 动态上下文快照置于最终目标之前。此前动态快照拼接进 system 前缀且历史不回放，前缀缓存几乎全部击空（实测 <10%）；策略升级后连续请求共享稳定前缀，动态快照不再打断缓存。
+- **跨轮草案保活**：`plan.preview_generate` 的 tool 输出放宽至 32KB（其余工具仍 8KB），且每轮快照注入最近的「待确认预览草案 id」——即使草案 JSON 被截断或 tool 消息不入历史回放，「确认写入」下一轮仍可直接 `plan.apply_preview`。
+- **审批卡即时刷新**：一轮对话以 `WaitingApproval` 结束后前端立即拉取审批列表，不再需要重挂载页面。
+- 12 个工具描述补全（错题/闪卡/材料）与欢迎页、图标、布局打磨（见 git 历史）。
+
 ## [0.3.0] - 2026-08-26
 
 ### Added

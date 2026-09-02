@@ -38,16 +38,21 @@ export interface ExportBundle {
   exams: any[]
   subjects: any[]
   knowledge_points: any[]
+  materials: any[]
+  flashcards: any[]
   study_records: any[]
   study_plans: any[]
   wrong_questions: any[]
   ai_analyses: any[]
 }
 
+/** 导出/导入顺序需满足外键：exams → subjects → materials → knowledge_points → flashcards → plans → records → wrong */
 const TABLES = [
   'exams',
   'subjects',
+  'materials',
   'knowledge_points',
+  'flashcards',
   'study_plans',
   'study_records',
   'wrong_questions',
@@ -72,30 +77,60 @@ export async function exportData(range: {
 
   const subjects = await queryChunked<any>(`SELECT * FROM subjects ${examFilter}`, examParams)
 
-  // 该考试下的科目 id（用于 kps/records/wrong 的 IN 过滤）
+  // 该考试下的科目 id（用于 kps/materials/flashcards/records/wrong 的 IN 过滤）
   const subjectIds = (subjects as any[]).map((s) => s.id)
+  const isExamScope = range.scope === 'exam' && !!range.examId
+  const hasSubjects = subjectIds.length > 0
 
-  const kpWhere =
-    range.scope === 'exam' && subjectIds.length
-      ? `WHERE subject_id IN (${subjectIds.map(() => '?').join(',')})`
-      : ''
-  const kpParams = range.scope === 'exam' && subjectIds.length ? subjectIds : []
-  const knowledge_points = await queryChunked<any>(
-    `SELECT * FROM knowledge_points ${kpWhere}`,
-    kpParams,
-  )
+  // 考试级但无科目：直接空结果，避免回退为全量（M-03）
+  const knowledge_points = isExamScope && !hasSubjects
+    ? []
+    : await queryChunked<any>(
+        `SELECT * FROM knowledge_points ${isExamScope ? `WHERE subject_id IN (${subjectIds.map(() => '?').join(',')})` : ''}`,
+        isExamScope ? subjectIds : [],
+      )
 
-  // study_records：exam→按科目 IN；date→按日期；all→全部
-  let recSql = 'SELECT * FROM study_records'
-  let recParams: unknown[] = []
-  if (range.scope === 'exam' && subjectIds.length) {
-    recSql += ` WHERE subject_id IN (${subjectIds.map(() => '?').join(',')})`
-    recParams = subjectIds
+  const materials: any[] =
+    isExamScope && !hasSubjects
+      ? []
+      : isExamScope
+        ? await queryChunked<any>(
+            `SELECT * FROM materials WHERE subject_id IN (${subjectIds.map(() => '?').join(',')})`,
+            subjectIds,
+          )
+        : range.scope === 'date' && range.from && range.to
+          ? [] // materials 无 date 列，date 范围不导出材料
+          : await queryChunked<any>('SELECT * FROM materials')
+
+  const flashcards: any[] =
+    isExamScope && !hasSubjects
+      ? []
+      : isExamScope
+        ? await queryChunked<any>(
+            `SELECT * FROM flashcards WHERE subject_id IN (${subjectIds.map(() => '?').join(',')})`,
+            subjectIds,
+          )
+        : range.scope === 'date' && range.from && range.to
+          ? []
+          : await queryChunked<any>('SELECT * FROM flashcards')
+
+  // study_records：exam→按科目 IN；date→按日期；all→全部（空科目时空结果）
+  let study_records: any[]
+  if (isExamScope && !hasSubjects) {
+    study_records = []
+  } else if (isExamScope) {
+    study_records = await queryChunked<any>(
+      `SELECT * FROM study_records WHERE subject_id IN (${subjectIds.map(() => '?').join(',')})`,
+      subjectIds,
+    )
   } else if (range.scope === 'date' && range.from && range.to) {
-    recSql += ' WHERE date >= ? AND date <= ?'
-    recParams = [range.from, range.to]
+    study_records = await queryChunked<any>('SELECT * FROM study_records WHERE date >= ? AND date <= ?', [
+      range.from,
+      range.to,
+    ])
+  } else {
+    study_records = await queryChunked<any>('SELECT * FROM study_records')
   }
-  const study_records = await queryChunked<any>(recSql, recParams)
 
   // study_plans：exam→exam_id；date→日期；all→全部
   let planSql = 'SELECT * FROM study_plans'
@@ -109,14 +144,16 @@ export async function exportData(range: {
   }
   const study_plans = await queryChunked<any>(planSql, planParams)
 
-  // wrong_questions：exam→按科目 IN
-  let wqSql = 'SELECT * FROM wrong_questions'
-  let wqParams: unknown[] = []
-  if (range.scope === 'exam' && subjectIds.length) {
-    wqSql += ` WHERE subject_id IN (${subjectIds.map(() => '?').join(',')})`
-    wqParams = subjectIds
-  }
-  const wrong_questions = await queryChunked<any>(wqSql, wqParams)
+  // wrong_questions：exam→按科目 IN（空科目时空结果）
+  const wrong_questions: any[] =
+    isExamScope && !hasSubjects
+      ? []
+      : isExamScope
+        ? await queryChunked<any>(
+            `SELECT * FROM wrong_questions WHERE subject_id IN (${subjectIds.map(() => '?').join(',')})`,
+            subjectIds,
+          )
+        : await queryChunked<any>('SELECT * FROM wrong_questions')
 
   // ai_analyses 为已弃用历史表（只读），非全量导出范围时不再携带；
   // 该表无 exam_id 列，无法按范围过滤，全量导入也不会被新代码读取。
@@ -129,6 +166,8 @@ export async function exportData(range: {
     exams,
     subjects,
     knowledge_points,
+    materials,
+    flashcards,
     study_records,
     study_plans,
     wrong_questions,
@@ -143,6 +182,11 @@ export function validateBundle(b: any): { ok: boolean; errors: string[] } {
     return { ok: false, errors: ['不是有效 JSON 对象'] }
   }
   for (const t of TABLES) {
+    // materials/flashcards 为 v12 新增，老备份可能缺失，保持向后兼容
+    if (t === 'materials' || t === 'flashcards') {
+      if (b[t] !== undefined && !Array.isArray(b[t])) errors.push(`表 ${t} 非数组`)
+      continue
+    }
     if (!Array.isArray(b[t])) errors.push(`表 ${t} 缺失或非数组`)
   }
   if (Array.isArray(b.exams)) {
@@ -221,9 +265,10 @@ export async function exportToFile(range: {
   to?: string
 }): Promise<string | null> {
   const bundle = await exportData(range)
-  const examName = range.examId ? (await getById<any>('exams', range.examId))?.name : ''
+  const rawExamName = range.examId ? (await getById<any>('exams', range.examId))?.name : ''
+  const examName = (rawExamName || '全部').replace(/[\\/:*?"<>|]/g, '_').slice(0, 30)
   const dateStr = new Date().toISOString().slice(0, 10)
-  const name = `智研导出_${examName || '全部'}_${dateStr}.json`
+  const name = `智研导出_${examName}_${dateStr}.json`
   const path = await save({ defaultPath: name, filters: [{ name: 'JSON', extensions: ['json'] }] })
   if (!path) return null
   await writeTextFile(path, JSON.stringify(bundle, null, 2))

@@ -23,7 +23,12 @@ function formatTime(value: string): string {
 
 <template>
   <aside class="agent-sidebar" data-test="agent-sidebar">
-    <div class="sidebar-brand">智研 Agent</div>
+    <div class="sidebar-brand">
+      <span class="sidebar-brand__icon" aria-hidden="true">
+        <img src="/icon-new.png" alt="" />
+      </span>
+      智研 Agent
+    </div>
     <button
       class="new-session"
       data-test="agent-new-session"
@@ -79,9 +84,27 @@ function formatTime(value: string): string {
   padding: 12px;
 }
 .sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 600;
   margin-bottom: 12px;
   color: var(--el-text-color-primary);
+}
+.sidebar-brand__icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(109, 93, 200, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.sidebar-brand__icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .new-session {
   display: flex;

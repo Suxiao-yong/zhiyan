@@ -13,6 +13,10 @@ describe('router single-entry contract (Task 2)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.resetModules()
+    // SAFETY: jsdom 没有 Tauri 运行时，测试需模拟 Tauri 环境以覆盖引导门禁逻辑（Web 预览旁路不触发）
+    ;(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {
+      invoke: async () => ({}),
+    }
     db.count.mockResolvedValue(1)
     db.getSetting.mockImplementation(async (key: string) => {
       if (key === 'onboarding_completed') return '1'

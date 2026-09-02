@@ -330,6 +330,7 @@ mod tests {
         let usage = ProviderUsage {
             prompt_tokens: 42,
             completion_tokens: 7,
+                    ..Default::default()
         };
         audit
             .record("run-a", 1, &scope, &usage, false, &["plan.get_today"])
@@ -361,6 +362,7 @@ mod tests {
         let usage = ProviderUsage {
             prompt_tokens: 10,
             completion_tokens: 2,
+                    ..Default::default()
         };
         audit
             .record("run-a", 1, &scope, &usage, false, &["plan.get_today"])

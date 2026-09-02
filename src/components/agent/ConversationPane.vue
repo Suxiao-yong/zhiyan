@@ -81,6 +81,13 @@ function messageClass(role: string): string {
           <p class="message-text">{{ message.text }}</p>
           <p v-if="message.role === 'assistant'" class="message-meta">
             tokens {{ message.prompt_tokens }}+{{ message.completion_tokens }}
+            <span
+              v-if="
+                (message.prompt_cache_hit_tokens ?? 0) + (message.prompt_cache_miss_tokens ?? 0) > 0
+              "
+            >
+              · 缓存 {{ message.prompt_cache_hit_tokens }}+{{ message.prompt_cache_miss_tokens }}
+            </span>
           </p>
         </div>
       </article>

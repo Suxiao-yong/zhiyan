@@ -93,13 +93,14 @@ impl BriefBuilder {
         })
     }
 
-    /// Unmastered wrong questions not reviewed within the last 7 days.
+    /// Due wrong questions: SM-2 口径与 review 工具/工位卡一致
+    /// `next_review_at IS NULL` 视为待复习（历史数据/未排期），否则按本地日 `<= today` 判定
     async fn due_wrong_questions(&self, exam_id: &str, today: &str) -> Result<i64, AgentError> {
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM wrong_questions wq \
              JOIN subjects s ON s.id = wq.subject_id \
              WHERE s.exam_id = ? AND wq.mastered = 0 \
-               AND (wq.last_review_at IS NULL OR wq.last_review_at < date(?,'-7 days'))",
+               AND (wq.next_review_at IS NULL OR wq.next_review_at <= ?)",
         )
         .bind(exam_id)
         .bind(today)

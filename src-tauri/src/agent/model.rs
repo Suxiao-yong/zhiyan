@@ -106,6 +106,8 @@ pub struct AgentMessage {
     pub content_json: Option<String>,
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
+    pub prompt_cache_hit_tokens: i64,
+    pub prompt_cache_miss_tokens: i64,
     pub model: Option<String>,
     pub created_at: String,
 }

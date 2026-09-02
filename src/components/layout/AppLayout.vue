@@ -50,7 +50,9 @@ async function toggleTheme() {
   <el-container class="app-layout">
     <el-aside :width="isCollapse ? '64px' : '220px'" class="app-aside">
       <div class="brand">
-        <span class="brand-mark" />
+        <span class="brand-mark brand-mark--icon" aria-hidden="true">
+          <img src="/icon-new.png" alt="" />
+        </span>
         <span v-if="!isCollapse" class="brand-text">智研</span>
       </div>
       <el-menu
@@ -96,6 +98,9 @@ async function toggleTheme() {
 <style scoped>
 .app-layout {
   height: 100%;
+  min-height: 0;
+  flex: 1;
+  min-width: 0;
 }
 
 /* 侧栏：第二中性层（略冷的浅灰；暗色为深面），非 Ant navy */
@@ -123,6 +128,19 @@ async function toggleTheme() {
   background: var(--c-primary);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
   flex-shrink: 0;
+}
+.brand-mark--icon {
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  box-shadow: 0 2px 8px rgba(109, 93, 200, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.brand-mark--icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .brand-text {
   font-size: var(--fs-lg);

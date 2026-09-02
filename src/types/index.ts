@@ -88,7 +88,7 @@ export interface StudyPlan {
   updated_at: string
 }
 
-/** 错题 */
+/** 错题（SM-2 间隔重复：next_review_at/review_interval_days/ease_factor 由 Rust 调度） */
 export interface WrongQuestion {
   id: string
   record_id: string | null
@@ -102,6 +102,37 @@ export interface WrongQuestion {
   error_reason: string | null
   review_count: number
   mastered: number // 0/1
+  next_review_at: string | null
+  review_interval_days: number
+  ease_factor: number
+  created_at: string
+  last_review_at: string | null
+}
+
+/** 材料（v12 内容侧） */
+export interface Material {
+  id: string
+  exam_id: string
+  subject_id: string
+  title: string
+  content: string
+  created_at: string
+}
+
+/** 闪卡（v12 内容侧，SM-2 调度） */
+export interface Flashcard {
+  id: string
+  subject_id: string
+  knowledge_point_id: string | null
+  material_id: string | null
+  source_ref: string | null
+  front: string
+  back: string
+  review_count: number
+  mastered: number // 0/1
+  next_review_at: string | null
+  review_interval_days: number
+  ease_factor: number
   created_at: string
   last_review_at: string | null
 }
@@ -149,6 +180,8 @@ export interface AgentMessage {
   content_json: string | null
   prompt_tokens: number
   completion_tokens: number
+  prompt_cache_hit_tokens: number
+  prompt_cache_miss_tokens: number
   model: string | null
   created_at: string
 }
@@ -314,7 +347,10 @@ export interface AgentPlannerTurn {
   model_calls: number
   prompt_tokens: number
   completion_tokens: number
+  prompt_cache_hit_tokens: number
+  prompt_cache_miss_tokens: number
   estimated_cost_usd: number
+  context_bytes_cut: number
   trace: AgentPlannerTraceEntry[]
 }
 

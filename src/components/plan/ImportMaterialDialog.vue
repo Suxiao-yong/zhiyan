@@ -6,6 +6,8 @@ import { v4 as uuidv4 } from 'uuid'
 import { insert } from '@/services/db'
 import { getSubjectsByExam } from '@/services/exam-service'
 import type { Subject } from '@/types'
+import { open } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
 import { useAgentStore } from '@/stores/agent'
 import { useExamStore } from '@/stores/exam'
 
@@ -68,6 +70,21 @@ watch(
   { immediate: true },
 )
 
+async function importFromFile(): Promise<void> {
+  try {
+    const selected = await open({
+      filters: [{ name: '文档', extensions: ['pdf', 'pptx', 'docx', 'txt', 'md'] }],
+    })
+    const path = Array.isArray(selected) ? selected[0] : selected
+    if (!path) return
+    const parsed = await invoke<{ title: string; kind: string; content: string }>('parse_material_file', { path })
+    form.title = parsed.title
+    form.content = parsed.content
+  } catch (e) {
+    ElMessage.error(String(e))
+  }
+}
+
 async function submit(): Promise<void> {
   // 显式守卫：不依赖 el-form 规则管道（jsdom 下其聚合校验不可靠），确保非法输入绝不入库。
   const activeExamId = examStore.activeExamId
@@ -123,6 +140,9 @@ async function submit(): Promise<void> {
     width="560px"
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
+    <div style="margin-bottom: 12px">
+      <el-button data-test="import-file-btn" @click="importFromFile">从文件导入</el-button>
+    </div>
     <el-form ref="formRef" :model="form" :rules="rules" label-width="64px">
       <el-form-item label="标题" prop="title">
         <el-input

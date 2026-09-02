@@ -1128,7 +1128,7 @@ mod tests {
         .await
         .unwrap();
 
-        // First call: R2 asks for a summary first, nothing is written yet.
+        // First call: R2 Required creates a pending approval; nothing is written yet.
         let response = runtime
             .execute_tool(ToolCallRequest {
                 run_id: "run-tool".to_owned(),
@@ -1143,18 +1143,35 @@ mod tests {
             })
             .await
             .unwrap();
-        let preview = match response {
-            ToolCallResponse::SummaryRequired { preview, .. } => preview,
-            other => panic!("expected summary required, got {other:?}"),
+        let ToolCallResponse::WaitingApproval { approval_id, .. } = response else {
+            panic!("R2 Required must create an approval")
         };
-        assert_eq!(preview["exam_id"], "exam-g");
         let plan_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_plans")
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(plan_count, 0);
 
-        // Enabling auto-execution lets the same call dispatch: seven rows.
+        // Approving really executes the write: seven rows land in study_plans.
+        runtime
+            .resolve_approval(&approval_id, true)
+            .await
+            .unwrap();
+        let plan_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_plans")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(plan_count, 7);
+
+        // Resolve finalizes the run; restore running for the next calls.
+        sqlx::query("UPDATE agent_runs SET status='running', current_step=1 WHERE id='run-tool'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Enabling auto-execution lets the next call (new idempotency key)
+        // dispatch directly; the same week already has local rows so the
+        // local generator returns them unchanged.
         sqlx::query("INSERT INTO settings(key,value) VALUES('agent_r2_auto_execute','true')")
             .execute(&pool)
             .await
@@ -1162,13 +1179,13 @@ mod tests {
         let response = runtime
             .execute_tool(ToolCallRequest {
                 run_id: "run-tool".to_owned(),
-                step_index: 0,
+                step_index: 1,
                 tool_name: "plan.generate".to_owned(),
                 tool_version: "1".to_owned(),
                 input: serde_json::json!({
                     "exam_id":"exam-g","week_start":"2026-07-13","daily_capacity_min":90
                 }),
-                idempotency_key: Some("gen-1".to_owned()),
+                idempotency_key: Some("gen-1b".to_owned()),
                 approval_id: None,
             })
             .await
@@ -1177,7 +1194,7 @@ mod tests {
             ToolCallResponse::Completed { output, .. } => output,
             other => panic!("expected completed, got {other:?}"),
         };
-        assert_eq!(output["newly_created"], true);
+        assert_eq!(output["newly_created"], false);
         assert_eq!(output["rows"].as_array().unwrap().len(), 7);
         assert_eq!(output["capacity_min"], 90);
         let plan_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM study_plans")
@@ -1190,7 +1207,7 @@ mod tests {
         let response = runtime
             .execute_tool(ToolCallRequest {
                 run_id: "run-tool".to_owned(),
-                step_index: 1,
+                step_index: 2,
                 tool_name: "plan.generate".to_owned(),
                 tool_version: "1".to_owned(),
                 input: serde_json::json!({

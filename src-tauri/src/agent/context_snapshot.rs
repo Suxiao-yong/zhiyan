@@ -202,26 +202,12 @@ impl ContextSnapshot {
                 wrong.join("；")
             ));
         }
-        if !self.session_history.is_empty() {
-            let history = self
-                .session_history
-                .iter()
-                .map(|message| format!("{}: {}", message.role, message.text))
-                .collect::<Vec<_>>();
-            parts.push(format!(
-                "- 最近对话（{} 条）：{}",
-                history.len(),
-                history.join("\n")
-            ));
-        }
-        if self.truncation.history_skipped > 0
-            || self.truncation.plans_skipped > 0
+        if self.truncation.plans_skipped > 0
             || self.truncation.records_skipped > 0
             || self.truncation.wrong_questions_skipped > 0
         {
             parts.push(format!(
-                "- 上下文裁剪：跳过 {} 条更早消息、{} 条当日计划、{} 条学习记录、{} 条错题。",
-                self.truncation.history_skipped,
+                "- 上下文裁剪：跳过 {} 条当日计划、{} 条学习记录、{} 条错题。",
                 self.truncation.plans_skipped,
                 self.truncation.records_skipped,
                 self.truncation.wrong_questions_skipped
