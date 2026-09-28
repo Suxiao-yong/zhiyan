@@ -45,7 +45,11 @@ describe('ReviewWorkbench', () => {
     })
     client.flashcardListDue.mockResolvedValue({
       count: 3,
-      items: [flashcard('fc-1', '导数定义'), flashcard('fc-2', '泰勒展开'), flashcard('fc-3', '洛必达')],
+      items: [
+        flashcard('fc-1', '导数定义'),
+        flashcard('fc-2', '泰勒展开'),
+        flashcard('fc-3', '洛必达'),
+      ],
     })
     const wrapper = mountCard()
     await flushPromises()

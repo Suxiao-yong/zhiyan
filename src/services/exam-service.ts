@@ -248,7 +248,12 @@ export async function reorderKnowledgePoints(ids: string[]): Promise<void> {
   const caseSql = ids.map(() => 'WHEN ? THEN ?').join(' ')
   const inList = ids.map(() => '?').join(',')
   const params: unknown[] = []
-  ids.forEach((id, i) => { params.push(id, i) })
+  ids.forEach((id, i) => {
+    params.push(id, i)
+  })
   ids.forEach((id) => params.push(id))
-  await execute(`UPDATE knowledge_points SET sort_order = CASE id ${caseSql} END WHERE id IN (${inList})`, params)
+  await execute(
+    `UPDATE knowledge_points SET sort_order = CASE id ${caseSql} END WHERE id IN (${inList})`,
+    params,
+  )
 }

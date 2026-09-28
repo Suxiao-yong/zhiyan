@@ -467,7 +467,7 @@ const isLlmReady = computed(() => !!settingsStore.llmConfig && settingsStore.key
       <div class="welcome-top">
         <div class="brand">
           <div class="brand__mark" aria-hidden="true">
-            <img src="/icon-new.png" alt="" />
+            <img :src="'/icon-new.png'" alt="" />
           </div>
           <div class="brand__text">
             <div class="brand__name">

@@ -3393,6 +3393,14 @@ fn material_create_rejects_subject_not_in_exam() {
 
 // --- knowledge_point.create_batch (v0.3.0 Task 4, R3 bulk kp import) ---
 
+type KnowledgePointRow = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 #[test]
 fn kp_create_batch_applies_with_material_source() {
     block_on(async {
@@ -3443,13 +3451,7 @@ fn kp_create_batch_applies_with_material_source() {
         let approved = executor.resolve_approval(&approval_id, true).await.unwrap();
         assert_eq!(approved.status, "approved");
 
-        let rows: Vec<(
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )> = sqlx::query_as(
+        let rows: Vec<KnowledgePointRow> = sqlx::query_as(
             r#"
                 SELECT id, name, parent_id, material_id, source_ref
                 FROM knowledge_points

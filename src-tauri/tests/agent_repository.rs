@@ -575,7 +575,7 @@ async fn business_test_pool() -> SqlitePool {
         .await
         .unwrap();
     for migration in zhiyan_lib::db::migrations() {
-        sqlx::raw_sql(&migration.sql).execute(&pool).await.unwrap();
+        sqlx::raw_sql(migration.sql).execute(&pool).await.unwrap();
     }
     pool
 }

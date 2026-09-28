@@ -77,7 +77,10 @@ async function importFromFile(): Promise<void> {
     })
     const path = Array.isArray(selected) ? selected[0] : selected
     if (!path) return
-    const parsed = await invoke<{ title: string; kind: string; content: string }>('parse_material_file', { path })
+    const parsed = await invoke<{ title: string; kind: string; content: string }>(
+      'parse_material_file',
+      { path },
+    )
     form.title = parsed.title
     form.content = parsed.content
   } catch (e) {

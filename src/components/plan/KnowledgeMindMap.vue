@@ -3,8 +3,17 @@ import { computed, onMounted, ref } from 'vue'
 import VueECharts from 'vue-echarts'
 import { ensureECharts } from '@/services/echarts-setup'
 import { getById } from '@/services/db'
-import { knowledgeTree, type KnowledgePointNode, type KnowledgeTreeSubject } from '@/services/agent-client'
-import { buildTreeOption, masteryColor, parseSourceRef, splitMaterialParagraphs } from './knowledge-map'
+import {
+  knowledgeTree,
+  type KnowledgePointNode,
+  type KnowledgeTreeSubject,
+} from '@/services/agent-client'
+import {
+  buildTreeOption,
+  masteryColor,
+  parseSourceRef,
+  splitMaterialParagraphs,
+} from './knowledge-map'
 
 ensureECharts()
 
@@ -52,7 +61,10 @@ async function openEvidence(node: KnowledgePointNode) {
   materialLoading.value = true
   try {
     // materials 经 db.ts 白名单直查（Task 8 溯源闭环）。
-    const material = await getById<{ title: string; content: string }>('materials', node.material_id)
+    const material = await getById<{ title: string; content: string }>(
+      'materials',
+      node.material_id,
+    )
     if (!material) return
     materialTitle.value = material.title
     paragraphs.value = splitMaterialParagraphs(material.content)
@@ -75,9 +87,12 @@ const rangeText = computed(() => {
         <div class="map-head">
           <span>知识点思维导图（颜色 = 掌握度：红 1-2 / 黄 3 / 绿 4-5）</span>
           <span v-if="examId" class="legend">
-            <i class="dot" :style="{ background: masteryColor(1) }" />薄弱
-            <i class="dot" :style="{ background: masteryColor(3) }" />一般
-            <i class="dot" :style="{ background: masteryColor(5) }" />扎实
+            <i class="dot" :style="{ background: masteryColor(1) }" />
+            薄弱
+            <i class="dot" :style="{ background: masteryColor(3) }" />
+            一般
+            <i class="dot" :style="{ background: masteryColor(5) }" />
+            扎实
           </span>
         </div>
       </template>
@@ -100,13 +115,16 @@ const rangeText = computed(() => {
     <el-dialog v-model="dialogVisible" title="知识点溯源" width="640px">
       <template v-if="selected">
         <div class="evidence-meta">
-          <p><strong>{{ selected.name }}</strong></p>
           <p>
-            掌握度：<el-tag :color="masteryColor(selected.mastery)" effect="dark" size="small">
+            <strong>{{ selected.name }}</strong>
+          </p>
+          <p>
+            掌握度：
+            <el-tag :color="masteryColor(selected.mastery)" effect="dark" size="small">
               {{ selected.mastery }}/5
             </el-tag>
-            错题数：{{ selected.wrong_count }}
-            引用：<code>{{ rangeText || '无' }}</code>
+            错题数：{{ selected.wrong_count }} 引用：
+            <code>{{ rangeText || '无' }}</code>
           </p>
         </div>
 

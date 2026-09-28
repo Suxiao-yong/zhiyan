@@ -25,7 +25,7 @@ function formatTime(value: string): string {
   <aside class="agent-sidebar" data-test="agent-sidebar">
     <div class="sidebar-brand">
       <span class="sidebar-brand__icon" aria-hidden="true">
-        <img src="/icon-new.png" alt="" />
+        <img :src="'/icon-new.png'" alt="" />
       </span>
       智研 Agent
     </div>

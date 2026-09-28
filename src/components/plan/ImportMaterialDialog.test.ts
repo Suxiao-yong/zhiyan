@@ -51,12 +51,10 @@ describe('ImportMaterialDialog', () => {
   beforeEach(() => {
     db.insert.mockReset().mockResolvedValue('mat-1')
     agentStore.sendMessage.mockReset().mockResolvedValue(null)
-    examService.getSubjectsByExam
-      .mockReset()
-      .mockResolvedValue([
-        { id: 'sub-1', name: '数学' },
-        { id: 'sub-2', name: '英语' },
-      ])
+    examService.getSubjectsByExam.mockReset().mockResolvedValue([
+      { id: 'sub-1', name: '数学' },
+      { id: 'sub-2', name: '英语' },
+    ])
   })
 
   afterEach(() => {
@@ -126,9 +124,7 @@ describe('ImportMaterialDialog', () => {
     const counter = () => wrapper.get('[data-test=char-count]').text()
     expect(counter()).toContain('4 / 50000')
 
-    await wrapper
-      .get('[data-test=content-input]')
-      .setValue('好'.repeat(50001))
+    await wrapper.get('[data-test=content-input]').setValue('好'.repeat(50001))
     expect(counter()).toContain('50001 / 50000')
 
     await wrapper.get('[data-test=confirm]').trigger('click')

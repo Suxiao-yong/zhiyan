@@ -83,12 +83,13 @@ export async function exportData(range: {
   const hasSubjects = subjectIds.length > 0
 
   // 考试级但无科目：直接空结果，避免回退为全量（M-03）
-  const knowledge_points = isExamScope && !hasSubjects
-    ? []
-    : await queryChunked<any>(
-        `SELECT * FROM knowledge_points ${isExamScope ? `WHERE subject_id IN (${subjectIds.map(() => '?').join(',')})` : ''}`,
-        isExamScope ? subjectIds : [],
-      )
+  const knowledge_points =
+    isExamScope && !hasSubjects
+      ? []
+      : await queryChunked<any>(
+          `SELECT * FROM knowledge_points ${isExamScope ? `WHERE subject_id IN (${subjectIds.map(() => '?').join(',')})` : ''}`,
+          isExamScope ? subjectIds : [],
+        )
 
   const materials: any[] =
     isExamScope && !hasSubjects
@@ -124,10 +125,10 @@ export async function exportData(range: {
       subjectIds,
     )
   } else if (range.scope === 'date' && range.from && range.to) {
-    study_records = await queryChunked<any>('SELECT * FROM study_records WHERE date >= ? AND date <= ?', [
-      range.from,
-      range.to,
-    ])
+    study_records = await queryChunked<any>(
+      'SELECT * FROM study_records WHERE date >= ? AND date <= ?',
+      [range.from, range.to],
+    )
   } else {
     study_records = await queryChunked<any>('SELECT * FROM study_records')
   }

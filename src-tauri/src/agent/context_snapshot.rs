@@ -715,9 +715,9 @@ mod tests {
             .await
             .unwrap();
         // The field itself was truncated to the byte cap (legal UTF-8).
-        assert!(snapshot.today_plans[0].planned_tasks.as_bytes().len() <= MAX_FIELD_BYTES);
+        assert!(snapshot.today_plans[0].planned_tasks.len() <= MAX_FIELD_BYTES);
         assert!(snapshot.today_plans[0].planned_tasks.len() < long.len());
-        assert!(snapshot.to_system_text().as_bytes().len() <= MAX_SNAPSHOT_BYTES);
+        assert!(snapshot.to_system_text().len() <= MAX_SNAPSHOT_BYTES);
     }
 
     #[test]
@@ -726,7 +726,7 @@ mod tests {
         // byte offsets must always produce valid UTF-8 within the cap.
         let value = "学习：函数📚复习英语".repeat(50);
         let cut = truncate_utf8_prefix(&value, 1000);
-        assert!(cut.as_bytes().len() <= 1000);
+        assert!(cut.len() <= 1000);
         assert!(std::str::from_utf8(cut.as_bytes()).is_ok());
         // The cut is at a char boundary, so re-slicing at len() is safe.
         assert!(value.is_char_boundary(cut.len()));

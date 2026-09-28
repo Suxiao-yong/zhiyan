@@ -51,7 +51,7 @@ async function toggleTheme() {
     <el-aside :width="isCollapse ? '64px' : '220px'" class="app-aside">
       <div class="brand">
         <span class="brand-mark brand-mark--icon" aria-hidden="true">
-          <img src="/icon-new.png" alt="" />
+          <img :src="'/icon-new.png'" alt="" />
         </span>
         <span v-if="!isCollapse" class="brand-text">智研</span>
       </div>
