@@ -823,6 +823,8 @@ impl AgentExecutor {
         // unique violation (busy or reserved-by-other) and must retry a bounded
         // number of times to replay the winner's completed step instead of
         // surfacing a spurious conflict (mirrors the generic execute() path).
+        // Immediate retries burn out before the winner commits on slow disks,
+        // so back off linearly between attempts.
         let mut attempt = 0_u32;
         loop {
             let mut tx = self.pool.begin().await.map_err(map_sqlx)?;
@@ -831,8 +833,10 @@ impl AgentExecutor {
             }
             .await;
             match finish_transaction(tx, result).await {
-                Err(AgentError::IdempotencyConflict) if attempt < 2 => {
+                Err(AgentError::IdempotencyConflict) if attempt < 8 => {
                     attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(20 * attempt as u64))
+                        .await;
                     continue;
                 }
                 other => return other,
